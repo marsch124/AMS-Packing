@@ -17,7 +17,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v52';
+const APP_VERSION = 'v54';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -116,16 +116,10 @@ function collectStorages(lists) {
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
-// All building-block lists, kept so the item editor can show which lists an
-// item (matched by name) currently appears in. Refreshed whenever a list opens.
+// All building-block lists (resolved), kept so the item editor's "In these
+// templates" matrix can show — by the item's stable catalog id — which templates
+// it currently belongs to. Refreshed whenever a list opens.
 let ALL_LISTS = [];
-function listsWithItemNamed(name) {
-  const key = (name || '').trim().toLowerCase();
-  if (!key) return [];
-  return ALL_LISTS
-    .filter((l) => (l.items || []).some((it) => (it.name || '').trim().toLowerCase() === key))
-    .map((l) => ({ id: l.id, name: l.name }));
-}
 
 // The "Loose items" bin — where items live before they belong to any template.
 // It's a real list under the hood (so the editor, care, matrix all work) but
@@ -175,11 +169,13 @@ function itemMatchesFilter(it, filter) {
   return [...filter].some((k) => { const c = ITEM_FILTER_CATS.find((x) => x.key === k); return c ? c.test(it) : false; });
 }
 
-// A fresh copy of an item for another template — carries the packing-relevant
+// A resolved item shaped for another template — carries the packing-relevant
 // attributes (so a new hat lands with its container, weight, flags, conditions
 // and storage intact) but NOT the per-object care record: photos and the
-// maintenance schedule stay on the item's home copy so the Care tab doesn't list
-// the same thing several times over.
+// maintenance schedule belong to the shared catalog item, not the membership.
+// This is a transient object: db.saveList decomposes it, merging it into the one
+// catalog item (by name) and recording the per-template context as a membership —
+// nothing is persisted as a duplicate.
 function copyItemForTemplate(src, name) {
   return newItem({
     name,
@@ -1665,12 +1661,16 @@ function itemEditor(list, it, setOpen, draw) {
   const careOpen = hasCare(it) || !!it.storage || photos.length > 0 || careForceOpenItemId === it.id;
   if (careForceOpenItemId === it.id) careForceOpenItemId = null;
 
-  // A tick-box matrix of every template: ticked = this item (matched by name) is
-  // in that template. Tick to add it there, untick to remove — applied on Save.
-  // The item's own template is always ticked and locked (remove it with the
-  // Remove button). The list is built from ALL_LISTS, so it grows on its own as
-  // templates are added.
-  const memberIds = new Set(listsWithItemNamed(it.name).map((r) => r.id));
+  // A tick-box matrix of every template: ticked = this item is in that template.
+  // Membership is by the item's stable catalog id (_itemId), not its name. Tick to
+  // add it there, untick to remove — applied on Save. The item's own template is
+  // always ticked and locked (remove it with the Remove button). The list is built
+  // from ALL_LISTS, so it grows on its own as templates are added. A brand-new item
+  // has no id yet, so it starts in no other template.
+  const curItemId = it._itemId;
+  const memberIds = new Set(
+    curItemId ? ALL_LISTS.filter((l) => (l.items || []).some((z) => z._itemId === curItemId)).map((l) => l.id) : [],
+  );
   const inListsHTML = (() => {
     // Real templates only — the Loose items bin is where things start, not a
     // place you "file into", so it never appears as a tickable row.
@@ -1685,72 +1685,81 @@ function itemEditor(list, it, setOpen, draw) {
   })();
 
   ed.innerHTML = `
-    <div class="item-head">
-      <div class="item-photos" data-photos></div>
-      <label class="field item-name"><span>Item name</span><input name="name" value="${esc(it.name)}"></label>
-    </div>
-    <input type="file" accept="image/*" hidden data-care-file multiple>
-    <div class="row2">
-      <label class="field"><span>Qty</span><input name="qty" value="${esc(it.qty)}" placeholder="optional"></label>
-      <label class="field"><span>Container</span>${selectHtml('container', ['', ...CONTAINERS].map((c) => ({ value: c, label: c || '— none (task) —' })), it.container)}</label>
-    </div>
-    <div class="row2">
-      <label class="field"><span>When (phase)</span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), it.phase)}</label>
-      <label class="field"><span>Weight (g) <em>per unit</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
-    </div>
-    <div class="checks">
-      <label class="check${it.perNight ? ' on' : ''}"><input type="checkbox" name="perNight" ${it.perNight ? 'checked' : ''}>Per night (scales qty)</label>
-      <label class="check${it.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${it.charging ? 'checked' : ''}>⚡ Charging</label>
-      <label class="check${it.liquid ? ' on' : ''}"><input type="checkbox" name="liquid" ${it.liquid ? 'checked' : ''}>💧 Liquid</label>
-      <label class="check${it.restricted ? ' on' : ''}"><input type="checkbox" name="restricted" ${it.restricted ? 'checked' : ''}>⚠️ Restricted</label>
-    </div>
-    <label class="field charge-type-field${it.charging ? '' : ' hidden'}"><span>Charge type</span>${selectHtml('chargeType', CHARGE_TYPES.map((c) => ({ value: c.id, label: c.label })), it.chargeType)}</label>
-    <div class="cond-group">
-      <div class="cond-head">Only include this item when…<em>Leave a row untouched and it always applies. Tick options to narrow when this item is added.</em></div>
-      <fieldset class="mini"><legend>Season</legend>${checkRow('seasons', SEASONS, it.seasons)}</fieldset>
-      <fieldset class="mini"><legend>Context</legend>${checkRow('contexts', CONTEXTS, it.contexts)}</fieldset>
-      <fieldset class="mini"><legend>Transport</legend>${checkRow('transports', TRANSPORTS, it.transports)}</fieldset>
-      <fieldset class="mini"><legend>Catering</legend>${checkRow('catering', CATERING.map((c) => ({ value: c.id, label: c.label })), it.catering)}</fieldset>
-      <fieldset class="mini"><legend>Weather</legend>${checkRow('weather', WEATHER_CONDITIONS.map((w) => ({ value: w.id, label: w.label })), it.weather)}
-        <p class="cond-note">Tick a condition and this item is <b>held back until the trip’s forecast calls for it</b> — e.g. tick <b>Rain</b> and it’s only added when rain is forecast. Leave them all unticked and the item is <b>always included</b>, like the rest of the list.</p>
-      </fieldset>
-    </div>
-    <label class="field"><span>Note</span><input name="note" value="${esc(it.note)}"></label>
-
-    <div class="inlists">
-      <div class="inlists-h">${IC.list}<span>In these templates</span></div>
-      <p class="inlists-hint">Tick a template to add this item to it, untick to remove it. Changes apply when you <b>Save</b>.</p>
-      <div class="inlists-matrix">${inListsHTML}</div>
-    </div>
-
-    <details class="care"${careOpen ? ' open' : ''}>
-      <summary><span class="care-h">Storage &amp; maintenance</span><span class="care-sum">Where it lives, and how &amp; when to look after it</span></summary>
-      <div class="care-body">
-        <label class="field"><span>Where it's stored</span>
-          <select name="storage-sel">
-            <option value=""${it.storage ? '' : ' selected'}>— not set —</option>
-            ${STORAGES.map((s) => `<option value="${esc(s)}"${s === it.storage ? ' selected' : ''}>${esc(s)}</option>`).join('')}
-            <option value="__new__">＋ Add a new place…</option>
-          </select></label>
-        <label class="field care-newstorage hidden"><span>New place</span>
-          <input name="storage-new" value="" placeholder="e.g. Garage shelf 3 · RV box · Hall closet" autocomplete="off"></label>
-
-        <div class="care-maint">
-          <label class="field"><span>Maintenance cadence</span>${selectHtml('interval', intervalOpts, intervalSel)}</label>
-          <label class="field care-lastdone"><span>Last done</span><input type="date" name="lastDone" value="${esc(m.lastDone)}" max="${todayISO()}"></label>
-          <button type="button" class="btn sm care-logbtn" data-care="donetoday" title="Log maintenance done today">${IC.check}<span>Log done today</span></button>
-        </div>
-        <label class="field care-custom${intervalSel === 'custom' ? '' : ' hidden'}"><span>Custom interval (days)</span>
-          <input type="number" name="customDays" min="1" inputmode="numeric" value="${curInterval && !intervalIsPreset ? curInterval : ''}" placeholder="e.g. 120"></label>
-
-        <label class="field"><span>How to maintain <em>(steps, products, settings)</em></span>
-          <textarea name="mnotes" rows="3" placeholder="e.g. Rinse in fresh water, dry inside-out, re-wax zip yearly.">${esc(m.notes)}</textarea></label>
-        <label class="field"><span>How-to link</span>
-          <input type="url" name="mlink" value="${esc(m.link)}" placeholder="https://…" autocomplete="off"></label>
-
-        <div class="care-history" data-history></div>
+    <section class="layer layer-item">
+      <div class="layer-h"><span class="layer-num">1</span><span class="layer-t">The item itself</span><span class="layer-sub">The thing itself — these stay the same everywhere you use it.</span></div>
+      <div class="item-head">
+        <div class="item-photos" data-photos></div>
+        <label class="field item-name"><span>Item name</span><input name="name" value="${esc(it.name)}"></label>
       </div>
-    </details>
+      <input type="file" accept="image/*" hidden data-care-file multiple>
+      <div class="row2">
+        <label class="field"><span>Container <em>default</em></span>${selectHtml('container', ['', ...CONTAINERS].map((c) => ({ value: c, label: c || '— none (task) —' })), it.container)}</label>
+        <label class="field"><span>When <em>default phase</em></span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), it.phase)}</label>
+      </div>
+      <label class="field"><span>Weight (g) <em>per unit</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
+      <div class="checks">
+        <label class="check${it.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${it.charging ? 'checked' : ''}>⚡ Charging</label>
+        <label class="check${it.liquid ? ' on' : ''}"><input type="checkbox" name="liquid" ${it.liquid ? 'checked' : ''}>💧 Liquid</label>
+        <label class="check${it.restricted ? ' on' : ''}"><input type="checkbox" name="restricted" ${it.restricted ? 'checked' : ''}>⚠️ Restricted</label>
+      </div>
+      <label class="field charge-type-field${it.charging ? '' : ' hidden'}"><span>Charge type</span>${selectHtml('chargeType', CHARGE_TYPES.map((c) => ({ value: c.id, label: c.label })), it.chargeType)}</label>
+
+      <details class="care"${careOpen ? ' open' : ''}>
+        <summary><span class="care-h">Storage &amp; maintenance</span><span class="care-sum">Where it lives, and how &amp; when to look after it</span></summary>
+        <div class="care-body">
+          <label class="field"><span>Where it's stored</span>
+            <select name="storage-sel">
+              <option value=""${it.storage ? '' : ' selected'}>— not set —</option>
+              ${STORAGES.map((s) => `<option value="${esc(s)}"${s === it.storage ? ' selected' : ''}>${esc(s)}</option>`).join('')}
+              <option value="__new__">＋ Add a new place…</option>
+            </select></label>
+          <label class="field care-newstorage hidden"><span>New place</span>
+            <input name="storage-new" value="" placeholder="e.g. Garage shelf 3 · RV box · Hall closet" autocomplete="off"></label>
+
+          <div class="care-maint">
+            <label class="field"><span>Maintenance cadence</span>${selectHtml('interval', intervalOpts, intervalSel)}</label>
+            <label class="field care-lastdone"><span>Last done</span><input type="date" name="lastDone" value="${esc(m.lastDone)}" max="${todayISO()}"></label>
+            <button type="button" class="btn sm care-logbtn" data-care="donetoday" title="Log maintenance done today">${IC.check}<span>Log done today</span></button>
+          </div>
+          <label class="field care-custom${intervalSel === 'custom' ? '' : ' hidden'}"><span>Custom interval (days)</span>
+            <input type="number" name="customDays" min="1" inputmode="numeric" value="${curInterval && !intervalIsPreset ? curInterval : ''}" placeholder="e.g. 120"></label>
+
+          <label class="field"><span>How to maintain <em>(steps, products, settings)</em></span>
+            <textarea name="mnotes" rows="3" placeholder="e.g. Rinse in fresh water, dry inside-out, re-wax zip yearly.">${esc(m.notes)}</textarea></label>
+          <label class="field"><span>How-to link</span>
+            <input type="url" name="mlink" value="${esc(m.link)}" placeholder="https://…" autocomplete="off"></label>
+
+          <div class="care-history" data-history></div>
+        </div>
+      </details>
+    </section>
+
+    <section class="layer layer-membership">
+      <div class="layer-h"><span class="layer-num">2</span><span class="layer-t">In this list · ${esc(list.name)}</span><span class="layer-sub">Just for this template — changing these here doesn't touch the item in other lists.</span></div>
+      <label class="field"><span>Qty</span><input name="qty" value="${esc(it.qty)}" placeholder="optional"></label>
+      <div class="checks">
+        <label class="check${it.perNight ? ' on' : ''}"><input type="checkbox" name="perNight" ${it.perNight ? 'checked' : ''}>Per night (scales qty)</label>
+      </div>
+      <div class="cond-group">
+        <div class="cond-head">Only include this item when…<em>Leave a row untouched and it always applies. Tick options to narrow when this item is added.</em></div>
+        <fieldset class="mini"><legend>Season</legend>${checkRow('seasons', SEASONS, it.seasons)}</fieldset>
+        <fieldset class="mini"><legend>Context</legend>${checkRow('contexts', CONTEXTS, it.contexts)}</fieldset>
+        <fieldset class="mini"><legend>Transport</legend>${checkRow('transports', TRANSPORTS, it.transports)}</fieldset>
+        <fieldset class="mini"><legend>Catering</legend>${checkRow('catering', CATERING.map((c) => ({ value: c.id, label: c.label })), it.catering)}</fieldset>
+        <fieldset class="mini"><legend>Weather</legend>${checkRow('weather', WEATHER_CONDITIONS.map((w) => ({ value: w.id, label: w.label })), it.weather)}
+          <p class="cond-note">Tick a condition and this item is <b>held back until the trip’s forecast calls for it</b> — e.g. tick <b>Rain</b> and it’s only added when rain is forecast. Leave them all unticked and the item is <b>always included</b>, like the rest of the list.</p>
+        </fieldset>
+      </div>
+      <label class="field"><span>Note</span><input name="note" value="${esc(it.note)}"></label>
+    </section>
+
+    <section class="layer layer-templates">
+      <div class="layer-h"><span class="layer-num">3</span><span class="layer-t">In these templates</span><span class="layer-sub">Which reusable lists this one item belongs to.</span></div>
+      <div class="inlists">
+        <p class="inlists-hint">Tick a template to add this item to it, untick to remove it. Changes apply when you <b>Save</b>.</p>
+        <div class="inlists-matrix">${inListsHTML}</div>
+      </div>
+    </section>
 
     <div class="editor-actions">
       <button type="button" class="btn danger ghost" data-x="del">${IC.trash}<span>Remove</span></button>
@@ -1830,7 +1839,6 @@ function itemEditor(list, it, setOpen, draw) {
       return;
     }
     if (x === 'save') {
-      const prevName = it.name || ''; // the name before this edit — used to find linked copies to rename
       it.name = ($('input[name=name]', ed).value || '').trim();
       it.qty = ($('input[name=qty]', ed).value || '').trim();
       it.container = $('select[name=container]', ed).value;
@@ -1865,52 +1873,44 @@ function itemEditor(list, it, setOpen, draw) {
       });
       // Read the "In these templates" matrix now, before the editor is torn down.
       const nameKey = it.name.trim().toLowerCase();
-      const prevKey = prevName.trim().toLowerCase();
-      const renamed = !!prevKey && prevKey !== nameKey; // the name actually changed
       const wanted = nameKey ? $$('input[name=tmpl]:not([disabled])', ed).map((b) => ({ id: b.value, checked: b.checked })) : [];
       setOpen(null);
       const ok = await saveGuard((async () => {
-        await db.saveList(list); // this template, with the edited item
+        await db.saveList(list); // this template: the item's shared edits + its membership here
         if (!nameKey) return;
+        // The item's stable catalog id. A brand-new item earns its id from the save
+        // just done, so look it up by name in the freshly-resolved template.
+        let itemId = it._itemId
+          || (await db.getList(list.id))?.items.find((z) => (z.name || '').trim().toLowerCase() === nameKey)?._itemId;
+        if (!itemId) return;
+        // Reconcile the OTHER templates by that id: a tick adds a membership, an
+        // untick removes it. No name-matching, and a rename needs no special handling
+        // because every template shares the one catalog item — the new name shows
+        // everywhere the moment saveList propagates it above.
         const all = await db.getLists();
         for (const l of all) {
           if (l.id === list.id) continue;
           const w = wanted.find((x) => x.id === l.id);
           if (!w) continue;
-          // A linked copy may live here under the new name or, after a rename, the old one.
-          const idxNew = l.items.findIndex((z) => (z.name || '').trim().toLowerCase() === nameKey);
-          const idxOld = renamed ? l.items.findIndex((z) => (z.name || '').trim().toLowerCase() === prevKey) : -1;
-          let changed = false;
-          if (w.checked) {
-            if (idxNew >= 0) {
-              // Already here under the new name — drop any leftover old-name copy so it isn't duplicated.
-              if (idxOld >= 0 && idxOld !== idxNew) { l.items.splice(idxOld, 1); changed = true; }
-            } else if (idxOld >= 0) {
-              l.items[idxOld].name = it.name; changed = true; // rename the linked copy in place
-            } else {
-              l.items.unshift(copyItemForTemplate(it, it.name)); changed = true; // add a fresh copy
-            }
-          } else {
-            // Not wanted — remove the linked copy under whichever name it holds.
-            const before = l.items.length;
-            l.items = l.items.filter((z) => {
-              const k = (z.name || '').trim().toLowerCase();
-              return k !== nameKey && (!renamed || k !== prevKey);
-            });
-            changed = l.items.length !== before;
+          const here = (l.items || []).some((z) => z._itemId === itemId);
+          if (w.checked && !here) {
+            l.items.unshift(copyItemForTemplate(it, it.name)); // saveList merges it into the shared item, adding a membership
+            await db.saveList(l);
+          } else if (!w.checked && here) {
+            l.items = l.items.filter((z) => z._itemId !== itemId); // drop this template's membership
+            await db.saveList(l);
           }
-          if (changed) await db.saveList(l);
         }
         // Auto-file: once an item is in at least one real template, it shouldn't
         // linger in the Loose items bin — pull it out.
         const fresh = await db.getLists();
-        const filed = fresh.some((l) => l.role !== 'loose' && l.items.some((z) => (z.name || '').trim().toLowerCase() === nameKey));
+        const filed = fresh.some((l) => l.role !== 'loose' && l.items.some((z) => z._itemId === itemId));
         if (filed) {
           const loose = fresh.find((l) => l.role === 'loose');
-          if (loose && loose.items.some((z) => (z.name || '').trim().toLowerCase() === nameKey)) {
-            loose.items = loose.items.filter((z) => (z.name || '').trim().toLowerCase() !== nameKey);
+          if (loose && loose.items.some((z) => z._itemId === itemId)) {
+            loose.items = loose.items.filter((z) => z._itemId !== itemId);
             await db.saveList(loose);
-            if (list.role === 'loose') list.items = list.items.filter((z) => (z.name || '').trim().toLowerCase() !== nameKey);
+            if (list.role === 'loose') list.items = list.items.filter((z) => z._itemId !== itemId);
           }
         }
       })());
@@ -2406,6 +2406,12 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v54', '2026-08-03 · 16:15 UTC', false, 'Retired the last of the old copy-based plumbing',
+      'The final step of the “Endeavour 2” rebuild, and a purely <b>under-the-floor</b> one — nothing you can see or do has changed. Since v52 each item has really lived <b>once</b> in the catalog, but the item editor’s <b>In these templates</b> panel still worked the old way, matching items <b>by name</b> across lists and carrying a hidden rename-fixing routine from the copy era. That’s now gone: ticking a template adds or removes this <b>one</b> item by its <b>stable id</b>, straight to a membership, and renaming needs no special handling because every template already points at the same item. The result is simpler, sturdier code with no reliance on names as the glue — the whole point of the rebuild. Add-to-many-templates, renaming, promoting a trip-only item and the auto-tidy of the Loose bin all behave exactly as before.',
+      'The name is no longer the glue: which templates an item belongs to is tracked by its permanent id, so links can’t be broken by a rename or a same-named item — a sturdier base with no change to how anything works.'),
+    v('v53', '2026-08-03 · 15:30 UTC', false, 'The item editor now shows its three layers',
+      'The first <b>visible</b> step of the “Endeavour 2” rebuild. The item editor is the same fields as before, just <b>grouped into three clearly-labelled sections</b> so it’s obvious what each choice affects: <b>① The item itself</b> — name, weight, ⚡/💧/⚠️ flags, its default container &amp; when, and storage &amp; maintenance — the things that are <b>true everywhere</b> you use the item; <b>② In this list</b> — the qty, per-night scaling, the “only include when…” conditions and note — the choices that are <b>just for this template</b> and don’t touch the same item in other lists; and <b>③ In these templates</b> — the tick-list of which lists this one item belongs to. Nothing you can do has changed — it’s the same editor, now laid out so the shared-vs-per-list distinction is plain at a glance.',
+      'The editor now reads at a glance: what’s part of the item everywhere, what’s specific to this one list, and where the item is filed — so you always know which lists an edit will affect.'),
     v('v52', '2026-08-03 · 13:09 UTC', false, 'New foundation: every item lives in one place',
       'A big <b>under-the-floor rebuild</b> (“Endeavour 2”, step 3 of the plan). Until now, an item that appeared in several templates was actually stored as several separate copies that only shared a name. From this version each item lives <b>once</b> in a single catalog, and every template simply <b>refers</b> to it — the same item, not a copy. Two things you can notice: (1) <b>edit an item once and the change shows everywhere</b> it appears (its name, category, weight, flags, care…), while (2) list-specific choices like <b>which bag it goes in</b> stay per-template, so changing the bag in one list doesn’t disturb the others. Nothing about how the app looks or the trips you build has changed — this is the sturdy base the app will grow on. Your data moves across automatically the first time this version loads.',
       'One tidy source of truth for every item: edit it once and it’s right everywhere, with no drifting duplicates — so the app can grow far beyond today.'),

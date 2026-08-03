@@ -247,6 +247,26 @@ ties); booleans (charging/liquid/restricted/…) → true if any copy has it (sa
 weight → first known value; container/phase default → majority; anything that differs per
 list becomes a sparse membership override.
 
+**Stage 5 — DONE (2026-08-03, app v53).** The first *visible* stage. The item editor
+(`app.js` `itemEditor`) is regrouped into three clearly-labelled sections that mirror the
+data model: **① The item itself** (name, photos, default container/when, weight, flags,
+storage & maintenance), **② In this list · {template}** (qty, per-night, the "only include
+when…" conditions, note), **③ In these templates** (the membership tick-matrix). Same fields
+and same save path as before — a pure layout change (new `.layer` CSS), so it's obvious which
+choices are shared everywhere vs. specific to one list. Approved by Martin after preview.
+
+**Stage 6 — DONE (2026-08-03, app v54).** Retired the last copy-era plumbing in the UI. The
+"In these templates" matrix now works by the item's stable catalog **id** (`_itemId`), not by
+name: `listsWithItemNamed` was deleted, the ticked state is computed by id, and the save loop
+lost its redundant rename-propagation branch (a rename now propagates automatically because
+every template shares the one catalog item). Ticking adds a membership, unticking removes it;
+the transient `copyItemForTemplate` object is kept only as the shape `db.saveList` decomposes
+(so a newly-ticked template still inherits the item's conditions as its membership — behaviour
+unchanged). **Verified end-to-end in the browser** on the "Socks" item (in 4 templates): add
+Golf → 1 shared item, +1 membership, no dup/orphan; remove Golf → back to baseline; rename →
+propagates to all memberships with no leftover old-name item; 383 items / 484 memberships / 0
+orphans throughout, zero console errors. All 89 model tests stay green. **Endeavour 2 complete.**
+
 ## 9. Glossary
 
 - **Item** — one physical thing, stored once in the catalog. The base of everything.

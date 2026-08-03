@@ -2805,6 +2805,52 @@ details.care[open] .care-h::before {
 /* ============================================================
    Item editor — name, condition group, "in these lists"
    ============================================================ */
+
+/* The three layers of the data model, shown plainly: the item itself,
+   its place in this one list, and which templates it belongs to. Each is a
+   labelled section with a numbered badge; a divider separates them so it's
+   obvious which choices are shared everywhere vs. specific to this list. */
+.item-editor .layer {
+  display: grid;
+  gap: 10px;
+}
+.item-editor .layer + .layer {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.item-editor .layer-h {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 4px 9px;
+}
+.item-editor .layer-num {
+  grid-row: span 2;
+  align-self: start;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: var(--ink);
+  color: var(--card);
+  font-size: .78rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.item-editor .layer-t {
+  font-size: .95rem;
+  font-weight: 800;
+  color: var(--ink);
+}
+.item-editor .layer-sub {
+  grid-column: 2;
+  font-size: .82rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
 .item-editor .item-name input {
   font-size: 1.2rem;
   font-weight: 700;
