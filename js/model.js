@@ -1,0 +1,1038 @@
+// model.js — pure domain logic for AMS Packing List.
+// No DOM, no storage: just data in, data out. This is the unit-tested core.
+//
+// Every item carries THREE independent grouping dimensions, so the generated Total
+// List can be viewed grouped by whichever the user prefers:
+//   1. WHAT kind of thing -> `category`  (one of CATEGORIES)
+//   2. WHERE it is packed  -> `container` (one of CONTAINERS)
+//   3. WHEN it is packed   -> `phase`     (one of PHASES ids, the "process vector")
+// Plus flags: itemType (item | reminder), charging (needs charging / a cable),
+// shortList (part of the minimal quick list), and an optional Swedish original + sub-items.
+// A Total Packing List for an Event is produced by combining the chosen building-block
+// packing lists, filtering each item by the event's season / context / transport / catering.
+
+// --- Fixed vocabularies (all user-extendable at the data level) ---
+
+// WHAT kind of thing it is (primary grouping in Martin's own lists).
+export const CATEGORIES = [
+  'Clothing', 'Adventure clothing', 'Footwear', 'Sport gear', 'Food & drink',
+  'Toiletries', 'Pharmacy / meds', 'Electronics', 'Documents & money',
+  'Charging', 'Comfort & misc', 'Reminders',
+];
+export const CATEGORY_DEFAULT = 'Comfort & misc';
+
+// WHERE things get packed.
+export const CONTAINERS = [
+  'Toiletry bag', 'Carry-on / hand luggage', 'Checked luggage', 'Hiking backpack',
+  'Climbing backpack', 'Golf bag', 'Triathlon bag', 'Swim bag', 'Duffel bag',
+  'Day pack', 'Bellroy backpack', 'Tech pouch', 'Electronics bag', 'Cool box',
+  'Handbag', 'RV storage box', 'Other',
+];
+
+// Typical airline weight ceilings per bag (kg). 0/absent = no limit tracked.
+export const CONTAINER_LIMITS_KG = {
+  'Carry-on / hand luggage': 8,
+  'Checked luggage': 23,
+  'Bellroy backpack': 8,
+  'Day pack': 8,
+};
+
+// WHEN things get packed / done — the process vector, in timeline order.
+// kind 'task' phases hold to-dos (Preparations); 'pack' phases hold physical items.
+export const PHASES = [
+  { id: 'prep',      label: 'Preparations',                 kind: 'task', hint: 'Book, cancel, charge, arrange — done ahead of time.' },
+  { id: 'week',      label: '≥1 week ahead',                kind: 'pack', hint: 'Things you don’t use at home — pack early.' },
+  { id: 'daybefore', label: 'Day before (stage / move to RV)', kind: 'pack', hint: 'Pack and stage the day before departure.' },
+  { id: 'morning',   label: 'Morning list',                 kind: 'pack', hint: 'Packed the morning of — used the night before / that morning.' },
+  { id: 'door',      label: 'At the front door',            kind: 'pack', hint: 'Last check as you leave (Vid ytterdörren).' },
+  { id: 'wear',      label: 'Wear / carry on the day',      kind: 'pack', hint: 'Worn or carried, not packed away.' },
+  { id: 'after',     label: 'After / recovery',             kind: 'pack', hint: 'For after the activity — shower, change, recovery (Efter).' },
+];
+export const PHASE_IDS = PHASES.map((p) => p.id);
+// How many days before departure each phase should typically be packed. Drives the
+// "pack this now" nudge: a phase is "due" once days-to-go drops to its lead time.
+export const PHASE_LEAD_DAYS = { prep: 30, week: 7, daybefore: 1, morning: 0, door: 0, wear: 0, after: -1 };
+export function phase(id) { return PHASES.find((p) => p.id === id) || PHASES[1]; }
+export function phaseLabel(id) { return phase(id).label; }
+export function phaseOrder(id) { const i = PHASE_IDS.indexOf(id); return i < 0 ? PHASE_IDS.indexOf('week') : i; }
+
+// Activity GROUPS — the top level Martin organises his life activities under.
+// Every building-block list belongs to one of these (or '' = ungrouped / utility list).
+export const GROUPS = [
+  { id: 'GA',  label: 'Goal Activity',                  hint: 'Life activities that matter — Travel, Golf, Hiking, Diving…' },
+  { id: 'WET', label: 'Workout, Exercise & Training',   hint: 'Swim, Bike, Run, Strength, Yoga/Mobility, Breath work.' },
+  { id: 'OE',  label: 'Other Events',                   hint: 'Small nice things — a coffee, a winter bath, a walk, the movies.' },
+];
+export const GROUP_IDS = GROUPS.map((g) => g.id);
+export function group(id) { return GROUPS.find((g) => g.id === id) || null; }
+export function groupLabel(id) { const g = group(id); return g ? g.label : ''; }
+
+export const SEASONS = ['Summer', 'Winter'];
+export const TRANSPORTS = ['Car', 'Plane', 'RV'];
+
+// Standard set of "where it's stored" places, offered in every item's storage
+// dropdown out of the box. The user can add, rename and remove them (their edited
+// list is persisted); this is only the starting point / fallback.
+export const DEFAULT_STORAGE_LOCATIONS = [
+  'Bedroom wardrobe',
+  'Chest of drawers',
+  'Hall closet',
+  'Bathroom cabinet',
+  'Kitchen cupboard',
+  'Garage',
+  'Loft / attic',
+  'Basement / cellar',
+  'Utility room',
+  'Storage box',
+  'Car boot',
+  'RV / camper',
+];
+// Weather conditions an item can be tagged for. A tagged item is "conditional
+// gear": kept out of the base list and offered as a suggestion only when the
+// trip's forecast calls for it. (Fuller weather logic lives further down.)
+export const WEATHER_CONDITIONS = [
+  { id: 'rain', label: 'Rain' }, { id: 'cold', label: 'Cold' },
+  { id: 'hot', label: 'Heat' }, { id: 'wind', label: 'Wind' }, { id: 'snow', label: 'Snow' },
+];
+export const WEATHER_CONDITION_IDS = WEATHER_CONDITIONS.map((w) => w.id);
+export const CONTEXTS = ['Indoor', 'Outdoor', 'Race', 'Training'];
+export const CATERING = [
+  { id: 'self',   label: 'Self-sufficient (cooking our own)' },
+  { id: 'eatout', label: 'Restaurants / eating out' },
+  { id: 'mixed',  label: 'A mix of both' },
+];
+export function cateringLabel(id) { const c = CATERING.find((x) => x.id === id); return c ? c.label : ''; }
+
+// How a charge item takes power — its connector / charger type. '' = unspecified.
+// `short` is the compact label shown on the ⚡ badge in the list.
+export const CHARGE_TYPES = [
+  { id: '',          label: 'Unspecified',      short: '' },
+  { id: 'usb-c',     label: 'USB-C',            short: 'USB-C' },
+  { id: 'usb-a',     label: 'USB-A',            short: 'USB-A' },
+  { id: 'micro-usb', label: 'Micro-USB',        short: 'Micro' },
+  { id: 'lightning', label: 'Lightning (Apple)', short: 'Lightning' },
+  { id: 'special',   label: 'Special charger',  short: 'Special' },
+  { id: 'mains',     label: 'Wall / mains plug', short: 'Wall' },
+];
+export const CHARGE_TYPE_IDS = CHARGE_TYPES.map((c) => c.id);
+export function chargeType(id) { return CHARGE_TYPES.find((c) => c.id === id) || CHARGE_TYPES[0]; }
+export function chargeTypeLabel(id) { return chargeType(id).label; }
+export function chargeTypeShort(id) { return chargeType(id).short; }
+
+// --- ids & small helpers ---
+
+let _seq = 0;
+export function id() {
+  // Sortable-ish, collision-resistant enough for a personal on-device app.
+  return `${Date.now().toString(36)}-${(_seq++).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+const asArray = (v) => (Array.isArray(v) ? v : []);
+const nowISO = () => new Date().toISOString();
+export const normName = (s) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+// A calendar date in YYYY-MM-DD form (the shape all care dates are stored in).
+const isYMD = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
+const todayYMD = (todayISO) => (todayISO || new Date().toISOString()).slice(0, 10);
+
+// --- Shape guards (applied when reading from storage) ---
+
+// How many photos a single item may hold — keeps the editor tidy and bounds
+// how large an exported/shared trip bundle can grow.
+export const MAX_PHOTOS = 5;
+
+export function coerceItem(it) {
+  if (!it || typeof it !== 'object') return it;
+  it.seasons = asArray(it.seasons);
+  it.contexts = asArray(it.contexts);
+  it.transports = asArray(it.transports);
+  it.catering = asArray(it.catering);
+  it.weather = asArray(it.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w)); // conditional-gear tags
+  it.sub = asArray(it.sub);
+  if (!PHASE_IDS.includes(it.phase)) it.phase = 'week';
+  if (typeof it.category !== 'string' || !it.category) it.category = CATEGORY_DEFAULT;
+  it.itemType = it.itemType === 'reminder' ? 'reminder' : 'item';
+  it.charging = !!it.charging;
+  it.chargeType = CHARGE_TYPE_IDS.includes(it.chargeType) ? it.chargeType : ''; // connector type (USB-C…); only meaningful when charging
+  it.shortList = !!it.shortList;
+  if (typeof it.swedish !== 'string') it.swedish = '';
+  it.stats = normalizeStats(it.stats);
+  it.weight = Number.isFinite(it.weight) && it.weight >= 0 ? it.weight : 0;  // grams per unit, 0 = unknown
+  it.liquid = !!it.liquid;        // liquid / gel — 100 ml hand-luggage rule
+  it.restricted = !!it.restricted; // battery / restricted — carry-on rules
+  it.perNight = !!it.perNight;    // quantity scales with trip length (nights)
+  it.storage = typeof it.storage === 'string' ? it.storage : '';   // where it lives at home (free text)
+  // Pictures of the item, as resized data URLs. Canonical field is `photos`;
+  // a legacy single `photo` string is folded in and then dropped.
+  it.photos = asArray(it.photos).filter((p) => typeof p === 'string' && p);
+  if (!it.photos.length && typeof it.photo === 'string' && it.photo) it.photos = [it.photo];
+  if (it.photos.length > MAX_PHOTOS) it.photos = it.photos.slice(0, MAX_PHOTOS);
+  delete it.photo;
+  it.maintenance = normalizeMaintenance(it.maintenance);           // care record, or null when unused
+  return it;
+}
+// A care record: how to look after the physical thing, plus an optional recurring
+// schedule and a log of what was done when. Kept null unless it holds real content,
+// so the 200+ everyday items (socks, toothpaste) carry no dead weight.
+export function normalizeMaintenance(m) {
+  if (!m || typeof m !== 'object') return null;
+  const notes = typeof m.notes === 'string' ? m.notes : '';
+  const link = typeof m.link === 'string' ? m.link : '';
+  const intervalDays = Number.isFinite(m.intervalDays) && m.intervalDays > 0 ? Math.floor(m.intervalDays) : 0;
+  const lastDone = isYMD(m.lastDone) ? m.lastDone : '';
+  const log = asArray(m.log)
+    .map((e) => ({ date: isYMD(e && e.date) ? e.date : '', note: typeof (e && e.note) === 'string' ? e.note : '' }))
+    .filter((e) => e.date)
+    .sort((a, b) => a.date.localeCompare(b.date)); // oldest first
+  const empty = !notes && !link && !intervalDays && !lastDone && !log.length;
+  return empty ? null : { notes, link, intervalDays, lastDone, log };
+}
+// Usage learning: how often a building-block item was packed vs actually used.
+function normalizeStats(s) {
+  const n = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+  s = s && typeof s === 'object' ? s : {};
+  return { packed: n(s.packed), used: n(s.used), unused: n(s.unused), lastReviewed: typeof s.lastReviewed === 'string' ? s.lastReviewed : '' };
+}
+export function coerceList(l) {
+  if (!l || typeof l !== 'object') return l;
+  l.items = asArray(l.items).map(coerceItem);
+  l.group = GROUP_IDS.includes(l.group) ? l.group : '';  // '' = ungrouped / utility list
+  // role decides how the list feeds a trip:
+  //  'base'      → always included on every trip (the common core),
+  //  'transport' → included only when the trip's transport matches l.transport,
+  //  'loose'     → the "Loose items" bin: items not in any template yet; never fed
+  //                to a trip and never shown as a tickable activity,
+  //  ''          → a normal activity list the user ticks (GA / WET).
+  l.role = ['base', 'transport', 'loose'].includes(l.role) ? l.role : '';
+  l.transport = TRANSPORTS.includes(l.transport) ? l.transport : '';  // only meaningful when role === 'transport'
+  return l;
+}
+export function coerceEvent(e) {
+  if (!e || typeof e !== 'object') return e;
+  e.mode = e.mode === 'quick' ? 'quick' : 'trip';   // 'quick' skips the common base + transport kit
+  e.activities = asArray(e.activities);
+  e.contexts = asArray(e.contexts);
+  e.entries = asArray(e.entries).map(coerceItem);
+  e.status = e.status === 'done' ? 'done' : 'active';   // 'active' | 'done' (reviewed)
+  if (typeof e.reviewedAt !== 'string') e.reviewedAt = '';
+  e.nights = Number.isFinite(e.nights) && e.nights >= 0 ? Math.floor(e.nights) : 0;  // trip length; drives per-night scaling
+  if (typeof e.endDate !== 'string') e.endDate = '';   // return date; `nights` derives from start->end
+  if (typeof e.destination !== 'string') e.destination = '';  // free text -> geocoded for weather
+  e.weather = coerceWeather(e.weather);  // cached Open-Meteo snapshot, or null
+  return e;
+}
+
+// --- Constructors ---
+
+export function newItem(partial = {}) {
+  return coerceItem({
+    id: id(),
+    name: '',
+    swedish: '',            // original Swedish wording, kept as a subtitle
+    qty: '',
+    category: CATEGORY_DEFAULT,
+    container: 'Carry-on / hand luggage',
+    phase: 'week',
+    itemType: 'item',       // 'item' (packable) | 'reminder' (a to-do prompt)
+    charging: false,        // needs charging or a charging cable
+    chargeType: '',         // how it charges: USB-C / USB-A / Lightning / special… ('' = unspecified)
+    shortList: false,       // part of the minimal "short home list"
+    seasons: [],     // empty = any season
+    contexts: [],    // empty = any context
+    transports: [],  // empty = any transport
+    catering: [],    // empty = any catering choice
+    weather: [],     // weather conditions this item is FOR (empty = not weather-conditional)
+    sub: [],         // optional nested sub-items (names)
+    note: '',
+    weight: 0,       // grams per unit (0 = unknown)
+    liquid: false,   // liquid/gel (100 ml rule)
+    restricted: false, // battery / restricted (carry-on)
+    perNight: false, // quantity scales with trip nights
+    storage: '',     // where the physical item is kept at home (free text)
+    photos: [],      // pictures of the item, as resized data URLs (max MAX_PHOTOS)
+    maintenance: null, // care record (notes/link/schedule/log) — see normalizeMaintenance
+    ...partial,
+  });
+}
+
+export function newList(partial = {}) {
+  return coerceList({
+    id: id(),
+    name: '',
+    group: '',          // 'GA' | 'WET' | 'OE' | '' (ungrouped)
+    role: '',           // '' (ticked activity) | 'base' (always on) | 'transport' (auto by transport)
+    transport: '',      // '' | 'Car' | 'Plane' | 'RV' — only used when role === 'transport'
+    builtin: false,
+    items: [],
+    createdAt: nowISO(),
+    updatedAt: nowISO(),
+    ...partial,
+  });
+}
+
+export function newEvent(partial = {}) {
+  return coerceEvent({
+    id: id(),
+    name: '',
+    mode: 'trip',         // 'trip' (common base + transport + activities) | 'quick' (ticked activities only)
+    activities: [],       // packing-list ids chosen for this trip
+    transport: 'Car',
+    season: 'Summer',
+    contexts: [],
+    catering: 'mixed',
+    startDate: '',
+    endDate: '',          // return date; trip length in nights derives from start->end
+    nights: 0,            // trip length in nights (drives per-night quantity scaling)
+    destination: '',      // optional place name for the weather forecast
+    weather: null,        // cached Open-Meteo snapshot (set when fetched online)
+    entries: [],          // materialised, editable Total-List lines
+    generatedAt: '',
+    createdAt: nowISO(),
+    updatedAt: nowISO(),
+    ...partial,
+  });
+}
+
+// --- Filtering: does a building-block item belong in this event? ---
+// An empty constraint array means "applies to any value" for that dimension.
+
+function dimOk(itemVals, eventVal) {
+  const vals = asArray(itemVals);
+  if (vals.length === 0) return true;            // no constraint -> always applies
+  if (eventVal == null || eventVal === '') return true;
+  return vals.includes(eventVal);
+}
+function contextsOk(itemContexts, eventContexts) {
+  const vals = asArray(itemContexts);
+  if (vals.length === 0) return true;
+  const ev = asArray(eventContexts);
+  if (ev.length === 0) return true;              // event didn't pin a context -> keep
+  return vals.some((v) => ev.includes(v));
+}
+
+export function itemMatchesEvent(item, event) {
+  return dimOk(item.seasons, event.season)
+    && dimOk(item.transports, event.transport)
+    && dimOk(item.catering, event.catering)
+    && contextsOk(item.contexts, event.contexts);
+}
+
+// --- Total List generation ---
+// Turn a building-block item into an editable Total-List entry.
+function entryFromItem(item, list) {
+  return coerceItem({
+    id: id(),
+    name: item.name,
+    swedish: item.swedish || '',
+    qty: item.qty || '',
+    category: item.category || CATEGORY_DEFAULT,
+    container: item.container,
+    phase: item.phase,
+    itemType: item.itemType || 'item',
+    charging: !!item.charging,
+    chargeType: item.chargeType || '',
+    shortList: !!item.shortList,
+    weight: Number.isFinite(item.weight) ? item.weight : 0,
+    liquid: !!item.liquid,
+    restricted: !!item.restricted,
+    perNight: !!item.perNight,
+    storage: item.storage || '', // carried onto the trip so packing shows where to grab it
+    sub: asArray(item.sub).slice(),
+    note: item.note || '',
+    sourceListId: list ? list.id : null,
+    sourceItemId: item.id,
+    custom: false,
+    checked: false,
+    // constraints are irrelevant once materialised, but keep shape stable
+    seasons: [], contexts: [], transports: [], catering: [], weather: [],
+  });
+}
+
+// The building-block lists that feed a trip's Total List, in dedup-priority order:
+//  1. every always-on base list (role 'base') — the common core of any trip,
+//  2. the one transport list matching the trip's transport (role 'transport'),
+//  3. the GA/WET activity lists the user ticked, in the order they picked them.
+// Earlier lists win on a name+container clash, so the common base takes priority.
+export function listsForEvent(event, lists) {
+  const all = asArray(lists).map(coerceList);
+  const tickable = new Map(all.filter((l) => !l.role).map((l) => [l.id, l]));
+  const ticked = asArray(event.activities).map((lid) => tickable.get(lid)).filter(Boolean);
+  // Quick mode: just the ticked activity lists — no common base, no transport kit.
+  // (Items are still narrowed by the trip's Indoor/Outdoor context, season, etc.)
+  const chosen = event.mode === 'quick'
+    ? ticked
+    : [
+      ...all.filter((l) => l.role === 'base'),
+      ...all.filter((l) => l.role === 'transport' && l.transport === event.transport),
+      ...ticked,
+    ];
+  const out = [];
+  const seen = new Set();
+  for (const l of chosen) {
+    if (seen.has(l.id)) continue;
+    seen.add(l.id);
+    out.push(l);
+  }
+  return out;
+}
+
+// Build the raw combined list from the chosen building blocks, de-duplicated by
+// name+container (quantities of a duplicate are merged into a "x N" hint).
+export function buildTotalEntries(event, lists) {
+  const seen = new Map(); // key -> entry
+  const out = [];
+  for (const list of listsForEvent(event, lists)) {
+    for (const item of list.items) {
+      if (!item || !String(item.name || '').trim()) continue;
+      if (!itemMatchesEvent(item, event)) continue;
+      if (asArray(item.weather).length) continue; // conditional gear — offered via the forecast, not the base list
+      const key = `${normName(item.name)}|${item.container}`;
+      if (seen.has(key)) continue; // first source wins; keep it simple & predictable
+      const entry = entryFromItem(item, list);
+      seen.set(key, entry);
+      out.push(entry);
+    }
+  }
+  return out;
+}
+
+// Regenerate while preserving the user's manual edits:
+//  - custom (manually added) entries are always kept
+//  - entries the user edited or checked are kept as-is (matched by source item id)
+//  - brand-new matching items are appended
+//  - source items that no longer match are dropped (unless edited/checked/custom)
+export function regenerateEntries(event, lists) {
+  const fresh = buildTotalEntries(event, lists);
+  const prev = asArray(event.entries);
+  const prevBySource = new Map();
+  for (const e of prev) if (e.sourceItemId) prevBySource.set(e.sourceItemId, e);
+
+  const out = [];
+  const usedSources = new Set();
+  for (const f of fresh) {
+    const existing = f.sourceItemId ? prevBySource.get(f.sourceItemId) : null;
+    if (existing) { out.push(existing); usedSources.add(f.sourceItemId); }
+    else out.push(f);
+  }
+  // Keep anything the user added or touched that the fresh build didn't cover.
+  for (const e of prev) {
+    if (e.custom) { out.push(e); continue; }
+    if (e.sourceItemId && !usedSources.has(e.sourceItemId) && (e.checked || e._edited)) out.push(e);
+  }
+  return out;
+}
+
+// --- Grouping for display / export ---
+
+export function entriesByPhase(entries) {
+  const map = new Map(PHASES.map((p) => [p.id, []]));
+  for (const e of asArray(entries)) {
+    const pid = PHASE_IDS.includes(e.phase) ? e.phase : 'week';
+    map.get(pid).push(e);
+  }
+  return PHASES.map((p) => ({ phase: p, entries: map.get(p.id) })).filter((g) => g.entries.length);
+}
+
+function groupByKey(entries, keyFn, order, fallback) {
+  const map = new Map();
+  for (const e of asArray(entries)) {
+    const k = keyFn(e) || fallback;
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(e);
+  }
+  const ord = new Map(order.map((c, i) => [c, i]));
+  return [...map.entries()]
+    .sort((a, b) => (ord.has(a[0]) ? ord.get(a[0]) : 999) - (ord.has(b[0]) ? ord.get(b[0]) : 999) || a[0].localeCompare(b[0]))
+    .map(([key, list]) => ({ key, entries: list }));
+}
+export function groupByContainer(entries) {
+  return groupByKey(entries, (e) => e.container, CONTAINERS, 'Other').map((g) => ({ container: g.key, entries: g.entries }));
+}
+export function groupByCategory(entries) {
+  return groupByKey(entries, (e) => e.category, CATEGORIES, CATEGORY_DEFAULT).map((g) => ({ category: g.key, entries: g.entries }));
+}
+// Generic dispatcher used by the UI's group-by toggle: 'category' | 'container' | 'when'.
+export function groupBy(mode, entries) {
+  if (mode === 'category') return groupByCategory(entries).map((g) => ({ label: g.category, entries: g.entries }));
+  if (mode === 'container') return groupByContainer(entries).map((g) => ({ label: g.container || 'Unpacked', entries: g.entries }));
+  return entriesByPhase(entries).map((g) => ({ label: g.phase.label, hint: g.phase.hint, entries: g.entries }));
+}
+
+// --- Progress / stats ---
+
+export function progress(entries) {
+  const list = asArray(entries);
+  const total = list.length;
+  const done = list.filter((e) => e.checked).length;
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+
+// Post-trip review learning. Each reviewed entry carries a boolean `used`; fold that
+// into the source building-block item's stats so lists can get tighter over time.
+// Returns the lists that changed (so the caller can persist just those).
+export function applyReview(event, lists, whenISO) {
+  const now = whenISO || new Date().toISOString();
+  const byId = new Map(asArray(lists).map((l) => [l.id, l]));
+  const changed = new Set();
+  for (const e of asArray(event && event.entries)) {
+    if (typeof e.used !== 'boolean' || !e.sourceListId || !e.sourceItemId) continue;
+    const list = byId.get(e.sourceListId);
+    if (!list) continue;
+    const item = asArray(list.items).find((x) => x.id === e.sourceItemId);
+    if (!item) continue;
+    item.stats = normalizeStats(item.stats);
+    item.stats.packed += 1;
+    if (e.used) item.stats.used += 1; else item.stats.unused += 1;
+    item.stats.lastReviewed = now;
+    changed.add(list.id);
+  }
+  return [...changed].map((lid) => byId.get(lid));
+}
+
+// Items worth pruning: packed on >= minTrips reviewed trips but never used.
+export function pruneSuggestions(lists, { minTrips = 2 } = {}) {
+  const out = [];
+  for (const l of asArray(lists)) {
+    for (const it of asArray(l.items)) {
+      const s = normalizeStats(it.stats);
+      if (s.packed >= minTrips && s.used === 0 && !it.keep) out.push({ listId: l.id, listName: l.name, item: it, stats: s });
+    }
+  }
+  out.sort((a, b) => b.stats.packed - a.stats.packed);
+  return out;
+}
+
+// --- Weight, bag loads, flags & quantity scaling (#3) ---
+
+// How many of this item are actually needed for the trip. Per-night items scale
+// with the trip length; otherwise honour an explicit numeric qty, defaulting to 1.
+export function effectiveQty(entry, nights = 0) {
+  if (entry && entry.perNight && nights > 0) return nights;
+  const n = Number(entry && entry.qty);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+// Per-container weight totals (kg) with airline-limit warnings.
+export function bagLoads(entries, nights = 0) {
+  const map = new Map();
+  for (const e of asArray(entries)) {
+    if (e.itemType === 'reminder') continue;
+    const c = e.container || 'Other';
+    if (!map.has(c)) map.set(c, { container: c, grams: 0, items: 0 });
+    const b = map.get(c);
+    b.items += 1;
+    b.grams += (Number(e.weight) || 0) * effectiveQty(e, nights);
+  }
+  const order = new Map(CONTAINERS.map((c, i) => [c, i]));
+  return [...map.values()]
+    .sort((a, b) => (order.has(a.container) ? order.get(a.container) : 999) - (order.has(b.container) ? order.get(b.container) : 999))
+    .map((b) => {
+      const limitKg = CONTAINER_LIMITS_KG[b.container] || 0;
+      const kg = Math.round(b.grams / 100) / 10;
+      return { ...b, kg, limitKg, over: limitKg > 0 && b.grams / 1000 > limitKg };
+    });
+}
+
+// Trip-wide flag counts + total known weight.
+export function packingFlags(entries, nights = 0) {
+  let liquids = 0; let restricted = 0; let weighed = 0; let total = 0; let grams = 0;
+  for (const e of asArray(entries)) {
+    if (e.itemType === 'reminder') continue;
+    total += 1;
+    if (e.liquid) liquids += 1;
+    if (e.restricted) restricted += 1;
+    if (Number(e.weight) > 0) { weighed += 1; grams += Number(e.weight) * effectiveQty(e, nights); }
+  }
+  return { liquids, restricted, total, weighed, totalKg: Math.round(grams / 100) / 10 };
+}
+
+// --- Departure countdown & "pack now" nudges (#4) ---
+
+// Whole days from `todayISO` to the trip's start date (negative = in the past).
+export function daysUntil(startDate, todayISO) {
+  if (!startDate) return null;
+  const today = (todayISO || new Date().toISOString()).slice(0, 10);
+  const a = Date.parse(`${startDate.slice(0, 10)}T00:00:00Z`);
+  const b = Date.parse(`${today}T00:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b)) return null;
+  return Math.round((a - b) / 86400000);
+}
+
+export function countdownLabel(d) {
+  if (d == null) return '';
+  if (d === 0) return 'Today';
+  if (d === 1) return 'Tomorrow';
+  if (d === -1) return 'Yesterday';
+  return d > 0 ? `in ${d} days` : `${-d} days ago`;
+}
+
+// Whole nights between a start and end date (end minus start, in days). Returns
+// null when either date is missing/invalid or the end falls before the start.
+// Same-day start and end = 0 nights (a day trip).
+export function nightsBetween(startDate, endDate) {
+  if (!startDate || !endDate) return null;
+  const a = Date.parse(`${startDate.slice(0, 10)}T00:00:00Z`);
+  const b = Date.parse(`${endDate.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b)) return null;
+  const nights = Math.round((b - a) / 86400000);
+  return nights >= 0 ? nights : null;
+}
+
+// The end date implied by a start date plus a number of nights — used to show an
+// end-date field for older events that only stored `nights`. '' with no start date.
+export function endFromNights(startDate, nights) {
+  if (!startDate) return '';
+  const start = Date.parse(`${startDate.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(start)) return '';
+  const n = Number.isFinite(nights) && nights > 0 ? Math.floor(nights) : 0;
+  return new Date(start + n * 86400000).toISOString().slice(0, 10);
+}
+
+// Order events for the Home preview and the Events tab: nearest upcoming trip
+// first, then undated drafts (most recently created first), then past trips
+// (most recent first). This puts "what I'm packing for next" at the top.
+export function sortEventsForList(events, todayISO) {
+  const rank = (e) => {
+    const d = daysUntil(e.startDate, todayISO); // null = no date
+    if (d == null) return 1;      // undated drafts sit between upcoming and past
+    return d >= 0 ? 0 : 2;        // 0 = today/upcoming, 2 = past
+  };
+  return events.slice().sort((a, b) => {
+    const ra = rank(a); const rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    if (ra === 0) return daysUntil(a.startDate, todayISO) - daysUntil(b.startDate, todayISO); // soonest first
+    if (ra === 2) return daysUntil(b.startDate, todayISO) - daysUntil(a.startDate, todayISO); // most recent past first
+    return (b.createdAt || '').localeCompare(a.createdAt || ''); // undated: newest draft first
+  });
+}
+
+// What to pack right now: the earliest timeline phase that is "due" (its lead time has
+// arrived) and still has unpacked items. Returns null when there's no date or nothing due.
+export function tripNudge(event, todayISO) {
+  if (!event || !event.startDate) return null;
+  const daysToGo = daysUntil(event.startDate, todayISO);
+  if (daysToGo == null) return null;
+  const due = packSteps(event.entries).filter((s) => {
+    const lead = PHASE_LEAD_DAYS[s.phase.id] ?? 0;
+    return lead >= daysToGo && s.remaining > 0;
+  });
+  const dueCount = due.reduce((sum, s) => sum + s.remaining, 0);
+  const focus = due[0] || null; // packSteps is timeline-ordered, so this is the earliest due phase
+  return { daysToGo, label: countdownLabel(daysToGo), focusPhaseId: focus ? focus.phase.id : null, focusLabel: focus ? focus.phase.label : '', dueCount };
+}
+
+// Packing Mode steps: one per non-empty timeline phase, with packed/remaining counts.
+// The UI walks these one at a time.
+export function packSteps(entries) {
+  return entriesByPhase(entries).map((g) => {
+    const total = g.entries.length;
+    const done = g.entries.filter((e) => e.checked).length;
+    return { phase: g.phase, entries: g.entries, total, done, remaining: total - done };
+  });
+}
+
+// --- Trip sharing (manual, backend-free) ---
+// A trip bundle is a single, self-contained event. Its entries are already
+// materialised, so nothing external (no building-block lists) is needed to
+// rebuild the Total List on the receiving device.
+export const TRIP_KIND = 'trip';
+
+// Entry fields the receiver never needs: sender-only bookkeeping (ids, source
+// links, usage stats, packed/used state). coerceItem restores every other
+// default on import, so dropping defaulted fields is lossless.
+const TRIP_DROP_KEYS = new Set(['id', 'sourceListId', 'sourceItemId', 'stats', 'checked', 'used', 'custom']);
+const isDefaulty = (v) => v === '' || v === false || v === 0 || v == null || (Array.isArray(v) && v.length === 0);
+
+// Shrink an entry to just its non-default, receiver-relevant fields. This keeps
+// shared links small enough to travel as a URL (a full entry is ~4x larger).
+function slimEntry(e) {
+  const o = {};
+  for (const [k, v] of Object.entries(e)) {
+    if (TRIP_DROP_KEYS.has(k)) continue;
+    if (k === 'sub') { if (Array.isArray(v) && v.length) o.sub = v.map(slimEntry); continue; }
+    if (k === 'itemType' && v === 'item') continue;      // restored by coerceItem
+    if (isDefaulty(v)) continue;                          // restored by coerceItem
+    o[k] = v;
+  }
+  return o;
+}
+
+export function buildTripBundle(event, whenISO = nowISO()) {
+  if (!event) throw new Error('No trip to share.');
+  const slim = { ...event, entries: (event.entries || []).map(slimEntry) };
+  return { app: 'ams-packing-list', kind: TRIP_KIND, version: 1, exportedAt: whenISO, event: slim };
+}
+
+// Give every entry (and nested sub-item) a fresh unique id — slimmed bundles
+// carry none, and the UI keys expand/remove/review on entry.id.
+function reidEntries(entries) {
+  for (const e of asArray(entries)) {
+    e.id = id();
+    e.checked = false;
+    delete e.used;
+    if (Array.isArray(e.sub) && e.sub.length) reidEntries(e.sub);
+  }
+}
+
+// Parse a trip bundle (from a file or a link) and return a fresh, importable
+// event: new id + timestamps, review state reset, so importing never clobbers
+// an existing event and the receiver starts from a clean, unpacked list.
+export function parseTripBundle(data) {
+  const obj = typeof data === 'string' ? JSON.parse(data) : data;
+  if (!obj || typeof obj !== 'object' || obj.kind !== TRIP_KIND || !obj.event) {
+    throw new Error('This does not look like a shared AMS trip.');
+  }
+  const ev = coerceEvent(obj.event);
+  ev.id = id();
+  ev.status = 'active';
+  ev.reviewedAt = '';
+  ev.createdAt = nowISO();
+  ev.updatedAt = ev.createdAt;
+  reidEntries(ev.entries);
+  return ev;
+}
+
+// URL-safe base64 (RFC 4648 §5) of a UTF-8 string, no padding.
+export function toBase64Url(str) {
+  const b64 = btoa(unescape(encodeURIComponent(str)));
+  return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+export function fromBase64Url(b64url) {
+  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+  return decodeURIComponent(escape(atob(b64)));
+}
+
+// Encode a trip as a self-contained deep link fragment: #/t/<base64url-json>.
+// Returns null when the payload is too large to travel reliably as a link
+// (some apps/browsers truncate long URLs) — callers fall back to a file share.
+export const TRIP_LINK_MAX = 8000;
+export function encodeTripLink(event, whenISO = nowISO()) {
+  const json = JSON.stringify(buildTripBundle(event, whenISO));
+  const frag = `#/t/${toBase64Url(json)}`;
+  return frag.length > TRIP_LINK_MAX ? null : frag;
+}
+export function decodeTripLink(data) {
+  return parseTripBundle(fromBase64Url(data));
+}
+
+// --- Care & maintenance ---
+// A physical item can carry a care record: how to look after it (notes + a
+// manufacturer/how-to link), an optional recurring service interval, when it was
+// last done, and a history log. The building-block item (in a List) is the
+// canonical record of the real thing, so care lives there — not on trip entries.
+
+// Friendly interval presets offered in the editor. 0 = no recurring schedule
+// (reference-only care: notes/link but nothing to remind about).
+export const MAINTENANCE_INTERVALS = [
+  { days: 0, label: 'No schedule (reference only)' },
+  { days: 30, label: 'Every month' },
+  { days: 90, label: 'Every 3 months' },
+  { days: 182, label: 'Every 6 months' },
+  { days: 365, label: 'Every year' },
+  { days: 730, label: 'Every 2 years' },
+];
+// A due date within this many days counts as "due soon" (amber, not yet overdue).
+export const MAINTENANCE_SOON_DAYS = 21;
+
+// YYYY-MM-DD arithmetic, done in UTC so it never drifts by a day across timezones.
+export function addDays(ymd, days) {
+  const t = Date.parse(`${ymd}T00:00:00Z`);
+  if (Number.isNaN(t)) return '';
+  return new Date(t + days * 86400000).toISOString().slice(0, 10);
+}
+export function daysBetween(fromYMD, toYMD) {
+  const a = Date.parse(`${fromYMD}T00:00:00Z`);
+  const b = Date.parse(`${toYMD}T00:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b)) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+// Does this item hold any care info worth surfacing (schedule, notes, link, or history)?
+export function hasCare(item) {
+  const m = item && item.maintenance;
+  return !!(m && (m.intervalDays || m.notes || m.link || m.lastDone || (m.log && m.log.length)));
+}
+
+// Where an item's maintenance stands today. Returns null for items with no care
+// record. `state` is one of: 'overdue' | 'soon' | 'ok' (scheduled), or 'reference'
+// (care notes/link but no recurring schedule). A scheduled item never logged as
+// done is treated as due today, and flagged `neverDone` so the UI can say so.
+export function maintenanceStatus(item, todayISO) {
+  const m = item && item.maintenance;
+  if (!m) return null;
+  const today = todayYMD(todayISO);
+  if (!m.intervalDays) {
+    return { scheduled: false, state: 'reference', nextDue: '', days: null, lastDone: m.lastDone || '', neverDone: !m.lastDone, intervalDays: 0 };
+  }
+  const neverDone = !m.lastDone;
+  const nextDue = neverDone ? today : addDays(m.lastDone, m.intervalDays);
+  const days = daysBetween(today, nextDue); // negative = overdue by that many days
+  const state = days < 0 ? 'overdue' : days <= MAINTENANCE_SOON_DAYS ? 'soon' : 'ok';
+  return { scheduled: true, state, nextDue, days, lastDone: m.lastDone || '', neverDone, intervalDays: m.intervalDays };
+}
+
+const MAINT_RANK = { overdue: 0, soon: 1, ok: 2, reference: 3 };
+
+// Every item across all lists that carries care info, each with its list context
+// and current status, ordered by urgency (overdue → due soon → upcoming → reference).
+export function maintenanceList(lists, todayISO) {
+  const today = todayYMD(todayISO);
+  const out = [];
+  for (const l of asArray(lists)) {
+    for (const it of asArray(l.items)) {
+      if (!hasCare(it)) continue;
+      out.push({ listId: l.id, listName: l.name || '', item: it, status: maintenanceStatus(it, today) });
+    }
+  }
+  out.sort((a, b) => {
+    const ra = MAINT_RANK[a.status.state] ?? 9;
+    const rb = MAINT_RANK[b.status.state] ?? 9;
+    if (ra !== rb) return ra - rb;
+    if (a.status.nextDue && b.status.nextDue && a.status.nextDue !== b.status.nextDue) {
+      return a.status.nextDue.localeCompare(b.status.nextDue); // soonest due first
+    }
+    return (a.item.name || '').localeCompare(b.item.name || '');
+  });
+  return out;
+}
+
+// Headline counts for the Care tab and the Home reminder.
+export function maintenanceSummary(lists, todayISO) {
+  const all = maintenanceList(lists, todayISO);
+  const count = (s) => all.filter((x) => x.status.state === s).length;
+  const overdue = count('overdue');
+  const soon = count('soon');
+  return { overdue, soon, ok: count('ok'), reference: count('reference'), scheduled: overdue + soon + count('ok'), total: all.length, due: overdue + soon };
+}
+
+// Scheduled items bucketed by their next-due date (YYYY-MM-DD) — powers the calendar.
+export function maintenanceByDate(lists, todayISO) {
+  const map = new Map();
+  for (const row of maintenanceList(lists, todayISO)) {
+    if (!row.status.scheduled || !row.status.nextDue) continue;
+    if (!map.has(row.status.nextDue)) map.set(row.status.nextDue, []);
+    map.get(row.status.nextDue).push(row);
+  }
+  return map;
+}
+
+// Record that an item was maintained on `dateYMD` (default today), appending to
+// its history and resetting the schedule. Mutates and returns the item; creates
+// the care record if the item didn't have one. Pure enough to unit-test.
+export function logMaintenance(item, dateYMD, note = '', todayISO) {
+  const date = isYMD(dateYMD) ? dateYMD : todayYMD(todayISO);
+  const base = normalizeMaintenance(item.maintenance) || { notes: '', link: '', intervalDays: 0, lastDone: '', log: [] };
+  const log = [...base.log, { date, note: typeof note === 'string' ? note : '' }].sort((a, b) => a.date.localeCompare(b.date));
+  item.maintenance = normalizeMaintenance({ ...base, lastDone: date, log });
+  return item;
+}
+
+// --- Weather (opt-in, Open-Meteo) ---
+// The event optionally stores a `destination` and a cached `weather` snapshot
+// (fetched when online, kept on-device so it still shows offline). All the
+// interpretation below is pure and DOM-free: it maps a forecast to icon keys,
+// derived conditions, and packing suggestions. The app maps icon keys to SVGs.
+
+// WMO weather-code -> symbolic icon key + short label + whether it means "wet".
+export function weatherCode(code) {
+  const c = Number(code);
+  if (c === 0) return { icon: 'sun', label: 'Clear', wet: false };
+  if (c === 1 || c === 2) return { icon: 'sun-cloud', label: 'Partly cloudy', wet: false };
+  if (c === 3) return { icon: 'cloud', label: 'Cloudy', wet: false };
+  if (c === 45 || c === 48) return { icon: 'fog', label: 'Fog', wet: false };
+  if (c >= 51 && c <= 57) return { icon: 'rain', label: 'Drizzle', wet: true };
+  if (c >= 61 && c <= 67) return { icon: 'rain', label: 'Rain', wet: true };
+  if (c >= 71 && c <= 77) return { icon: 'snow', label: 'Snow', wet: true };
+  if (c >= 80 && c <= 82) return { icon: 'rain', label: 'Showers', wet: true };
+  if (c >= 85 && c <= 86) return { icon: 'snow', label: 'Snow showers', wet: true };
+  if (c >= 95) return { icon: 'storm', label: 'Thunderstorm', wet: true };
+  return { icon: 'cloud', label: '—', wet: false };
+}
+
+// Thresholds that turn a forecast into packing-relevant conditions (metric).
+export const WEATHER_THRESHOLDS = { coldMinC: 5, coolMaxSummerC: 14, hotMaxC: 27, windKmh: 35, wetProb: 50 };
+
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function dowLabel(dateISO) {
+  const d = new Date(`${dateISO}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? '' : DOW[d.getDay()];
+}
+
+function coerceWeather(w) {
+  if (!w || typeof w !== 'object' || !Array.isArray(w.daily)) return null;
+  const daily = w.daily.filter((d) => d && d.date).map((d) => ({
+    date: String(d.date), code: Number(d.code) || 0,
+    tmax: Number(d.tmax), tmin: Number(d.tmin),
+    precipProb: Number(d.precipProb) || 0, wind: Number(d.wind) || 0,
+  }));
+  if (!daily.length) return null;
+  return {
+    place: typeof w.place === 'string' ? w.place : '',
+    lat: Number(w.lat), lon: Number(w.lon),
+    fetchedAt: typeof w.fetchedAt === 'string' ? w.fetchedAt : '', daily,
+  };
+}
+
+// Turn the cached forecast into per-day display data + derived conditions.
+export function deriveWeather(event) {
+  const w = event && event.weather;
+  if (!w || !Array.isArray(w.daily) || !w.daily.length) return null;
+  const T = WEATHER_THRESHOLDS;
+  const days = w.daily.map((d) => {
+    const info = weatherCode(d.code);
+    const rainy = info.wet || Number(d.precipProb) >= T.wetProb;
+    return {
+      date: d.date, dow: dowLabel(d.date), icon: info.icon, label: info.label,
+      tmax: Math.round(d.tmax), tmin: Math.round(d.tmin),
+      precipProb: Math.round(d.precipProb || 0), wind: Math.round(d.wind || 0),
+      rainy, snowy: info.icon === 'snow',
+    };
+  });
+  const tmax = days.map((d) => d.tmax);
+  const tmin = days.map((d) => d.tmin);
+  const tempMax = Math.max(...tmax);
+  const tempMin = Math.min(...tmin);
+  const summer = event.season === 'Summer';
+  const conditions = [];
+  if (days.some((d) => d.rainy && !d.snowy)) conditions.push('rain');
+  if (days.some((d) => d.snowy)) conditions.push('snow');
+  if (tempMin <= T.coldMinC || (summer && Math.min(...tmax) < T.coolMaxSummerC)) conditions.push('cold');
+  if (tempMax >= T.hotMaxC) conditions.push('hot');
+  if (days.some((d) => d.wind >= T.windKmh)) conditions.push('wind');
+  return {
+    place: w.place || '', fetchedAt: w.fetchedAt || '', days, tempMin, tempMax,
+    rangeLabel: `${tempMin}–${tempMax}°C`, conditions, coolerThanSeason: summer && Math.min(...tmax) < T.coolMaxSummerC,
+  };
+}
+
+// Curated, generic add-ons per condition — the kind of gear that isn't
+// activity-specific. Suggested only when the forecast calls for it and the item
+// isn't already on the list.
+export const WEATHER_SUGGESTIONS = {
+  rain: [
+    { name: 'Rain jacket', category: 'Adventure clothing' },
+    { name: 'Waterproof / pack cover', category: 'Adventure clothing' },
+  ],
+  cold: [
+    { name: 'Warm mid-layer', category: 'Adventure clothing' },
+    { name: 'Beanie + gloves', category: 'Adventure clothing' },
+    { name: 'Long tights', category: 'Adventure clothing' },
+  ],
+  hot: [
+    { name: 'Sun hat / cap', category: 'Adventure clothing' },
+    { name: 'Sunscreen', category: 'Toiletries', liquid: true },
+    { name: 'Extra water bottle', category: 'Comfort & misc' },
+  ],
+  wind: [{ name: 'Windbreaker', category: 'Adventure clothing' }],
+  snow: [
+    { name: 'Warm gloves', category: 'Adventure clothing' },
+    { name: 'Traction spikes', category: 'Footwear' },
+  ],
+};
+
+function weatherSummary(d) {
+  const bits = [];
+  const rainy = d.days.filter((x) => x.rainy).map((x) => x.dow).filter(Boolean);
+  if (rainy.length) bits.push(rainy.length <= 2 ? `Rain ${rainy.join('–')}` : 'Rain likely');
+  if (d.conditions.includes('snow')) bits.push('snow');
+  if (d.coolerThanSeason) bits.push('cooler than Summer');
+  else if (d.conditions.includes('cold')) bits.push('cold spells');
+  if (d.conditions.includes('hot')) bits.push('hot');
+  if (d.conditions.includes('wind')) bits.push('windy');
+  return bits.join(' · ');
+}
+
+// All weather-conditional gear this trip's lists hold that isn't packed yet —
+// applicable to the trip (season/transport) but independent of any forecast.
+// Powers both the "waiting" hint and the "pack anyway" control, so the user can
+// add e.g. a rain shell as a backup layer even when it isn't forecast to rain.
+export function weatherGear(event, lists = []) {
+  const have = new Set(asArray(event.entries).map((e) => normName(e.name)));
+  const byId = new Map(asArray(lists).map((l) => [l.id, l]));
+  const seen = new Set();
+  const out = [];
+  for (const listId of asArray(event.activities)) {
+    const list = byId.get(listId);
+    if (!list) continue;
+    for (const it of asArray(list.items)) {
+      const tags = asArray(it.weather);
+      if (!tags.length || !it.name || !itemMatchesEvent(it, event)) continue;
+      const key = normName(it.name);
+      if (have.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        name: it.name, swedish: it.swedish || '', category: it.category, container: it.container,
+        phase: it.phase, itemType: it.itemType, liquid: !!it.liquid, weight: it.weight || 0,
+        sourceListId: list.id, sourceItemId: it.id, conditions: tags.slice(), own: true,
+      });
+    }
+  }
+  return out;
+}
+export function pendingWeatherItems(event, lists = []) {
+  return weatherGear(event, lists).length;
+}
+
+// Suggested additions for this trip's forecast, minus anything already packed.
+// Prefers the user's OWN weather-tagged items from the chosen activity lists,
+// then fills any remaining conditions with the curated generic add-ons.
+export function weatherSuggestions(event, lists = []) {
+  const d = deriveWeather(event);
+  if (!d) return { conditions: [], items: [], summary: '' };
+  const active = new Set(d.conditions);
+  const have = new Set(asArray(event.entries).map((e) => normName(e.name)));
+  const seen = new Set();
+  const items = [];
+
+  // 1) Your own tagged gear from the lists this trip draws on.
+  const byId = new Map(asArray(lists).map((l) => [l.id, l]));
+  for (const listId of asArray(event.activities)) {
+    const list = byId.get(listId);
+    if (!list) continue;
+    for (const it of asArray(list.items)) {
+      const tags = asArray(it.weather);
+      const reason = tags.find((t) => active.has(t));
+      if (!reason || !it.name || !itemMatchesEvent(it, event)) continue;
+      const key = normName(it.name);
+      if (have.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      items.push({
+        name: it.name, swedish: it.swedish || '', category: it.category, container: it.container,
+        phase: it.phase, itemType: it.itemType, liquid: !!it.liquid, weight: it.weight || 0,
+        sourceListId: list.id, sourceItemId: it.id, reason, own: true,
+      });
+    }
+  }
+
+  // 2) Curated generic add-ons cover any condition your lists didn't.
+  for (const cond of d.conditions) {
+    for (const spec of WEATHER_SUGGESTIONS[cond] || []) {
+      const key = normName(spec.name);
+      if (have.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      items.push({ ...spec, reason: cond });
+    }
+  }
+  return { conditions: d.conditions, items, summary: weatherSummary(d) };
+}
+
+// Rows for a flat spreadsheet export: one row per Total-List entry, in
+// timeline -> container order.
+export function totalListRows(event, lists) {
+  void lists;
+  const rows = [];
+  for (const g of entriesByPhase(event.entries)) {
+    for (const cg of groupByContainer(g.entries)) {
+      for (const e of cg.entries) {
+        rows.push({
+          Phase: g.phase.label,
+          Container: e.container || '',
+          Item: e.name || '',
+          Qty: e.qty || '',
+          Packed: e.checked ? 'yes' : '',
+          Note: e.note || '',
+        });
+      }
+    }
+  }
+  return rows;
+}
+

@@ -1,0 +1,11 @@
+{
+  "name": "ams-packing-list",
+  "version": "1.0.0",
+  "description": "A phone-friendly PWA that combines reusable activity packing lists into one Total Packing List for a trip.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "start": "python3 -m http.server 8080"
+  },
+  "license": "MIT"
+}
