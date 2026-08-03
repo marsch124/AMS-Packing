@@ -119,6 +119,17 @@ export function chargeType(id) { return CHARGE_TYPES.find((c) => c.id === id) ||
 export function chargeTypeLabel(id) { return chargeType(id).label; }
 export function chargeTypeShort(id) { return chargeType(id).short; }
 
+// Item "condition" — a simple wear/lifecycle rating (optional item metadata).
+export const ITEM_CONDITIONS = [
+  { id: 'new',    label: 'New' },
+  { id: 'good',   label: 'Good' },
+  { id: 'worn',   label: 'Worn' },
+  { id: 'retire', label: 'Needs replacing' },
+];
+export const ITEM_CONDITION_IDS = ITEM_CONDITIONS.map((c) => c.id);
+// Currencies offered for an item's price (the list Martin is likely to use first).
+export const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'CHF', 'NOK', 'DKK'];
+
 // --- ids & small helpers ---
 
 let _seq = 0;
