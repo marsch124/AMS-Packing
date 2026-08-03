@@ -17,7 +17,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v54';
+const APP_VERSION = 'v55';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -235,7 +235,7 @@ const IC = {
   bag: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l-1 12H7Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>',
   list: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h11M8 12h11M8 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>',
   plus: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>',
-  gear: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.1"/><path d="M12 3v2.4M12 18.6V21M3 12h2.4M18.6 12H21M5.6 5.6l1.7 1.7M16.7 16.7l1.7 1.7M18.4 5.6l-1.7 1.7M7.3 16.7l-1.7 1.7"/></svg>',
+  gear: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><polygon points="12,2.5 21.2,7.25 21.2,16.75 12,21.5 2.8,16.75 2.8,7.25"/><circle cx="12" cy="12" r="4"/></svg>',
   trash: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg>',
   edit: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18 10l-4-4L4 16Z"/><path d="M13 7l4 4"/></svg>',
   back: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>',
@@ -2406,6 +2406,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v55', '2026-08-03 · 16:50 UTC', false, 'Settings icon changed from a sun to a nut',
+      'The Settings icon — in the bottom nav bar and on the "Event settings" button — was a circle with radiating rays that looked like a sun and could be confused with the weather-forecast sun. It\'s now a <b>hexagonal nut</b> (the nuts-and-bolts kind), which is a more conventional symbol for settings and clearly distinct from the weather icons.',
+      'The Settings icon is now unmistakably a settings icon, with no chance of being mistaken for the weather sun.'),
     v('v54', '2026-08-03 · 16:15 UTC', false, 'Retired the last of the old copy-based plumbing',
       'The final step of the “Endeavour 2” rebuild, and a purely <b>under-the-floor</b> one — nothing you can see or do has changed. Since v52 each item has really lived <b>once</b> in the catalog, but the item editor’s <b>In these templates</b> panel still worked the old way, matching items <b>by name</b> across lists and carrying a hidden rename-fixing routine from the copy era. That’s now gone: ticking a template adds or removes this <b>one</b> item by its <b>stable id</b>, straight to a membership, and renaming needs no special handling because every template already points at the same item. The result is simpler, sturdier code with no reliance on names as the glue — the whole point of the rebuild. Add-to-many-templates, renaming, promoting a trip-only item and the auto-tidy of the Loose bin all behave exactly as before.',
       'The name is no longer the glue: which templates an item belongs to is tracked by its permanent id, so links can’t be broken by a rename or a same-named item — a sturdier base with no change to how anything works.'),
