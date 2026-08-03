@@ -1014,6 +1014,275 @@ export function weatherSuggestions(event, lists = []) {
   return { conditions: d.conditions, items, summary: weatherSummary(d) };
 }
 
+// ============================================================================
+// RELATIONAL CORE ("Endeavour 2") — the Item catalog + Memberships.
+// ============================================================================
+// The professional data model. Instead of copying an item into every template it
+// belongs to (which is how the app grew up, and where the data drifts), an item
+// exists ONCE in a catalog and templates REFERENCE it through a Membership.
+//
+// Three layers, each owning its own properties (see docs/decisions/…-data-model.md):
+//   1. ITEM        — the thing itself: name, swedish, category, flags, weight,
+//                    photos, home storage, care, default container, default phase.
+//   2. MEMBERSHIP  — item ↔ template: the relation. Holds the CONDITIONS that
+//                    decide when the item is included (seasons / contexts /
+//                    transports / catering / weather), plus OPTIONAL overrides of
+//                    container / phase / itemType / qty / note (blank = use the
+//                    item's default).
+//   3. TRIP LINE   — item ↔ event: the frozen packing-list snapshot (unchanged;
+//                    still the materialised `entries` on an event).
+//
+// The `resolve*` functions below rebuild today's item shape from an item + its
+// membership, so the rest of the app keeps working unchanged while we migrate.
+// `buildCatalog` is the one-time migration engine: it folds the current copy-based
+// lists into { items, memberships, templates }, merging same-named items and
+// turning per-list differences into membership overrides.
+
+// A Membership links one catalog item to one template. Conditions describe WHEN
+// the item applies on a trip; overrides are '' / [] when the item's own default
+// should be used (so a membership stays tiny unless it genuinely differs).
+export function coerceMembership(m) {
+  if (!m || typeof m !== 'object') return m;
+  m.seasons = asArray(m.seasons);
+  m.contexts = asArray(m.contexts);
+  m.transports = asArray(m.transports);
+  m.catering = asArray(m.catering);
+  m.weather = asArray(m.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w)); // conditional-gear tags (contextual, per template)
+  m.container = typeof m.container === 'string' ? m.container : '';      // '' = use item default
+  m.phase = PHASE_IDS.includes(m.phase) ? m.phase : '';                  // '' = use item default
+  m.itemType = (m.itemType === 'item' || m.itemType === 'reminder') ? m.itemType : ''; // '' = use item default
+  m.qty = typeof m.qty === 'string' ? m.qty : (m.qty ? String(m.qty) : '');
+  m.note = typeof m.note === 'string' ? m.note : '';
+  m.order = Number.isFinite(m.order) ? m.order : 0;   // item position within its template
+  return m;
+}
+
+export function newMembership(partial = {}) {
+  return coerceMembership({
+    id: id(),
+    itemId: '',
+    templateId: '',
+    seasons: [], contexts: [], transports: [], catering: [], weather: [],
+    container: '', phase: '', itemType: '', qty: '', note: '', order: 0,
+    ...partial,
+  });
+}
+
+// --- Write path: decompose an edited (resolved) item back into the catalog ---
+// These mirror the migration engine but for a SINGLE resolved item, so db.saveList
+// can persist edits: intrinsic fields flow to the shared catalog item (edit once,
+// everywhere updates), everything contextual flows to the membership.
+
+// Push a resolved item's intrinsic edits onto its shared catalog item. Container /
+// phase DEFAULTS are intentionally left alone (they're set once, overridden per
+// membership); only the thing-itself fields propagate.
+export function applyIntrinsic(cat, it) {
+  cat.name = it.name;
+  cat.swedish = it.swedish || '';
+  cat.category = it.category;
+  cat.charging = !!it.charging;
+  cat.chargeType = it.chargeType || '';
+  cat.liquid = !!it.liquid;
+  cat.restricted = !!it.restricted;
+  cat.perNight = !!it.perNight;
+  cat.shortList = !!it.shortList;
+  cat.weight = Number.isFinite(it.weight) ? it.weight : 0;
+  cat.storage = it.storage || '';
+  cat.sub = asArray(it.sub).slice();
+  cat.photos = asArray(it.photos).slice();
+  cat.maintenance = it.maintenance || null;
+  if (it.stats) cat.stats = it.stats;
+  return coerceItem(cat);
+}
+
+// A brand-new catalog item from a resolved item (one the app just added). Its own
+// container / phase become the item's DEFAULTS.
+export function catalogItemFromResolved(it) {
+  return newItem({
+    name: it.name, swedish: it.swedish || '', category: it.category,
+    container: it.container, phase: it.phase, itemType: it.itemType,
+    charging: !!it.charging, chargeType: it.chargeType || '',
+    liquid: !!it.liquid, restricted: !!it.restricted, perNight: !!it.perNight, shortList: !!it.shortList,
+    weight: it.weight || 0, storage: it.storage || '', sub: asArray(it.sub).slice(),
+    photos: asArray(it.photos).slice(), maintenance: it.maintenance || null, stats: it.stats,
+  });
+}
+
+// Build/refresh the membership for one resolved item in a template: conditions from
+// the item, overrides only where it differs from the catalog default.
+export function membershipFromResolved(cat, templateId, it, order = 0, existing = null) {
+  const m = existing || newMembership({ templateId, itemId: cat.id });
+  m.templateId = templateId;
+  m.itemId = cat.id;
+  m.order = order;
+  m.seasons = asArray(it.seasons).slice();
+  m.contexts = asArray(it.contexts).slice();
+  m.transports = asArray(it.transports).slice();
+  m.catering = asArray(it.catering).slice();
+  m.weather = asArray(it.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w));
+  m.container = it.container !== cat.container ? it.container : '';
+  m.phase = it.phase !== cat.phase ? it.phase : '';
+  m.itemType = it.itemType !== cat.itemType ? it.itemType : '';
+  m.qty = it.qty || '';
+  m.note = it.note || '';
+  return coerceMembership(m);
+}
+
+// Rebuild a today-shaped item (as a template would hold it) from a catalog item
+// plus one membership: the membership's conditions replace the item's, and any
+// override wins over the item's default. The result is byte-compatible with what
+// the rest of the app already consumes (buildTotalEntries, editors, review…).
+export function resolveMembership(item, m) {
+  const base = coerceItem({ ...item });
+  const mm = coerceMembership({ ...m });
+  return coerceItem({
+    ...base,
+    id: base.id,
+    seasons: mm.seasons.slice(),
+    contexts: mm.contexts.slice(),
+    transports: mm.transports.slice(),
+    catering: mm.catering.slice(),
+    weather: mm.weather.slice(),
+    container: mm.container || base.container,
+    phase: mm.phase || base.phase,
+    itemType: mm.itemType || base.itemType,
+    qty: mm.qty || base.qty || '',
+    note: mm.note || base.note || '',
+  });
+}
+
+// Every resolved item for a template, in membership order.
+export function resolveTemplateItems(template, catalog, memberships) {
+  const itemsById = catalog instanceof Map ? catalog : new Map(asArray(catalog).map((i) => [i.id, i]));
+  const mine = asArray(memberships)
+    .filter((m) => m.templateId === template.id)
+    .slice()
+    .sort((a, b) => ((a.order || 0) - (b.order || 0))); // preserve item order within the template
+  const out = [];
+  for (const m of mine) {
+    const item = itemsById.get(m.itemId);
+    if (!item) continue;
+    out.push(resolveMembership(item, m));
+  }
+  return out;
+}
+
+// A template rebuilt into today's list shape (id/name/group/role/… + resolved
+// items) — the bridge that lets existing list-consuming code run unchanged.
+export function resolveTemplate(template, catalog, memberships) {
+  return coerceList({ ...template, items: resolveTemplateItems(template, catalog, memberships) });
+}
+
+// --- Migration engine: fold copy-based lists into the relational shape ---
+
+// Count occurrences; a plain Map keeps INSERTION order so "first wins" on ties.
+function _tally(values) {
+  const m = new Map();
+  for (const v of values) m.set(v, (m.get(v) || 0) + 1);
+  return m;
+}
+// Most frequent value; ties resolve to the first-seen (stable to source order).
+function _mostCommon(values, fallback) {
+  const present = values.filter((v) => v !== '' && v != null);
+  if (!present.length) return fallback;
+  let best = null; let bestN = -1;
+  for (const [v, n] of _tally(present)) if (n > bestN) { best = v; bestN = n; }
+  return best;
+}
+const _firstNonEmpty = (values) => values.find((v) => v !== '' && v != null) ?? '';
+
+// Merge the N copies of one name into a single canonical catalog item. Intrinsic
+// fields are auto-resolved: text/category by majority (first wins ties), booleans
+// by "true if any copy has it" (the safe superset), weight by first known value.
+function buildCatalogItem(copies) {
+  // Swedish alias: prefer the most common wording, breaking ties toward the longest.
+  const swedishes = copies.map((c) => (c.swedish || '').trim()).filter(Boolean);
+  let swedish = '';
+  if (swedishes.length) {
+    let bestN = -1;
+    for (const [v, n] of _tally(swedishes)) if (n > bestN || (n === bestN && v.length > swedish.length)) { swedish = v; bestN = n; }
+  }
+  const anyTrue = (f) => copies.some((c) => !!c[f]);
+  const longestSub = copies.map((c) => asArray(c.sub)).sort((a, b) => b.length - a.length)[0] || [];
+  return newItem({
+    name: _mostCommon(copies.map((c) => c.name), copies[0].name),
+    swedish,
+    category: _mostCommon(copies.map((c) => c.category), CATEGORY_DEFAULT),
+    container: _mostCommon(copies.map((c) => c.container), 'Carry-on / hand luggage'),   // the DEFAULT
+    phase: _mostCommon(copies.map((c) => c.phase).filter((p) => PHASE_IDS.includes(p)), 'week'), // the DEFAULT
+    itemType: _mostCommon(copies.map((c) => c.itemType), 'item'),
+    charging: anyTrue('charging'),
+    chargeType: _firstNonEmpty(copies.map((c) => c.chargeType)),
+    liquid: anyTrue('liquid'),
+    restricted: anyTrue('restricted'),
+    perNight: anyTrue('perNight'),
+    shortList: anyTrue('shortList'),
+    weight: (copies.map((c) => Number(c.weight)).find((w) => w > 0)) || 0,
+    storage: _firstNonEmpty(copies.map((c) => c.storage)),
+    sub: longestSub.slice(),
+    // Conditions (incl. weather), note and qty are contextual → they live on the
+    // membership, so the catalog item keeps them empty.
+    seasons: [], contexts: [], transports: [], catering: [], weather: [],
+    note: '', qty: '',
+  });
+}
+
+// The membership for one original copy: its conditions, plus overrides only where
+// the copy differs from the canonical item's default (kept sparse on purpose).
+function membershipFromCopy(catItem, templateId, copy) {
+  return newMembership({
+    itemId: catItem.id,
+    templateId,
+    seasons: asArray(copy.seasons).slice(),
+    contexts: asArray(copy.contexts).slice(),
+    transports: asArray(copy.transports).slice(),
+    catering: asArray(copy.catering).slice(),
+    weather: asArray(copy.weather).slice(),
+    container: copy.container !== catItem.container ? copy.container : '',
+    phase: copy.phase !== catItem.phase ? copy.phase : '',
+    itemType: copy.itemType !== catItem.itemType ? copy.itemType : '',
+    qty: copy.qty || '',
+    note: copy.note || '',
+  });
+}
+
+// One-time migration: turn today's copy-based building-block lists into the
+// relational shape. Returns { items, memberships, templates } where templates are
+// the same lists minus their inline items (they now reference items via
+// memberships). Same-named items (by normName) are merged into one catalog item.
+export function buildCatalog(lists) {
+  const groups = new Map(); // normName -> [copies], insertion-ordered
+  for (const l of asArray(lists)) {
+    for (const it of asArray(l.items)) {
+      if (!String(it.name || '').trim()) continue;
+      const k = normName(it.name);
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(it);
+    }
+  }
+  const items = [];
+  const byName = new Map(); // normName -> catalog item
+  for (const [k, copies] of groups) {
+    const cat = buildCatalogItem(copies);
+    items.push(cat);
+    byName.set(k, cat);
+  }
+  const templates = [];
+  const memberships = [];
+  for (const l of asArray(lists)) {
+    templates.push(coerceList({ ...l, items: [] }));
+    let order = 0;
+    for (const it of asArray(l.items)) {
+      if (!String(it.name || '').trim()) continue;
+      const cat = byName.get(normName(it.name));
+      const m = membershipFromCopy(cat, l.id, it);
+      m.order = order++;   // preserve the item's position within its template
+      memberships.push(m);
+    }
+  }
+  return { items, memberships, templates };
+}
+
 // Rows for a flat spreadsheet export: one row per Total-List entry, in
 // timeline -> container order.
 export function totalListRows(event, lists) {

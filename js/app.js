@@ -17,7 +17,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v51';
+const APP_VERSION = 'v52';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2280,7 +2280,7 @@ function howtoCard() {
           <li><b>Flags:</b> ⚡ needs charging (with an optional <b>charge type</b> — USB-C, USB-A, Lightning, special charger… shown on the badge, e.g. ⚡ USB-C, so you know which cables to bring), short-home-list, 💧 liquid/gel (100 ml rule), ⚠️ restricted — think before packing (battery / carry-on rules), <b>per-night</b> (quantity scales with trip length), and a <b>weight</b> in grams.</li>
           <li><b>Conditions</b> — “only include when…”: Season, Context (Indoor/Outdoor/Race/Training), Transport (Car/Plane/RV), Catering, and <b>Weather</b> (see below). A blank condition means “always applies”.</li>
           <li><b>Sub-items:</b> optional nested things bundled under one line.</li>
-          <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. The added copies carry the packing details but not the photos or maintenance schedule, so the thing still appears just once in <b>Care</b>. Because linked copies share a <b>name</b>, <b>renaming</b> an item updates it in every template it belongs to. Items that are in <b>no</b> template show a <b>⚠️ No template</b> flag.</li>
+          <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. Each item lives <b>once</b> and every template simply points to it — so <b>editing an item (its name, category, weight, flags or care) updates it in every template it belongs to</b>, and it still appears just once in <b>Care</b>. Only the <b>list-specific</b> choices stay separate per template: which <b>bag</b> it goes in, <b>when</b> to pack it, and its <b>conditions</b>. Items that are in <b>no</b> template show a <b>⚠️ No template</b> flag.</li>
         </ul>
 
         <h3>Loose items — things not in a template yet</h3>
@@ -2406,6 +2406,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v52', '2026-08-03 · 13:09 UTC', false, 'New foundation: every item lives in one place',
+      'A big <b>under-the-floor rebuild</b> (“Endeavour 2”, step 3 of the plan). Until now, an item that appeared in several templates was actually stored as several separate copies that only shared a name. From this version each item lives <b>once</b> in a single catalog, and every template simply <b>refers</b> to it — the same item, not a copy. Two things you can notice: (1) <b>edit an item once and the change shows everywhere</b> it appears (its name, category, weight, flags, care…), while (2) list-specific choices like <b>which bag it goes in</b> stay per-template, so changing the bag in one list doesn’t disturb the others. Nothing about how the app looks or the trips you build has changed — this is the sturdy base the app will grow on. Your data moves across automatically the first time this version loads.',
+      'One tidy source of truth for every item: edit it once and it’s right everywhere, with no drifting duplicates — so the app can grow far beyond today.'),
     v('v51', '2026-08-01 · 09:00 UTC', false, 'Add a loose item straight from the Care tab',
       'Two fixes to the Care tab’s <b>All items</b> tool. First, <b>＋ New item</b> now lets you choose <b>“— No template · keep as a loose item —”</b> in the <b>Add to</b> picker, so you can jot something down from here without forcing it into a template — it lands in the <b>Loose items</b> bin and opens ready to edit. (Before, you had to pick a template.) Second, once you have loose items, the <b>⚠️ No template</b> filter chip appears alongside 💧/⚡/⚠️/🧰/📷, so you can round up everything not yet filed. The chip only shows when loose items actually exist — the same rule every category chip follows — which is why it was missing when nothing was loose yet.',
       'Capture a thought as a loose item without leaving the Care tab, then filter the list down to everything still needing a home.'),

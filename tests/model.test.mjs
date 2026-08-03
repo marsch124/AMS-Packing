@@ -11,6 +11,8 @@ import {
   PHASE_IDS, CATEGORIES, CONTAINERS, GROUP_IDS,
   coerceItem, normalizeMaintenance, hasCare, maintenanceStatus, maintenanceList, maintenanceSummary,
   maintenanceByDate, logMaintenance, addDays, daysBetween, MAINTENANCE_SOON_DAYS, MAX_PHOTOS,
+  coerceMembership, newMembership, resolveMembership, resolveTemplate, resolveTemplateItems, buildCatalog,
+  applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -842,4 +844,146 @@ test('buildTotalEntries: carries the item storage location onto trip entries', (
   const ev = newEvent({ activities: [list.id] });
   const [entry] = buildTotalEntries(ev, [list]);
   assert.equal(entry.storage, 'Garage shelf 3');
+});
+
+// ============================================================================
+// RELATIONAL CORE ("Endeavour 2") — Item catalog + Memberships
+// ============================================================================
+
+test('coerceMembership: normalizes conditions and keeps override sentinels', () => {
+  const m = coerceMembership({ id: 'm1', itemId: 'i1', templateId: 't1', seasons: 'Summer', phase: 'bogus', itemType: 'nope', container: 42 });
+  assert.deepEqual(m.seasons, []);          // non-array coerced to []
+  assert.equal(m.phase, '');                // invalid phase -> '' (use item default)
+  assert.equal(m.itemType, '');             // invalid itemType -> '' (use item default)
+  assert.equal(m.container, '');            // non-string -> '' (use item default)
+});
+
+test('resolveMembership: overrides win, blanks fall back to the item default', () => {
+  const item = newItem({ name: 'Socks', category: 'Clothing', container: 'Duffel bag', phase: 'week', swedish: 'Strumpor' });
+  const plain = resolveMembership(item, newMembership({ itemId: item.id, templateId: 't1' }));
+  assert.equal(plain.container, 'Duffel bag');   // no override -> item default
+  assert.equal(plain.phase, 'week');
+  const overridden = resolveMembership(item, newMembership({ itemId: item.id, templateId: 't2', container: 'Checked luggage', seasons: ['Summer'] }));
+  assert.equal(overridden.container, 'Checked luggage'); // override wins
+  assert.equal(overridden.category, 'Clothing');          // intrinsic still from item
+  assert.equal(overridden.swedish, 'Strumpor');
+  assert.deepEqual(overridden.seasons, ['Summer']);       // condition comes from the membership
+});
+
+test('buildCatalog: counts match the analysis (unique items, one membership per copy)', () => {
+  const lists = seedLists();
+  const totalCopies = lists.reduce((n, l) => n + l.items.filter((it) => String(it.name || '').trim()).length, 0);
+  const uniqueNames = new Set(lists.flatMap((l) => l.items.map((it) => it.name.trim().toLowerCase().replace(/\s+/g, ' ')).filter(Boolean))).size;
+  const { items, memberships, templates } = buildCatalog(lists);
+  assert.equal(items.length, uniqueNames);        // same-named copies merged into one catalog item
+  assert.equal(memberships.length, totalCopies);  // one membership per original copy
+  assert.equal(templates.length, lists.length);
+  assert.ok(templates.every((t) => t.items.length === 0)); // templates no longer hold inline items
+});
+
+test('buildCatalog: resolving a template reproduces each copy\'s container / phase / conditions', () => {
+  const lists = seedLists();
+  const { items, memberships, templates } = buildCatalog(lists);
+  const byId = new Map(items.map((i) => [i.id, i]));
+  for (const orig of lists) {
+    const tmpl = templates.find((t) => t.id === orig.id);
+    const resolved = resolveTemplateItems(tmpl, byId, memberships);
+    // match resolved items back to originals by (name, container) — contextual fidelity
+    for (const o of orig.items) {
+      if (!String(o.name || '').trim()) continue;
+      const r = resolved.find((x) => x.name.toLowerCase() === o.name.toLowerCase() && x.container === o.container && x.phase === o.phase);
+      assert.ok(r, `no resolved match for "${o.name}" (${o.container}/${o.phase}) in ${orig.name}`);
+      assert.deepEqual(r.seasons, o.seasons);
+      assert.deepEqual(r.contexts, o.contexts);
+      assert.deepEqual(r.transports, o.transports);
+      assert.deepEqual(r.weather, o.weather);
+    }
+  }
+});
+
+test('buildCatalog: a trip built from resolved templates matches one built from the originals', () => {
+  const lists = seedLists();
+  const { items, memberships, templates } = buildCatalog(lists);
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const resolvedLists = templates.map((t) => resolveTemplate(t, byId, memberships));
+  const golf = lists.find((l) => l.name === 'Golf');
+  const ev = newEvent({ activities: [golf.id], season: 'Summer', transport: 'Plane', mode: 'trip' });
+  const key = (e) => `${e.name.toLowerCase()}|${e.container}|${e.phase}`;
+  const before = new Set(buildTotalEntries(ev, lists).map(key));
+  const after = new Set(buildTotalEntries(ev, resolvedLists).map(key));
+  assert.deepEqual([...after].sort(), [...before].sort());
+});
+
+test('buildCatalog: per-template container override (Socks default vs Travel/RV)', () => {
+  const lists = seedLists();
+  const { items, memberships } = buildCatalog(lists);
+  const socks = items.find((i) => i.name.toLowerCase() === 'socks');
+  assert.ok(socks);
+  const socksMems = memberships.filter((m) => m.itemId === socks.id);
+  assert.ok(socksMems.length >= 3);                       // Socks lives in several templates
+  assert.ok(socksMems.some((m) => m.container === '' ));  // at least one uses the default
+  assert.ok(socksMems.some((m) => m.container && m.container !== socks.container)); // at least one overrides
+});
+
+test('buildCatalog: itemType override preserves the Bike "after" reminders', () => {
+  const lists = seedLists();
+  const { items, memberships, templates } = buildCatalog(lists);
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const bike = templates.find((t) => t.name === 'Bike');
+  const swim = templates.find((t) => t.name === 'Swim');
+  const bikeItems = resolveTemplateItems(bike, byId, memberships);
+  const swimItems = resolveTemplateItems(swim, byId, memberships);
+  const bikeTowel = bikeItems.find((x) => x.name === 'Towel');
+  const swimTowel = swimItems.find((x) => x.name === 'Towel');
+  assert.equal(bikeTowel.itemType, 'reminder'); // Bike keeps its after-list reminder behavior
+  assert.equal(swimTowel.itemType, 'item');     // same catalog item, shown as a packable item in Swim
+});
+
+test('membershipFromResolved: stores overrides only where the item differs from its default', () => {
+  const cat = newItem({ name: 'Socks', container: 'Duffel bag', phase: 'week', itemType: 'item' });
+  const resolved = resolveMembership(cat, newMembership({ itemId: cat.id, templateId: 't1' }));
+  resolved.container = 'Checked luggage';   // user changes the bag in this template
+  resolved.seasons = ['Summer'];            // and adds a condition
+  const m = membershipFromResolved(cat, 't1', resolved, 3);
+  assert.equal(m.container, 'Checked luggage'); // differs from default -> stored as override
+  assert.equal(m.phase, '');                    // equals default -> no override
+  assert.deepEqual(m.seasons, ['Summer']);
+  assert.equal(m.order, 3);
+  // round-trips back to the same resolved values
+  const back = resolveMembership(cat, m);
+  assert.equal(back.container, 'Checked luggage');
+  assert.equal(back.phase, 'week');
+  assert.deepEqual(back.seasons, ['Summer']);
+});
+
+test('applyIntrinsic: shared-item edits propagate; container/phase defaults are left alone', () => {
+  const cat = newItem({ name: 'Jacket', category: 'Clothing', container: 'Duffel bag', phase: 'week', weight: 0 });
+  const edited = resolveMembership(cat, newMembership({ itemId: cat.id, templateId: 't1', container: 'Checked luggage' }));
+  edited.category = 'Adventure clothing'; // intrinsic edit
+  edited.weight = 620;                     // intrinsic edit
+  applyIntrinsic(cat, edited);
+  assert.equal(cat.category, 'Adventure clothing'); // propagates to the shared item
+  assert.equal(cat.weight, 620);
+  assert.equal(cat.container, 'Duffel bag');         // the DEFAULT is untouched by an override edit
+  assert.equal(cat.phase, 'week');
+});
+
+test('catalogItemFromResolved: a new item takes its own container/phase as defaults', () => {
+  const it = newItem({ name: 'New gadget', category: 'Electronics', container: 'Tech pouch', phase: 'daybefore' });
+  const cat = catalogItemFromResolved(it);
+  assert.equal(cat.container, 'Tech pouch');
+  assert.equal(cat.phase, 'daybefore');
+  assert.equal(cat.category, 'Electronics');
+});
+
+test('resolveTemplateItems: respects membership order', () => {
+  const a = newItem({ name: 'A' }); const b = newItem({ name: 'B' }); const c = newItem({ name: 'C' });
+  const tmpl = newList({ name: 'T' });
+  const mems = [
+    newMembership({ itemId: c.id, templateId: tmpl.id, order: 0 }),
+    newMembership({ itemId: a.id, templateId: tmpl.id, order: 1 }),
+    newMembership({ itemId: b.id, templateId: tmpl.id, order: 2 }),
+  ];
+  const items = resolveTemplateItems(tmpl, [a, b, c], mems);
+  assert.deepEqual(items.map((x) => x.name), ['C', 'A', 'B']);
 });
