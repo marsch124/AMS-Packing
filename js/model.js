@@ -178,6 +178,21 @@ export function coerceItem(it) {
   if (it.photos.length > MAX_PHOTOS) it.photos = it.photos.slice(0, MAX_PHOTOS);
   delete it.photo;
   it.maintenance = normalizeMaintenance(it.maintenance);           // care record, or null when unused
+  // Optional descriptive / ownership metadata (all intrinsic to the item itself).
+  it.color = typeof it.color === 'string' ? it.color : '';
+  it.size = typeof it.size === 'string' ? it.size : '';
+  it.manufacturer = typeof it.manufacturer === 'string' ? it.manufacturer : '';
+  it.model = typeof it.model === 'string' ? it.model : '';         // product / model name
+  it.owner = typeof it.owner === 'string' ? it.owner : '';         // whose item it is
+  it.acquired = isYMD(it.acquired) ? it.acquired : '';             // date acquired (YYYY-MM-DD)
+  it.price = Number.isFinite(it.price) && it.price >= 0 ? it.price : 0; // 0 = unset
+  it.currency = typeof it.currency === 'string' ? it.currency : '';
+  it.purchaseLink = typeof it.purchaseLink === 'string' ? it.purchaseLink : '';
+  it.expiry = isYMD(it.expiry) ? it.expiry : '';                   // expiry / replace-by date
+  it.condition = ITEM_CONDITION_IDS.includes(it.condition) ? it.condition : '';
+  it.serial = typeof it.serial === 'string' ? it.serial : '';
+  it.qtyOwned = Number.isFinite(it.qtyOwned) && it.qtyOwned >= 0 ? Math.floor(it.qtyOwned) : 0; // 0 = unset
+  it.warranty = isYMD(it.warranty) ? it.warranty : '';            // warranty-until date
   return it;
 }
 // A care record: how to look after the physical thing, plus an optional recurring
@@ -260,6 +275,10 @@ export function newItem(partial = {}) {
     storage: '',     // where the physical item is kept at home (free text)
     photos: [],      // pictures of the item, as resized data URLs (max MAX_PHOTOS)
     maintenance: null, // care record (notes/link/schedule/log) — see normalizeMaintenance
+    // Optional descriptive / ownership metadata (all intrinsic to the item):
+    color: '', size: '', manufacturer: '', model: '', owner: '',
+    acquired: '', price: 0, currency: '', purchaseLink: '',
+    expiry: '', condition: '', serial: '', qtyOwned: 0, warranty: '',
     ...partial,
   });
 }
@@ -1102,6 +1121,21 @@ export function applyIntrinsic(cat, it) {
   cat.sub = asArray(it.sub).slice();
   cat.photos = asArray(it.photos).slice();
   cat.maintenance = it.maintenance || null;
+  // Descriptive / ownership metadata — intrinsic, so it lives on the shared item.
+  cat.color = it.color || '';
+  cat.size = it.size || '';
+  cat.manufacturer = it.manufacturer || '';
+  cat.model = it.model || '';
+  cat.owner = it.owner || '';
+  cat.acquired = it.acquired || '';
+  cat.price = Number.isFinite(it.price) ? it.price : 0;
+  cat.currency = it.currency || '';
+  cat.purchaseLink = it.purchaseLink || '';
+  cat.expiry = it.expiry || '';
+  cat.condition = it.condition || '';
+  cat.serial = it.serial || '';
+  cat.qtyOwned = Number.isFinite(it.qtyOwned) ? it.qtyOwned : 0;
+  cat.warranty = it.warranty || '';
   if (it.stats) cat.stats = it.stats;
   return coerceItem(cat);
 }
@@ -1116,6 +1150,10 @@ export function catalogItemFromResolved(it) {
     liquid: !!it.liquid, restricted: !!it.restricted, perNight: !!it.perNight, shortList: !!it.shortList,
     weight: it.weight || 0, storage: it.storage || '', sub: asArray(it.sub).slice(),
     photos: asArray(it.photos).slice(), maintenance: it.maintenance || null, stats: it.stats,
+    color: it.color || '', size: it.size || '', manufacturer: it.manufacturer || '', model: it.model || '',
+    owner: it.owner || '', acquired: it.acquired || '', price: it.price || 0, currency: it.currency || '',
+    purchaseLink: it.purchaseLink || '', expiry: it.expiry || '', condition: it.condition || '',
+    serial: it.serial || '', qtyOwned: it.qtyOwned || 0, warranty: it.warranty || '',
   });
 }
 
@@ -1231,6 +1269,21 @@ function buildCatalogItem(copies) {
     weight: (copies.map((c) => Number(c.weight)).find((w) => w > 0)) || 0,
     storage: _firstNonEmpty(copies.map((c) => c.storage)),
     sub: longestSub.slice(),
+    // Descriptive / ownership metadata: first known value wins (intrinsic to the item).
+    color: _firstNonEmpty(copies.map((c) => c.color)),
+    size: _firstNonEmpty(copies.map((c) => c.size)),
+    manufacturer: _firstNonEmpty(copies.map((c) => c.manufacturer)),
+    model: _firstNonEmpty(copies.map((c) => c.model)),
+    owner: _firstNonEmpty(copies.map((c) => c.owner)),
+    acquired: _firstNonEmpty(copies.map((c) => c.acquired)),
+    price: (copies.map((c) => Number(c.price)).find((p) => p > 0)) || 0,
+    currency: _firstNonEmpty(copies.map((c) => c.currency)),
+    purchaseLink: _firstNonEmpty(copies.map((c) => c.purchaseLink)),
+    expiry: _firstNonEmpty(copies.map((c) => c.expiry)),
+    condition: _firstNonEmpty(copies.map((c) => c.condition)),
+    serial: _firstNonEmpty(copies.map((c) => c.serial)),
+    qtyOwned: (copies.map((c) => Number(c.qtyOwned)).find((q) => q > 0)) || 0,
+    warranty: _firstNonEmpty(copies.map((c) => c.warranty)),
     // Conditions (incl. weather), note and qty are contextual → they live on the
     // membership, so the catalog item keeps them empty.
     seasons: [], contexts: [], transports: [], catering: [], weather: [],

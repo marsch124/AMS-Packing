@@ -987,3 +987,55 @@ test('resolveTemplateItems: respects membership order', () => {
   const items = resolveTemplateItems(tmpl, [a, b, c], mems);
   assert.deepEqual(items.map((x) => x.name), ['C', 'A', 'B']);
 });
+
+test('coerceItem: defaults and validates the new metadata fields', () => {
+  const empty = coerceItem({ name: 'Thing' });
+  for (const f of ['color', 'size', 'manufacturer', 'model', 'owner', 'acquired', 'currency', 'purchaseLink', 'expiry', 'condition', 'serial']) {
+    assert.equal(empty[f], '', `${f} should default to ''`);
+  }
+  assert.equal(empty.price, 0);
+  assert.equal(empty.qtyOwned, 0);
+  // Invalid values are rejected; valid ones kept.
+  const bad = coerceItem({ name: 'X', condition: 'sparkly', acquired: 'not-a-date', price: -5, qtyOwned: -2 });
+  assert.equal(bad.condition, '');       // unknown condition id dropped
+  assert.equal(bad.acquired, '');        // non-YMD date dropped
+  assert.equal(bad.price, 0);            // negative price clamped
+  assert.equal(bad.qtyOwned, 0);         // negative qty clamped
+  const good = coerceItem({ name: 'X', condition: 'worn', acquired: '2026-01-15', price: 19.9, qtyOwned: 3 });
+  assert.equal(good.condition, 'worn');
+  assert.equal(good.acquired, '2026-01-15');
+  assert.equal(good.price, 19.9);
+  assert.equal(good.qtyOwned, 3);
+});
+
+test('applyIntrinsic: metadata edits propagate to the shared catalog item', () => {
+  const cat = newItem({ name: 'Jacket' });
+  const edited = resolveMembership(cat, newMembership({ itemId: cat.id, templateId: 't1' }));
+  Object.assign(edited, {
+    color: 'Navy', size: 'M', manufacturer: 'Patagonia', model: 'Nano Puff', owner: 'Martin',
+    acquired: '2025-12-01', price: 199.95, currency: 'EUR', purchaseLink: 'https://x.example',
+    expiry: '2030-01-01', condition: 'good', serial: 'SN-42', qtyOwned: 2, warranty: '2027-01-01',
+  });
+  applyIntrinsic(cat, edited);
+  assert.equal(cat.color, 'Navy');
+  assert.equal(cat.manufacturer, 'Patagonia');
+  assert.equal(cat.owner, 'Martin');
+  assert.equal(cat.price, 199.95);
+  assert.equal(cat.currency, 'EUR');
+  assert.equal(cat.condition, 'good');
+  assert.equal(cat.qtyOwned, 2);
+  assert.equal(cat.warranty, '2027-01-01');
+});
+
+test('buildCatalog: item metadata survives the migration round-trip', () => {
+  const lists = [newList({ name: 'Travel', items: [
+    newItem({ name: 'Backpack', manufacturer: 'Osprey', color: 'Black', price: 250, currency: 'USD', condition: 'good' }),
+  ] })];
+  const { items } = buildCatalog(lists);
+  const bag = items.find((i) => i.name === 'Backpack');
+  assert.equal(bag.manufacturer, 'Osprey');
+  assert.equal(bag.color, 'Black');
+  assert.equal(bag.price, 250);
+  assert.equal(bag.currency, 'USD');
+  assert.equal(bag.condition, 'good');
+});

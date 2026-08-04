@@ -1,7 +1,7 @@
 // app.js — screens, navigation and wiring for AMS Packing List.
 import {
   CATEGORIES, CONTAINERS, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
-  CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
+  CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, bagLoads, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
@@ -17,7 +17,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v55';
+const APP_VERSION = 'v56';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -113,6 +113,19 @@ function collectStorages(lists) {
   const seen = new Map(); // lowercase key -> display spelling
   for (const s of loadStorageLocs()) { const t = s.trim(); if (t) seen.set(t.toLowerCase(), t); }
   for (const l of lists) for (const it of l.items) if (it.storage) { const t = it.storage.trim(); if (t) seen.set(t.toLowerCase(), t); }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+
+// The distinct values already used for a given item field (color / size /
+// manufacturer…), across every item. Powers the "growing" dropdowns: the choices
+// ARE whatever you've entered before, so the list fills itself as you use the app
+// — no separate management needed. Case-insensitive de-dupe, keeps first spelling.
+function collectItemValues(field, lists = ALL_LISTS) {
+  const seen = new Map();
+  for (const l of lists) for (const it of (l.items || [])) {
+    const v = (it[field] || '').trim();
+    if (v && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v);
+  }
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
@@ -1684,6 +1697,24 @@ function itemEditor(list, it, setOpen, draw) {
     return rows || '<p class="inlists-empty">No templates yet.</p>';
   })();
 
+  // A "growing" dropdown for a free-form item field (colour / size / manufacturer):
+  // its options are the values already used across items, plus a "＋ Add new…" choice
+  // that reveals an inline text box. New values need no saving — they reappear next
+  // time because collectItemValues re-reads them from the items.
+  const growField = (name, labelHtml, cur, addLabel, placeholder) => {
+    const vals = collectItemValues(name);
+    if (cur && !vals.some((v) => v.toLowerCase() === cur.toLowerCase())) vals.unshift(cur);
+    const opts = [{ value: '', label: '— not set —' }]
+      .concat(vals.map((v) => ({ value: v, label: v })))
+      .concat([{ value: '__new__', label: addLabel }]);
+    return `<label class="field"><span>${labelHtml}</span>
+      ${selectHtml(`${name}-sel`, opts, cur || '')}
+      <input class="grow-new hidden" data-grow-new="${name}" name="${name}-new" value="" placeholder="${esc(placeholder)}" autocomplete="off"></label>`;
+  };
+  // Open the details panel by default only when it already holds something.
+  const detailsOpen = !!(it.color || it.size || it.manufacturer || it.model || it.owner || it.acquired
+    || it.price || it.currency || it.purchaseLink || it.expiry || it.condition || it.serial || it.qtyOwned || it.warranty);
+
   ed.innerHTML = `
     <section class="layer layer-item">
       <div class="layer-h"><span class="layer-num">1</span><span class="layer-t">The item itself</span><span class="layer-sub">The thing itself — these stay the same everywhere you use it.</span></div>
@@ -1730,6 +1761,38 @@ function itemEditor(list, it, setOpen, draw) {
             <input type="url" name="mlink" value="${esc(m.link)}" placeholder="https://…" autocomplete="off"></label>
 
           <div class="care-history" data-history></div>
+        </div>
+      </details>
+
+      <details class="care details-panel"${detailsOpen ? ' open' : ''}>
+        <summary><span class="care-h">Details &amp; ownership</span><span class="care-sum">Make, colour, size, value, owner &amp; lifecycle — all optional</span></summary>
+        <div class="care-body">
+          <div class="row2">
+            ${growField('color', 'Colour', it.color, '＋ Add a colour…', 'e.g. Black · Navy · Red')}
+            ${growField('size', 'Size', it.size, '＋ Add a size…', 'e.g. M · 42 · One size')}
+          </div>
+          <div class="row2">
+            ${growField('manufacturer', 'Manufacturer', it.manufacturer, '＋ Add a manufacturer…', 'e.g. Patagonia · Apple')}
+            <label class="field"><span>Model <em>product name</em></span><input name="model" value="${esc(it.model)}" placeholder="e.g. Atmos AG 65" autocomplete="off"></label>
+          </div>
+          <label class="field"><span>Owner <em>whose it is</em></span><input name="owner" value="${esc(it.owner)}" placeholder="e.g. Martin · Anna · Shared" autocomplete="off"></label>
+          <div class="row2">
+            <label class="field"><span>Condition</span>${selectHtml('condition', [{ value: '', label: '— not set —' }, ...ITEM_CONDITIONS.map((c) => ({ value: c.id, label: c.label }))], it.condition)}</label>
+            <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
+          </div>
+          <div class="row2">
+            <label class="field"><span>Price <em>per unit</em></span><input type="number" name="price" min="0" step="0.01" inputmode="decimal" value="${it.price || ''}" placeholder="0"></label>
+            <label class="field"><span>Currency</span>${selectHtml('currency', [{ value: '', label: '—' }, ...CURRENCIES.map((c) => ({ value: c, label: c }))], it.currency)}</label>
+          </div>
+          <label class="field"><span>Purchase / reorder link</span><input type="url" name="purchaseLink" value="${esc(it.purchaseLink)}" placeholder="https://…" autocomplete="off"></label>
+          <div class="row2">
+            <label class="field"><span>Acquired</span><input type="date" name="acquired" value="${esc(it.acquired)}" max="${todayISO()}"></label>
+            <label class="field"><span>Serial number</span><input name="serial" value="${esc(it.serial)}" placeholder="optional" autocomplete="off"></label>
+          </div>
+          <div class="row2">
+            <label class="field"><span>Warranty until</span><input type="date" name="warranty" value="${esc(it.warranty)}"></label>
+            <label class="field"><span>Expiry / replace by</span><input type="date" name="expiry" value="${esc(it.expiry)}"></label>
+          </div>
         </div>
       </details>
     </section>
@@ -1798,6 +1861,12 @@ function itemEditor(list, it, setOpen, draw) {
       const isNew = e.target.value === '__new__';
       $('.care-newstorage', ed)?.classList.toggle('hidden', !isNew);
       if (isNew) $('input[name=storage-new]', ed)?.focus();
+    }
+    if (['color-sel', 'size-sel', 'manufacturer-sel'].includes(e.target.name)) {
+      const key = e.target.name.replace('-sel', '');
+      const isNew = e.target.value === '__new__';
+      $(`.grow-new[data-grow-new="${key}"]`, ed)?.classList.toggle('hidden', !isNew);
+      if (isNew) $(`input[name="${key}-new"]`, ed)?.focus();
     }
     if (e.target === fileInput) {
       const files = Array.from(fileInput.files || []);
@@ -1871,6 +1940,25 @@ function itemEditor(list, it, setOpen, draw) {
         lastDone: $('input[name=lastDone]', ed).value || '',
         log: careLog,
       });
+      // Details & ownership metadata (all intrinsic to the item)
+      const growVal = (key) => {
+        const sel = $(`select[name="${key}-sel"]`, ed).value;
+        return sel === '__new__' ? (($(`input[name="${key}-new"]`, ed).value || '').trim()) : sel;
+      };
+      it.color = growVal('color');
+      it.size = growVal('size');
+      it.manufacturer = growVal('manufacturer');
+      it.model = ($('input[name=model]', ed).value || '').trim();
+      it.owner = ($('input[name=owner]', ed).value || '').trim();
+      it.condition = $('select[name=condition]', ed).value;
+      it.qtyOwned = Math.max(0, parseInt($('input[name=qtyOwned]', ed).value, 10) || 0);
+      it.price = Math.max(0, parseFloat($('input[name=price]', ed).value) || 0);
+      it.currency = $('select[name=currency]', ed).value;
+      it.purchaseLink = ($('input[name=purchaseLink]', ed).value || '').trim();
+      it.acquired = $('input[name=acquired]', ed).value || '';
+      it.serial = ($('input[name=serial]', ed).value || '').trim();
+      it.warranty = $('input[name=warranty]', ed).value || '';
+      it.expiry = $('input[name=expiry]', ed).value || '';
       // Read the "In these templates" matrix now, before the editor is torn down.
       const nameKey = it.name.trim().toLowerCase();
       const wanted = nameKey ? $$('input[name=tmpl]:not([disabled])', ed).map((b) => ({ id: b.value, checked: b.checked })) : [];
@@ -2354,6 +2442,7 @@ function howtoCard() {
           <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a 📍 pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b> or remove places — under <b>Storage places</b> in <b>Settings</b>.</li>
           <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the ✕ to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one.</li>
           <li><b>Maintenance</b> — how and how often to look after it: a <b>maintenance cadence</b> (monthly … every 2 years, or a custom number of days), when it was <b>last done</b>, free-text <b>how-to notes</b> (steps, products, settings), and a <b>how-to link</b>. Tap <b>Log done today</b> to record a service — it resets the schedule and adds a dated entry to the item's maintenance history.</li>
+          <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b>, <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
         </ul>
         <p>The <b>Care</b> tab then gathers everything with care info across all your lists, two ways:</p>
         <ul>
@@ -2406,6 +2495,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v56', '2026-08-03 · 17:30 UTC', false, 'Record more about each item — a “Details & ownership” panel',
+      'Every item can now carry a lot more about the <b>physical object</b>, in a new collapsible <b>Details &amp; ownership</b> panel in its editor (Templates tab), tucked below Storage &amp; maintenance so the everyday packing view stays clean. New optional fields: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that <b>grow as you use them</b> — pick a value you\'ve entered before, or “＋ Add new…”), <b>model / product name</b>, <b>owner</b> (whose it is), <b>condition</b> (New / Good / Worn / Needs replacing), <b>quantity owned</b>, <b>price</b> with a selectable <b>currency</b>, a <b>purchase / reorder link</b>, <b>acquired</b> date, <b>serial number</b>, and <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Because each item now lives once in the catalog (the earlier “Endeavour 2” rebuild), every one of these is a property of the item itself — fill it in once and it\'s the same everywhere the item appears. Everything is optional; leave a field blank and nothing changes.',
+      'The app quietly becomes a proper record of your gear — what it is, what it cost, whose it is, and when it needs replacing — without cluttering the packing flow, since it\'s all tucked in one optional panel.'),
     v('v55', '2026-08-03 · 16:50 UTC', false, 'Settings icon changed from a sun to a nut',
       'The Settings icon — in the bottom nav bar and on the "Event settings" button — was a circle with radiating rays that looked like a sun and could be confused with the weather-forecast sun. It\'s now a <b>hexagonal nut</b> (the nuts-and-bolts kind), which is a more conventional symbol for settings and clearly distinct from the weather icons.',
       'The Settings icon is now unmistakably a settings icon, with no chance of being mistaken for the weather sun.'),

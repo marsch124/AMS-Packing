@@ -2851,6 +2851,9 @@ details.care[open] .care-h::before {
   color: var(--muted);
 }
 
+/* The inline "＋ Add new…" text box under a growing dropdown (colour/size/…). */
+.item-editor .grow-new { margin-top: 6px; }
+
 .item-editor .item-name input {
   font-size: 1.2rem;
   font-weight: 700;
