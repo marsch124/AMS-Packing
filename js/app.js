@@ -1,7 +1,7 @@
 // app.js — screens, navigation and wiring for AMS Packing List.
 import {
   CATEGORIES, CONTAINERS, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
-  CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
+  CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, bagLoads, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
@@ -17,7 +17,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v56';
+const APP_VERSION = 'v57';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -170,6 +170,7 @@ const ITEM_FILTER_CATS = [
   { key: 'restricted', label: '⚠️ Restricted',  test: (it) => !!it.restricted },
   { key: 'care',       label: '🧰 Has care',    test: (it) => hasCare(it) },
   { key: 'photo',      label: '📷 Photo',        test: (it) => (it.photos || []).length > 0 },
+  { key: 'retired',    label: '🚫 Not in use',   test: (it) => !!it.retired },
 ];
 
 // Chip-bar HTML for the given items and active filter Set. Only categories that
@@ -1644,9 +1645,10 @@ function listItemRow(list, it, getOpen, setOpen, draw) {
     + `${it.restricted ? '<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">⚠️</span>' : ''}`
     + `${(it.photos || []).length ? `<span class="badge photo" title="${esc((it.photos.length === 1 ? 'Has a photo' : `${it.photos.length} photos`))}">📷${it.photos.length > 1 ? ` ${it.photos.length}` : ''}</span>` : ''}`
     + `${care ? `<span class="badge maint ${care.state}" title="${esc(`Maintenance: ${dueLabel(care)}`)}">${CARE_EMOJI[care.state]}</span>` : ''}`
+    + `${it.retired ? `<span class="badge retired" title="${esc('Not in use' + (it.retiredReason ? ` — ${retireReasonLabel(it.retiredReason)}` : '') + ' — kept on record, never added to a trip')}">🚫 Not in use</span>` : ''}`
     + conditionBadgeHTML(it);
   const thumb = (it.photos || []).length ? `<img class="row-thumb" src="${esc(it.photos[0])}" alt="">` : '';
-  const row = h(`<div class="entry">
+  const row = h(`<div class="entry${it.retired ? ' retired' : ''}">
     ${thumb}
     <button class="entry-main" type="button">
       <span class="e-name">${esc(it.name || '(unnamed)')}${it.qty ? ` <em>×${esc(it.qty)}</em>` : ''} ${badges}</span>
@@ -1722,7 +1724,7 @@ function itemEditor(list, it, setOpen, draw) {
   };
   // Open the details panel by default only when it already holds something.
   const detailsOpen = !!(it.color || it.size || it.manufacturer || it.model || it.owner || it.acquired
-    || it.price || it.currency || it.purchaseLink || it.expiry || it.condition || it.serial || it.qtyOwned || it.warranty);
+    || it.price || it.currency || it.purchaseLink || it.expiry || it.condition || it.retired || it.serial || it.qtyOwned || it.warranty);
 
   ed.innerHTML = `
     <section class="layer layer-item">
@@ -1788,6 +1790,10 @@ function itemEditor(list, it, setOpen, draw) {
           <div class="row2">
             <label class="field"><span>Condition</span>${selectHtml('condition', [{ value: '', label: '— not set —' }, ...ITEM_CONDITIONS.map((c) => ({ value: c.id, label: c.label }))], it.condition)}</label>
             <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
+          </div>
+          <div class="lifecycle${it.retired ? ' is-retired' : ''}">
+            <label class="check${it.retired ? ' on' : ''}"><input type="checkbox" name="retired" ${it.retired ? 'checked' : ''}>🚫 Not in use <em>kept on record, but never added to a trip</em></label>
+            <label class="field retire-reason-field${it.retired ? '' : ' hidden'}"><span>Reason</span>${selectHtml('retiredReason', [{ value: '', label: '— not set —' }, ...RETIRE_REASONS.map((r) => ({ value: r.id, label: r.label }))], it.retiredReason)}</label>
           </div>
           <div class="row2">
             <label class="field"><span>Price <em>per unit</em></span><input type="number" name="price" min="0" step="0.01" inputmode="decimal" value="${it.price || ''}" placeholder="0"></label>
@@ -1865,6 +1871,10 @@ function itemEditor(list, it, setOpen, draw) {
   ed.addEventListener('change', async (e) => {
     if (e.target.type === 'checkbox') e.target.closest('label')?.classList.toggle('on', e.target.checked);
     if (e.target.name === 'charging') $('.charge-type-field', ed)?.classList.toggle('hidden', !e.target.checked);
+    if (e.target.name === 'retired') {
+      $('.retire-reason-field', ed)?.classList.toggle('hidden', !e.target.checked);
+      $('.lifecycle', ed)?.classList.toggle('is-retired', e.target.checked);
+    }
     if (e.target.name === 'interval') $('.care-custom', ed)?.classList.toggle('hidden', e.target.value !== 'custom');
     if (e.target.name === 'storage-sel') {
       const isNew = e.target.value === '__new__';
@@ -1960,6 +1970,8 @@ function itemEditor(list, it, setOpen, draw) {
       it.model = ($('input[name=model]', ed).value || '').trim();
       it.owner = ($('input[name=owner]', ed).value || '').trim();
       it.condition = $('select[name=condition]', ed).value;
+      it.retired = $('input[name=retired]', ed).checked;
+      it.retiredReason = it.retired ? $('select[name=retiredReason]', ed).value : '';
       it.qtyOwned = Math.max(0, parseInt($('input[name=qtyOwned]', ed).value, 10) || 0);
       it.price = Math.max(0, parseFloat($('input[name=price]', ed).value) || 0);
       it.currency = $('select[name=currency]', ed).value;
@@ -2453,6 +2465,7 @@ function howtoCard() {
           <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the ✕ to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one.</li>
           <li><b>Maintenance</b> — how and how often to look after it: a <b>maintenance cadence</b> (monthly … every 2 years, or a custom number of days), when it was <b>last done</b>, free-text <b>how-to notes</b> (steps, products, settings), and a <b>how-to link</b>. Tap <b>Log done today</b> to record a service — it resets the schedule and adds a dated entry to the item's maintenance history.</li>
           <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b>, <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
+          <li><b>🚫 Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>🚫 Not in use</b> tag, and the new <b>🚫 Not in use</b> filter chip rounds them all up. (This is different from <b>Condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
         </ul>
         <p>The <b>Care</b> tab then gathers everything with care info across all your lists, two ways:</p>
         <ul>
@@ -2460,7 +2473,7 @@ function howtoCard() {
           <li><b>Calendar</b> — a month view with each scheduled service on its due date, colour-coded by urgency and dotted with a count; tap a day to see (and tick off) what's due. Overdue items are flagged above the grid.</li>
         </ul>
         <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>🧰 reminder</b> also shows on the <b>Home</b> screen.</p>
-        <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>⚠️ No template</b> (loose items), <b>💧 Liquids</b>, <b>⚡ Charging</b>, <b>⚠️ Restricted</b>, <b>🧰 Has care</b> and <b>📷 Photo</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
+        <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>⚠️ No template</b> (loose items), <b>💧 Liquids</b>, <b>⚡ Charging</b>, <b>⚠️ Restricted</b>, <b>🧰 Has care</b>, <b>📷 Photo</b> and <b>🚫 Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
 
         <h3>Countdown &amp; “pack now” nudges</h3>
         <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). These are on-open reminders — the app can't push background notifications.</p>
@@ -2505,6 +2518,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v57', '2026-08-04 · 17:00 UTC', false, 'Mark an item “Not in use” instead of deleting it',
+      'Items you no longer pack — <b>sold, broken, destroyed, replaced, lost</b> — can now be set to <b>“Not in use”</b> without losing the record. In an item’s editor, open <b>Details &amp; ownership</b> and tick <b>🚫 Not in use</b>; a small <b>Reason</b> dropdown then lets you note why (Sold / Broken / Destroyed / Replaced / Lost / Other). A “Not in use” item is <b>kept exactly as it was</b> — its photos, care record, history and template memberships all stay — but it is <b>never added to a new trip’s packing list</b>, so retired gear stops cluttering what you actually pack. In your template and Care lists it stays visible but <b>greyed out</b> with a <b>🚫 Not in use</b> tag, and a new <b>🚫 Not in use</b> filter chip lets you round up everything you’ve retired. Existing trips already built are untouched. This is different from the <b>Condition</b> field (New / Good / Worn / Needs replacing), which grades a thing you still own and pack — an item usually goes <b>Needs replacing</b> first, then <b>Not in use</b> once you’ve actually replaced it.',
+      'Retire gear you no longer use — sold, broken or replaced — and it drops out of every future packing list while its full record stays on file, so nothing’s lost and nothing irrelevant clutters your trips.'),
     v('v56', '2026-08-03 · 17:30 UTC', false, 'Record more about each item — a “Details & ownership” panel',
       'Every item can now carry a lot more about the <b>physical object</b>, in a new collapsible <b>Details &amp; ownership</b> panel in its editor (Templates tab), tucked below Storage &amp; maintenance so the everyday packing view stays clean. New optional fields: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that <b>grow as you use them</b> — pick a value you\'ve entered before, or “＋ Add new…”), <b>model / product name</b>, <b>owner</b> (whose it is), <b>condition</b> (New / Good / Worn / Needs replacing), <b>quantity owned</b>, <b>price</b> with a selectable <b>currency</b>, a <b>purchase / reorder link</b>, <b>acquired</b> date, <b>serial number</b>, and <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Because each item now lives once in the catalog (the earlier “Endeavour 2” rebuild), every one of these is a property of the item itself — fill it in once and it\'s the same everywhere the item appears. Everything is optional; leave a field blank and nothing changes. Two of these fields also show <b>at a glance</b> on the item rows (in a template and in the Care tab): the <b>owner</b> as a 👤 tag, and the <b>condition</b> as a small badge — but only when it needs attention (<b>Worn</b> or <b>♻️ Replace</b>), so healthy gear stays quiet.',
       'The app quietly becomes a proper record of your gear — what it is, what it cost, whose it is, and when it needs replacing — without cluttering the packing flow, since it\'s all tucked in one optional panel, with just the owner and a “needs replacing” flag surfaced on the item rows.'),

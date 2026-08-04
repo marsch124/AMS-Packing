@@ -127,6 +127,22 @@ export const ITEM_CONDITIONS = [
   { id: 'retire', label: 'Needs replacing' },
 ];
 export const ITEM_CONDITION_IDS = ITEM_CONDITIONS.map((c) => c.id);
+// Why an item is "Not in use" (retired from the kit). Distinct from `condition`,
+// which grades a thing you still own & pack; a retired item is no longer packed
+// at all, but its record is kept. Optional — a plain "not in use" needs no reason.
+export const RETIRE_REASONS = [
+  { id: 'sold',      label: 'Sold' },
+  { id: 'broken',    label: 'Broken / not working' },
+  { id: 'destroyed', label: 'Destroyed / worn out' },
+  { id: 'replaced',  label: 'Replaced' },
+  { id: 'lost',      label: 'Lost' },
+  { id: 'other',     label: 'Other' },
+];
+export const RETIRE_REASON_IDS = RETIRE_REASONS.map((r) => r.id);
+export function retireReasonLabel(id) {
+  const r = RETIRE_REASONS.find((x) => x.id === id);
+  return r ? r.label : '';
+}
 // Currencies offered for an item's price (the list Martin is likely to use first).
 export const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'CHF', 'NOK', 'DKK'];
 
@@ -190,6 +206,8 @@ export function coerceItem(it) {
   it.purchaseLink = typeof it.purchaseLink === 'string' ? it.purchaseLink : '';
   it.expiry = isYMD(it.expiry) ? it.expiry : '';                   // expiry / replace-by date
   it.condition = ITEM_CONDITION_IDS.includes(it.condition) ? it.condition : '';
+  it.retired = !!it.retired;                                        // "Not in use": kept on record but never packed
+  it.retiredReason = RETIRE_REASON_IDS.includes(it.retiredReason) ? it.retiredReason : ''; // only meaningful when retired
   it.serial = typeof it.serial === 'string' ? it.serial : '';
   it.qtyOwned = Number.isFinite(it.qtyOwned) && it.qtyOwned >= 0 ? Math.floor(it.qtyOwned) : 0; // 0 = unset
   it.warranty = isYMD(it.warranty) ? it.warranty : '';            // warranty-until date
@@ -278,7 +296,7 @@ export function newItem(partial = {}) {
     // Optional descriptive / ownership metadata (all intrinsic to the item):
     color: '', size: '', manufacturer: '', model: '', owner: '',
     acquired: '', price: 0, currency: '', purchaseLink: '',
-    expiry: '', condition: '', serial: '', qtyOwned: 0, warranty: '',
+    expiry: '', condition: '', retired: false, retiredReason: '', serial: '', qtyOwned: 0, warranty: '',
     ...partial,
   });
 }
@@ -412,6 +430,7 @@ export function buildTotalEntries(event, lists) {
   for (const list of listsForEvent(event, lists)) {
     for (const item of list.items) {
       if (!item || !String(item.name || '').trim()) continue;
+      if (item.retired) continue; // "Not in use" — kept on record but never packed
       if (!itemMatchesEvent(item, event)) continue;
       if (asArray(item.weather).length) continue; // conditional gear — offered via the forecast, not the base list
       const key = `${normName(item.name)}|${item.container}`;
@@ -1133,6 +1152,8 @@ export function applyIntrinsic(cat, it) {
   cat.purchaseLink = it.purchaseLink || '';
   cat.expiry = it.expiry || '';
   cat.condition = it.condition || '';
+  cat.retired = !!it.retired;
+  cat.retiredReason = it.retiredReason || '';
   cat.serial = it.serial || '';
   cat.qtyOwned = Number.isFinite(it.qtyOwned) ? it.qtyOwned : 0;
   cat.warranty = it.warranty || '';
@@ -1153,6 +1174,7 @@ export function catalogItemFromResolved(it) {
     color: it.color || '', size: it.size || '', manufacturer: it.manufacturer || '', model: it.model || '',
     owner: it.owner || '', acquired: it.acquired || '', price: it.price || 0, currency: it.currency || '',
     purchaseLink: it.purchaseLink || '', expiry: it.expiry || '', condition: it.condition || '',
+    retired: !!it.retired, retiredReason: it.retiredReason || '',
     serial: it.serial || '', qtyOwned: it.qtyOwned || 0, warranty: it.warranty || '',
   });
 }

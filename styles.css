@@ -1030,6 +1030,21 @@ legend {
   background: color-mix(in srgb, var(--warn) 18%, transparent);
 }
 
+/* "Not in use" (retired) — the item is kept on record but never packed. */
+.badge.retired {
+  color: var(--muted);
+  background: var(--line);
+}
+/* Dim a retired item's row so it reads as inactive without disappearing. */
+.entry.retired .e-name,
+.entry.retired .e-sub,
+.entry.retired .row-thumb { opacity: .5; }
+.entry.retired .badge.retired { opacity: 1; }
+
+/* Lifecycle block in the item editor's Details & ownership panel. */
+.lifecycle { margin-top: 8px; }
+.lifecycle .retire-reason-field { margin-top: 8px; }
+
 .ai-badge.unfiled {
   color: var(--warn);
 }

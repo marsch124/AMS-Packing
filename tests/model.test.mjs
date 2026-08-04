@@ -1006,6 +1006,25 @@ test('coerceItem: defaults and validates the new metadata fields', () => {
   assert.equal(good.acquired, '2026-01-15');
   assert.equal(good.price, 19.9);
   assert.equal(good.qtyOwned, 3);
+  // Lifecycle ("Not in use"): boolean defaults false; reason validated & only kept when valid.
+  assert.equal(empty.retired, false);
+  assert.equal(empty.retiredReason, '');
+  const retiredBad = coerceItem({ name: 'X', retired: 1, retiredReason: 'exploded' });
+  assert.equal(retiredBad.retired, true);       // any truthy -> true
+  assert.equal(retiredBad.retiredReason, '');   // unknown reason id dropped
+  const retiredGood = coerceItem({ name: 'X', retired: true, retiredReason: 'sold' });
+  assert.equal(retiredGood.retired, true);
+  assert.equal(retiredGood.retiredReason, 'sold');
+});
+
+test('buildTotalEntries: excludes items marked "Not in use" (retired)', () => {
+  const kit = newList({ name: 'Kit', items: [
+    newItem({ name: 'Tent', container: 'Backpack' }),
+    newItem({ name: 'Old stove', container: 'Backpack', retired: true, retiredReason: 'broken' }),
+  ] });
+  const ev = newEvent({ activities: [kit.id] });
+  const names = buildTotalEntries(ev, [kit]).map((e) => e.name);
+  assert.deepEqual(names, ['Tent']); // the retired stove never joins the trip
 });
 
 test('applyIntrinsic: metadata edits propagate to the shared catalog item', () => {
@@ -1014,7 +1033,8 @@ test('applyIntrinsic: metadata edits propagate to the shared catalog item', () =
   Object.assign(edited, {
     color: 'Navy', size: 'M', manufacturer: 'Patagonia', model: 'Nano Puff', owner: 'Martin',
     acquired: '2025-12-01', price: 199.95, currency: 'EUR', purchaseLink: 'https://x.example',
-    expiry: '2030-01-01', condition: 'good', serial: 'SN-42', qtyOwned: 2, warranty: '2027-01-01',
+    expiry: '2030-01-01', condition: 'good', retired: true, retiredReason: 'replaced',
+    serial: 'SN-42', qtyOwned: 2, warranty: '2027-01-01',
   });
   applyIntrinsic(cat, edited);
   assert.equal(cat.color, 'Navy');
@@ -1023,6 +1043,8 @@ test('applyIntrinsic: metadata edits propagate to the shared catalog item', () =
   assert.equal(cat.price, 199.95);
   assert.equal(cat.currency, 'EUR');
   assert.equal(cat.condition, 'good');
+  assert.equal(cat.retired, true);
+  assert.equal(cat.retiredReason, 'replaced');
   assert.equal(cat.qtyOwned, 2);
   assert.equal(cat.warranty, '2027-01-01');
 });
