@@ -1020,6 +1020,16 @@ legend {
   background: color-mix(in srgb, var(--warn) 16%, transparent);
 }
 
+/* Item condition — only shown when it needs attention (worn / needs-replacing). */
+.badge.cond.worn {
+  color: #b8860b;
+  background: color-mix(in srgb, #e0a800 20%, transparent);
+}
+.badge.cond.retire {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+}
+
 .ai-badge.unfiled {
   color: var(--warn);
 }

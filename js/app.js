@@ -129,6 +129,14 @@ function collectItemValues(field, lists = ALL_LISTS) {
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
+// A small "condition" badge for an item row — shown ONLY for the states that need
+// attention (worn / needs-replacing), so healthy gear stays unbadged and quiet.
+function conditionBadgeHTML(it) {
+  if (it.condition === 'retire') return '<span class="badge cond retire" title="Condition: Needs replacing">♻️ Replace</span>';
+  if (it.condition === 'worn') return '<span class="badge cond worn" title="Condition: Worn">Worn</span>';
+  return '';
+}
+
 // All building-block lists (resolved), kept so the item editor's "In these
 // templates" matrix can show — by the item's stable catalog id — which templates
 // it currently belongs to. Refreshed whenever a list opens.
@@ -1627,7 +1635,7 @@ function batchAddItems(list) {
 }
 
 function listItemRow(list, it, getOpen, setOpen, draw) {
-  const tags = [it.storage ? `📍 ${it.storage}` : '', it.container, ...(it.seasons || []), ...(it.contexts || []), ...(it.transports || [])].filter(Boolean);
+  const tags = [it.owner ? `👤 ${it.owner}` : '', it.storage ? `📍 ${it.storage}` : '', it.container, ...(it.seasons || []), ...(it.contexts || []), ...(it.transports || [])].filter(Boolean);
   const chShort = it.charging ? chargeTypeShort(it.chargeType) : '';
   const care = maintenanceStatus(it);
   const badges = `${isUnfiled(it.name) ? '<span class="badge unfiled" title="Not in any template yet — still a loose item">⚠️ No template</span>' : ''}`
@@ -1635,7 +1643,8 @@ function listItemRow(list, it, getOpen, setOpen, draw) {
     + `${it.liquid ? '<span class="badge liquid" title="Liquid / 100 ml rule">💧</span>' : ''}`
     + `${it.restricted ? '<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">⚠️</span>' : ''}`
     + `${(it.photos || []).length ? `<span class="badge photo" title="${esc((it.photos.length === 1 ? 'Has a photo' : `${it.photos.length} photos`))}">📷${it.photos.length > 1 ? ` ${it.photos.length}` : ''}</span>` : ''}`
-    + `${care ? `<span class="badge maint ${care.state}" title="${esc(`Maintenance: ${dueLabel(care)}`)}">${CARE_EMOJI[care.state]}</span>` : ''}`;
+    + `${care ? `<span class="badge maint ${care.state}" title="${esc(`Maintenance: ${dueLabel(care)}`)}">${CARE_EMOJI[care.state]}</span>` : ''}`
+    + conditionBadgeHTML(it);
   const thumb = (it.photos || []).length ? `<img class="row-thumb" src="${esc(it.photos[0])}" alt="">` : '';
   const row = h(`<div class="entry">
     ${thumb}
@@ -2188,6 +2197,7 @@ function aiRow(it, list) {
     ? `<span class="ai-thumb"><img src="${esc(it.photos[0])}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
     : `<span class="ai-thumb ph">${IC.wrench}</span>`;
   const bits = [esc(list.name)];
+  if (it.owner) bits.push(`👤 ${esc(it.owner)}`);
   if (it.storage) bits.push(`📍 ${esc(it.storage)}`);
   const unfiledBadge = isUnfiled(it.name) ? '<span class="ai-badge unfiled" title="Not in any template yet — still a loose item">⚠️</span>' : '';
   const badge = care
@@ -2496,8 +2506,8 @@ function versionHistoryCard() {
   </div>`;
   const items = [
     v('v56', '2026-08-03 · 17:30 UTC', false, 'Record more about each item — a “Details & ownership” panel',
-      'Every item can now carry a lot more about the <b>physical object</b>, in a new collapsible <b>Details &amp; ownership</b> panel in its editor (Templates tab), tucked below Storage &amp; maintenance so the everyday packing view stays clean. New optional fields: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that <b>grow as you use them</b> — pick a value you\'ve entered before, or “＋ Add new…”), <b>model / product name</b>, <b>owner</b> (whose it is), <b>condition</b> (New / Good / Worn / Needs replacing), <b>quantity owned</b>, <b>price</b> with a selectable <b>currency</b>, a <b>purchase / reorder link</b>, <b>acquired</b> date, <b>serial number</b>, and <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Because each item now lives once in the catalog (the earlier “Endeavour 2” rebuild), every one of these is a property of the item itself — fill it in once and it\'s the same everywhere the item appears. Everything is optional; leave a field blank and nothing changes.',
-      'The app quietly becomes a proper record of your gear — what it is, what it cost, whose it is, and when it needs replacing — without cluttering the packing flow, since it\'s all tucked in one optional panel.'),
+      'Every item can now carry a lot more about the <b>physical object</b>, in a new collapsible <b>Details &amp; ownership</b> panel in its editor (Templates tab), tucked below Storage &amp; maintenance so the everyday packing view stays clean. New optional fields: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that <b>grow as you use them</b> — pick a value you\'ve entered before, or “＋ Add new…”), <b>model / product name</b>, <b>owner</b> (whose it is), <b>condition</b> (New / Good / Worn / Needs replacing), <b>quantity owned</b>, <b>price</b> with a selectable <b>currency</b>, a <b>purchase / reorder link</b>, <b>acquired</b> date, <b>serial number</b>, and <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Because each item now lives once in the catalog (the earlier “Endeavour 2” rebuild), every one of these is a property of the item itself — fill it in once and it\'s the same everywhere the item appears. Everything is optional; leave a field blank and nothing changes. Two of these fields also show <b>at a glance</b> on the item rows (in a template and in the Care tab): the <b>owner</b> as a 👤 tag, and the <b>condition</b> as a small badge — but only when it needs attention (<b>Worn</b> or <b>♻️ Replace</b>), so healthy gear stays quiet.',
+      'The app quietly becomes a proper record of your gear — what it is, what it cost, whose it is, and when it needs replacing — without cluttering the packing flow, since it\'s all tucked in one optional panel, with just the owner and a “needs replacing” flag surfaced on the item rows.'),
     v('v55', '2026-08-03 · 16:50 UTC', false, 'Settings icon changed from a sun to a nut',
       'The Settings icon — in the bottom nav bar and on the "Event settings" button — was a circle with radiating rays that looked like a sun and could be confused with the weather-forecast sun. It\'s now a <b>hexagonal nut</b> (the nuts-and-bolts kind), which is a more conventional symbol for settings and clearly distinct from the weather icons.',
       'The Settings icon is now unmistakably a settings icon, with no chance of being mistaken for the weather sun.'),
