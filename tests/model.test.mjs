@@ -35,12 +35,17 @@ test('itemMatchesEvent: transport + catering constraints', () => {
   assert.equal(itemMatchesEvent(rvOnly, newEvent({ transport: 'Car', catering: 'self' })), false);
 });
 
-test('itemMatchesEvent: context matches when event pins any overlapping context', () => {
+test('itemMatchesEvent: context applies to WET lists only', () => {
   const raceItem = newItem({ name: 'Race belt', contexts: ['Race'] });
-  assert.equal(itemMatchesEvent(raceItem, newEvent({ contexts: ['Race'] })), true);
-  assert.equal(itemMatchesEvent(raceItem, newEvent({ contexts: ['Training'] })), false);
-  // event without a pinned context keeps the item
-  assert.equal(itemMatchesEvent(raceItem, newEvent({ contexts: [] })), true);
+  const wet = newList({ name: 'Run', group: 'WET' });
+  const ga = newList({ name: 'Hiking', group: 'GA' });
+  // On a WET list, the event context narrows as before.
+  assert.equal(itemMatchesEvent(raceItem, newEvent({ contexts: ['Race'] }), wet), true);
+  assert.equal(itemMatchesEvent(raceItem, newEvent({ contexts: ['Indoor'] }), wet), false);
+  assert.equal(itemMatchesEvent(raceItem, newEvent({ contexts: [] }), wet), true); // no context pinned -> keep
+  // On a non-WET list (or with no list), context is ignored -> the item always applies.
+  assert.equal(itemMatchesEvent(raceItem, newEvent({ contexts: ['Indoor'] }), ga), true);
+  assert.equal(itemMatchesEvent(raceItem, newEvent({ contexts: ['Indoor'] })), true);
 });
 
 test('buildTotalEntries: combines chosen lists and filters by event', () => {

@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v64';
+const APP_VERSION = 'v65';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -569,7 +569,7 @@ function eventForm(ev, lists, isEdit) {
       ${baseHint || transportHint ? `<p class="grp-hint">${baseHint}${transportHint}</p>` : ''}</fieldset>
     <fieldset><legend>Time of year</legend>${radioRow('season', SEASONS, ev.season)}</fieldset>
     <fieldset data-trip-only><legend>Catering</legend>${radioRow('catering', CATERING.map((c) => ({ value: c.id, label: c.label })), ev.catering)}</fieldset>
-    <fieldset><legend>Context <em>(optional — narrows the list)</em></legend>${checkRow('contexts', CONTEXTS, ev.contexts)}</fieldset>
+    <fieldset><legend>Context <em>(optional — narrows Workout / Exercise lists only)</em></legend>${checkRow('contexts', CONTEXTS, ev.contexts)}</fieldset>
 
     <fieldset><legend data-activities-legend>Extra activities to pack for</legend>
       <p class="grp-hint" data-activities-hint></p>
@@ -2706,7 +2706,7 @@ function howtoCard() {
           <li><b>Category</b> (what it is), <b>Container</b> (which bag it goes in), <b>Phase</b> (when to pack it — see the timeline below).</li>
           <li><b>Reminder</b> vs item: a reminder is a to-do prompt (e.g. “charge the Garmin”), not a physical thing to tick off.</li>
           <li><b>Flags:</b> ⚡ needs charging (with an optional <b>charge type</b> — USB-C, USB-A, Lightning, special charger… shown on the badge, e.g. ⚡ USB-C, so you know which cables to bring), short-home-list, 💧 liquid/gel (100 ml rule), ⚠️ restricted — think before packing (battery / carry-on rules), <b>per-night</b> (quantity scales with trip length), and a <b>weight</b> in grams.</li>
-          <li><b>Conditions</b> — “only include when…”: Season, Context (Indoor/Outdoor/Race/Training), Transport (Car/Plane/RV), Catering, and <b>Weather</b> (see below). A blank condition means “always applies”.</li>
+          <li><b>Conditions</b> — “only include when…”: Season, Context (Indoor/Outdoor/Race — applies to <b>Workout / Exercise (WET)</b> lists only), Transport (Car/Plane/RV), Catering, and <b>Weather</b> (see below). A blank condition means “always applies”.</li>
           <li><b>Sub-items:</b> optional nested things bundled under one line.</li>
           <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. Each item lives <b>once</b> and every template simply points to it — so <b>editing an item (its name, category, weight, flags or care) updates it in every template it belongs to</b>, and it still appears just once in <b>Care</b>. Only the <b>list-specific</b> choices stay separate per template: which <b>bag</b> it goes in, <b>when</b> to pack it, and its <b>conditions</b>. Items that are in <b>no</b> template show a <b>⚠️ No template</b> flag.</li>
         </ul>
@@ -2837,6 +2837,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v65', '2026-08-05 · 18:00 UTC', false, 'Context now applies to Workout / Exercise lists only',
+      'Two tidy-ups to the <b>Context</b> choice when you create an event. First, the <b>Training</b> option is <b>gone</b> — the choices are now just <b>Indoor</b>, <b>Outdoor</b> and <b>Race</b>. Second, and more importantly, Context now <b>only affects your Workout / Exercise &amp; Training (WET) lists</b> — Swim, Bike, Run and the like — where “indoor vs outdoor vs race” genuinely changes the kit. It <b>no longer touches</b> your Goal-Activity lists (Golf, Hiking, Diving…), the common Travel base, or the transport lists: those are always included in full regardless of the Context you pick. So choosing <b>Outdoor</b> for a trip narrows your <b>Run</b> gear to the outdoor set without hiding anything from, say, your Hiking or Travel packing.',
+      'The Context switch does exactly what you’d expect — it fine-tunes your workout kit — without silently dropping items from your other lists.'),
     v('v64', '2026-08-05 · 17:00 UTC', false, 'Every built-in template now starts with sections',
       'All of the built-in starter templates now arrive <b>pre-organised into sections</b>, so the new Sections feature is working for you from the off. <b>Diving</b> is fully detailed as a showcase — <b>Drysuit &amp; exposure</b>, <b>Rig / BCD</b>, <b>Regulators</b>, <b>Lights</b>, <b>Mask &amp; fins</b>, <b>Instruments &amp; deco</b>, <b>Accessories</b>, <b>Documents &amp; certification</b>, each pre-loaded with the usual gear. Every other populated list (Travel, RV, Golf, Hiking, Swim, Bike, Run and the transport bases) is grouped into a clean, consistent set — typically <b>Clothing</b>, <b>Footwear</b>, <b>Gear &amp; equipment</b>, <b>Tech &amp; devices</b>, <b>Toiletries &amp; body care</b>, <b>Food &amp; drink</b>, <b>Documents &amp; money</b>, <b>Comfort &amp; misc</b> and <b>Reminders</b> (only the ones a list actually needs). The empty activity scaffolds (Freediving, Strength, Yoga / Mobility, Breath work) come with a small <b>starter skeleton</b> of sections, ready to fill. It’s all just a <b>starting point</b> — rename, reorder, delete or add sections, and move items between them, however suits you. <b>Note:</b> this arrives as a refresh of the built-in starter templates, so anything you had already added to a <b>built-in</b> list is replaced by these pre-filled versions. Your own templates and everything in them are untouched.',
       'Open any template and it already reads as a tidy, sectioned overview — and those groupings flow straight onto your trip packing lists, with no setup on your part.'),
