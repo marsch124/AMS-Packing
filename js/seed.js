@@ -10,7 +10,7 @@ import { newItem, newList } from './model.js';
 // Compact item builder. Short keys keep the data readable:
 //   sv=Swedish original, cat=category, con=container, ph=phase, ctx=contexts,
 //   seas=seasons, tr=transports, cater=catering, we=weather conditions,
-//   charge, short, rem(inder), sub, note, qty
+//   charge, short, rem(inder), sub, note, qty, sec(tion id — per-template grouping)
 function it(name, o = {}) {
   return newItem({
     name,
@@ -32,6 +32,7 @@ function it(name, o = {}) {
     note: o.note || '',
     liquid: !!o.liquid,
     restricted: !!o.restricted,
+    section: o.sec || '',
   });
 }
 const CL = 'Clothing', ADV = 'Adventure clothing', FW = 'Footwear', SG = 'Sport gear',
@@ -624,9 +625,114 @@ function tagSeed(lists) {
   return lists;
 }
 
+// ---------------------------------------------------------------- Diving
+// A technical/drysuit diving kit, pre-organised into sections so the list reads as
+// a clear overview. Section ids are stable strings referenced by each item's `sec`.
+const DS = {
+  suit: 'dive-suit', rig: 'dive-rig', reg: 'dive-reg', light: 'dive-light',
+  mask: 'dive-mask', instr: 'dive-instr', acc: 'dive-acc', doc: 'dive-doc',
+};
+const DIVE_SECTIONS = [
+  { id: DS.suit,  name: 'Drysuit & exposure' },
+  { id: DS.rig,   name: 'Rig / BCD' },
+  { id: DS.reg,   name: 'Regulators' },
+  { id: DS.light, name: 'Lights' },
+  { id: DS.mask,  name: 'Mask & fins' },
+  { id: DS.instr, name: 'Instruments & deco' },
+  { id: DS.acc,   name: 'Accessories' },
+  { id: DS.doc,   name: 'Documents & certification' },
+];
+const DIVE = [
+  // Drysuit & exposure
+  it('Drysuit', { cat: SG, con: 'Checked luggage', sec: DS.suit }),
+  it('Drysuit undergarment / thermal', { cat: SG, con: 'Checked luggage', sec: DS.suit }),
+  it('Drysuit hood', { cat: SG, sec: DS.suit }),
+  it('Dry gloves + liners', { cat: SG, sec: DS.suit }),
+  it('Drysuit socks', { cat: SG, sec: DS.suit }),
+  // Rig / BCD
+  it('Backplate + wing', { cat: SG, con: 'Checked luggage', sec: DS.rig }),
+  it('Harness + crotch strap', { cat: SG, sec: DS.rig }),
+  it('Tank / cam bands', { cat: SG, sec: DS.rig }),
+  it('DSMB (surface marker buoy)', { cat: SG, sec: DS.rig }),
+  it('Spool / reel', { cat: SG, sec: DS.rig }),
+  it('Weight pockets + weights', { cat: SG, con: 'Checked luggage', sec: DS.rig }),
+  // Regulators
+  it('Primary regulator (1st + 2nd stage)', { cat: SG, sec: DS.reg }),
+  it('Backup regulator / long hose', { cat: SG, sec: DS.reg }),
+  it('Drysuit inflation hose', { cat: SG, sec: DS.reg }),
+  it('Deco / stage regulator', { cat: SG, sec: DS.reg }),
+  it('SPG / pressure gauge', { cat: SG, sec: DS.reg }),
+  // Lights
+  it('Primary canister light', { cat: SG, sec: DS.light, charge: true, restricted: true }),
+  it('Backup light 1', { cat: SG, sec: DS.light, restricted: true }),
+  it('Backup light 2', { cat: SG, sec: DS.light, restricted: true }),
+  it('Tank marker light', { cat: SG, sec: DS.light, restricted: true }),
+  it('Video / spotting light', { cat: SG, sec: DS.light, charge: true, restricted: true }),
+  // Mask & fins
+  it('Mask', { cat: SG, sec: DS.mask }),
+  it('Backup mask', { cat: SG, sec: DS.mask }),
+  it('Fins', { cat: SG, sec: DS.mask }),
+  it('Spring straps', { cat: SG, sec: DS.mask }),
+  // Instruments & deco
+  it('Dive computer', { cat: EL, sec: DS.instr, charge: true, restricted: true }),
+  it('Backup dive computer', { cat: EL, sec: DS.instr, charge: true, restricted: true }),
+  it('Compass', { cat: SG, sec: DS.instr }),
+  it('Wetnotes + pencil', { cat: SG, sec: DS.instr }),
+  it('Cutting tool / line cutter', { cat: SG, sec: DS.instr }),
+  // Accessories
+  it('Save-a-dive kit (o-rings, tools)', { cat: SG, sec: DS.acc }),
+  it('Mask defog', { cat: TO, sec: DS.acc, liquid: true }),
+  it('Boots', { cat: FW, sec: DS.acc }),
+  it('Reel / wet gloves', { cat: SG, sec: DS.acc }),
+  // Documents & certification
+  it('Certification card', { cat: DOC, sec: DS.doc }),
+  it('Dive logbook', { cat: DOC, sec: DS.doc }),
+  it('DAN / dive insurance', { cat: DOC, sec: DS.doc }),
+  it('Analyse gas & note MOD', { sv: '', cat: REM, sec: DS.doc, rem: true, ph: 'prep' }),
+];
+
+// Give every template a well-organised section list out of the box. Diving ships
+// with its own bespoke gear sections (set inline above); every other populated
+// template is grouped by a friendly, consistent scheme derived from each item's
+// category, and the empty activity scaffolds get a ready-to-fill skeleton. All of
+// it is fully editable in the app (Sections button + each item's Section picker).
+const SEC_ORDER = ['Clothing', 'Footwear', 'Gear & equipment', 'Tech & devices',
+  'Toiletries & body care', 'Food & drink', 'Documents & money', 'Comfort & misc', 'Reminders'];
+const CAT_SEC = {
+  'Clothing': 'Clothing', 'Adventure clothing': 'Clothing', 'Footwear': 'Footwear',
+  'Sport gear': 'Gear & equipment', 'Electronics': 'Tech & devices', 'Charging': 'Tech & devices',
+  'Toiletries': 'Toiletries & body care', 'Pharmacy / meds': 'Toiletries & body care',
+  'Food & drink': 'Food & drink', 'Documents & money': 'Documents & money',
+  'Comfort & misc': 'Comfort & misc', 'Reminders': 'Reminders',
+};
+// Empty scaffolds: a starting skeleton so they're ready to fill (no items yet).
+const SEC_SKELETONS = {
+  'Freediving': ['Wetsuit & exposure', 'Gear & equipment', 'Safety', 'Tech & devices', 'Documents & certification'],
+  'Strength': ['Clothing', 'Footwear', 'Equipment', 'Tech & devices'],
+  'Yoga / Mobility': ['Clothing', 'Mat & props', 'Tech & devices'],
+  'Breath work': ['Comfort & misc', 'Tech & devices'],
+};
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+const mkSecs = (listName, names) => names.map((n) => ({ id: `sec-${slug(listName)}-${slug(n)}`, name: n }));
+function sectionize(lists) {
+  for (const l of lists) {
+    if (l.name === 'Diving') continue;                 // already carries bespoke sections
+    if (SEC_SKELETONS[l.name]) { l.sections = mkSecs(l.name, SEC_SKELETONS[l.name]); continue; }
+    if (!l.items.length) continue;
+    const used = new Set();
+    for (const it of l.items) {
+      const nm = CAT_SEC[it.category] || 'Comfort & misc';
+      it.section = `sec-${slug(l.name)}-${slug(nm)}`;
+      used.add(nm);
+    }
+    l.sections = mkSecs(l.name, SEC_ORDER.filter((n) => used.has(n)));
+  }
+  return lists;
+}
+
 export function seedLists() {
   const L = (name, group, items, extra) => newList({ name, group, builtin: true, items, ...extra });
-  return tagSeed([
+  return sectionize(tagSeed([
     // Common base — always included on every trip, whatever the transport / activities.
     L('Travel', '', TRAVEL, { role: 'base' }),
     // Transport bases — auto-included by the trip's "Way of transport": Car brings a
@@ -637,7 +743,7 @@ export function seedLists() {
     // GA — Goal Activity
     L('Golf', 'GA', GOLF),
     L('Hiking', 'GA', HIKE),
-    L('Diving', 'GA', []),        // scaffold — to fill
+    L('Diving', 'GA', DIVE, { sections: DIVE_SECTIONS }),
     L('Freediving', 'GA', []),    // scaffold — to fill
     // WET — Workout, Exercise & Training
     L('Swim', 'WET', SWIM),
@@ -647,7 +753,7 @@ export function seedLists() {
     L('Yoga / Mobility', 'WET', []),  // scaffold — to fill
     L('Breath work', 'WET', []),      // scaffold — to fill
     // OE — Other Events: no packing lists for now (kept as an empty group)
-  ]);
+  ]));
 }
 
 // (Start-from templates were removed in v30: the common base is always included,
