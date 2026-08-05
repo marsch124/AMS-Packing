@@ -271,10 +271,14 @@ export async function ensureSeeded() {
 // Backups keep the familiar { lists, events } shape (resolved lists), so files
 // stay compatible across the storage change: import simply decomposes them back.
 
-export async function exportJSON() {
+// `extra` lets the caller fold in data that lives outside IndexedDB (e.g. the
+// small localStorage preferences like custom storage places), so a JSON backup
+// is a complete restore point. Photos/care/all item detail are already inside
+// `lists` because getLists() resolves the full item shape.
+export async function exportJSON(extra = {}) {
   const [lists, events] = await Promise.all([getLists(), getEvents()]);
   return JSON.stringify(
-    { app: 'ams-packing-list', version: 1, exportedAt: new Date().toISOString(), lists, events },
+    { app: 'ams-packing-list', version: 1, exportedAt: new Date().toISOString(), lists, events, ...extra },
     null, 2,
   );
 }
@@ -304,7 +308,7 @@ export async function importJSON(text, { merge = false } = {}) {
       await txP(tx);
     }
   }
-  return { lists: lists.length, events: events.length };
+  return { lists: lists.length, events: events.length, prefs: (data.prefs && typeof data.prefs === 'object') ? data.prefs : null };
 }
 
 // --- Trip sharing (one event, backend-free) ---

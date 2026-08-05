@@ -17,7 +17,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v58';
+const APP_VERSION = 'v59';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2564,7 +2564,7 @@ function howtoCard() {
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
-        <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Export backup (JSON)</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The app remembers your last backup and gives a gentle <b>💾</b> reminder on the Home screen when it’s been a while. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
+        <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Export backup (JSON)</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. The app remembers your last backup and gives a gentle <b>💾</b> reminder on the Home screen when it’s been a while. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
 
       </div>
     </details>
@@ -2582,6 +2582,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v59', '2026-08-05 · 08:00 UTC', false, 'Backups now include your Storage places too',
+      'A follow-up so a <b>JSON backup is a truly complete restore point</b>. Your <b>photos, care records and every item detail were already saved</b> in the backup (they live inside each item), and so were all your templates and trips. The one thing that lived <b>outside</b> the main store was the custom <b>Storage places</b> list you manage in Settings — plus your theme and list-view choice. Those are now <b>included in Export backup (JSON)</b> and <b>restored on Import</b>. Storage places are <b>merged</b> on import (you never lose a place you already had). Older backup files still import fine — they simply have no places to add. Nothing about the data itself changed; the backup is just now 100% complete.',
+      'Export/Import is now a full, faithful copy of everything you’ve set up — including your custom storage places — so moving to a new device or recovering after a browser wipe leaves nothing behind.'),
     v('v58', '2026-08-04 · 19:30 UTC', false, 'Keep your data safe — storage protection + backup reminders',
       'Two safeguards for the work you put into your lists, since everything lives <b>on this device</b> (in the browser) and nothing is uploaded. <b>(1) Storage protection:</b> on launch the app now asks the browser to mark its storage as <b>persistent</b>, so your data isn’t auto-deleted under storage pressure or by Safari’s clean-up of sites left unused. <b>(2) Backup reminders:</b> the app remembers when you last saved a backup and shows a gentle <b>💾 Back up your data</b> reminder on the Home screen when you have trips and it’s been a while (or you’ve never backed up) — tap it to jump to the export, or ✕ to be reminded later. <b>Settings → Your data</b> now also shows, at a glance, whether your storage is <b>🔒 protected</b> and <b>when you last backed up</b>. Nothing about your data changed — these just make it harder to lose. The strongest protection is still to <b>install the app</b> (iPhone: Share → Add to Home Screen; Mac: File → Add to Dock) and keep an <b>exported backup</b> in Files / iCloud Drive.',
       'Your hard-entered lists are far less likely to vanish: the browser is asked to protect them, and the app nudges you to keep a backup file — the real insurance if a browser ever clears its data.'),
@@ -2871,7 +2874,7 @@ async function renderSettings() {
   card.addEventListener('click', async (e) => {
     const x = e.target.closest('[data-x]')?.dataset.x; if (!x) return;
     if (x === 'export') {
-      const json = await db.exportJSON();
+      const json = await db.exportJSON({ prefs: collectPrefs() });
       downloadBlob(new Blob([json], { type: 'application/json' }), `ams-packing-list-backup-${todayISO()}.json`);
       markBackedUp();       // note when we last backed up, to keep the reminder honest
       render();             // refresh the "Last backup" status shown below
@@ -2884,6 +2887,7 @@ async function renderSettings() {
     const merge = confirm('Import as a MERGE (keep existing data)? Cancel = replace everything.');
     try {
       const res = await db.importJSON(text, { merge });
+      if (res.prefs) applyPrefs(res.prefs); // restore storage places / theme / view too
       alert(`Imported ${res.lists} list(s) and ${res.events} event(s).`);
       render();
     } catch (err) { alert(err.message || 'Could not import that file.'); }
@@ -2941,6 +2945,28 @@ function setTheme(v) {
   if (v === 'light' || v === 'dark') document.documentElement.setAttribute('data-theme', v);
   else document.documentElement.removeAttribute('data-theme');
   $$('.card.block .seg').forEach((s) => s.classList.toggle('on', s.querySelector('input')?.checked));
+}
+
+// --- Preferences in a backup ---
+// The small settings kept in localStorage (not IndexedDB), gathered so a JSON
+// export is a truly complete restore point. Operational keys (last-backup date,
+// reminder snooze, seed version) are intentionally excluded — they describe this
+// device's state, not your data, and shouldn't travel to another device.
+function collectPrefs() {
+  const prefs = { storageLocations: loadStorageLocs(), theme: currentTheme() };
+  try { const v = localStorage.getItem(VIEW_KEY); if (v) prefs.view = v; } catch { /* ignore */ }
+  return prefs;
+}
+// Apply prefs from an imported backup. Storage places are UNIONed with what's
+// already here, so an import never drops a place you already had.
+function applyPrefs(prefs) {
+  if (!prefs || typeof prefs !== 'object') return;
+  if (Array.isArray(prefs.storageLocations)) {
+    saveStorageLocs([...loadStorageLocs(), ...prefs.storageLocations]);
+    STORAGES = loadStorageLocs();
+  }
+  if (typeof prefs.theme === 'string') setTheme(prefs.theme);
+  try { if (typeof prefs.view === 'string' && VIEW_MODES.includes(prefs.view)) localStorage.setItem(VIEW_KEY, prefs.view); } catch { /* ignore */ }
 }
 
 // ---------- utilities ----------
