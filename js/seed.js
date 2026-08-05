@@ -5,7 +5,7 @@
 // Each item carries: category (what), container (where), phase (when), plus flags
 // itemType ('item' | 'reminder'), charging (needs charge / a cable), shortList
 // (part of the minimal "short home list"), optional seasons/contexts/transports, and sub-items.
-import { newItem, newList } from './model.js';
+import { newItem, newList, CONTAINER_ROLE, CONTAINER_LIST_NAME } from './model.js';
 
 // Compact item builder. Short keys keep the data readable:
 //   sv=Swedish original, cat=category, con=container, ph=phase, ctx=contexts,
@@ -691,6 +691,40 @@ const DIVE = [
   it('Analyse gas & note MOD', { sv: '', cat: REM, sec: DS.doc, rem: true, ph: 'prep' }),
 ];
 
+// ---------------------------------------------------------------- Containers
+// The bags/duffels/backpacks themselves, as maintainable objects. Names match the
+// built-in "Container" dropdown values so existing items resolve to these records.
+// capacityL = litres, maxKg = the bag's own weight ceiling (drives airline warnings).
+function cont(name, o = {}) {
+  return newItem({
+    name,
+    capacityL: o.L || 0,
+    maxKg: o.kg || 0,
+    weight: o.empty || 0,      // empty weight in grams
+    manufacturer: o.brand || '',
+    color: o.color || '',
+    storage: o.at || '',
+  });
+}
+const CONTAINERS_SEED = [
+  cont('Carry-on / hand luggage', { L: 40, kg: 8, empty: 2800, at: 'Loft / attic' }),
+  cont('Checked luggage', { L: 90, kg: 23, empty: 4200, at: 'Loft / attic' }),
+  cont('Bellroy backpack', { L: 24, kg: 8, empty: 1200, brand: 'Bellroy', at: 'Hall closet' }),
+  cont('Day pack', { L: 20, kg: 8, empty: 600, at: 'Hall closet' }),
+  cont('Hiking backpack', { L: 45, empty: 1800, at: 'Loft / attic' }),
+  cont('Climbing backpack', { L: 40, empty: 1500, at: 'Loft / attic' }),
+  cont('Duffel bag', { L: 60, empty: 1300, at: 'Loft / attic' }),
+  cont('Swim bag', { L: 20, empty: 400, at: 'Bedroom wardrobe' }),
+  cont('Triathlon bag', { L: 40, empty: 1000, at: 'Bedroom wardrobe' }),
+  cont('Golf bag', { L: 35, empty: 3000, at: 'Garage' }),
+  cont('Toiletry bag', { L: 5, empty: 300, at: 'Bathroom cabinet' }),
+  cont('Tech pouch', { L: 3, empty: 250, at: 'Hall closet' }),
+  cont('Electronics bag', { L: 5, empty: 500, brand: 'Targus', at: 'Hall closet' }),
+  cont('Cool box', { L: 25, empty: 2500, at: 'Garage' }),
+  cont('Handbag', { L: 8, empty: 500, at: 'Bedroom wardrobe' }),
+  cont('RV storage box', { L: 50, empty: 1500, at: 'RV / camper' }),
+];
+
 // Give every template a well-organised section list out of the box. Diving ships
 // with its own bespoke gear sections (set inline above); every other populated
 // template is grouped by a friendly, consistent scheme derived from each item's
@@ -716,6 +750,7 @@ const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(
 const mkSecs = (listName, names) => names.map((n) => ({ id: `sec-${slug(listName)}-${slug(n)}`, name: n }));
 function sectionize(lists) {
   for (const l of lists) {
+    if (l.role === CONTAINER_ROLE) continue;            // the Containers catalogue has no sections
     if (l.name === 'Diving') continue;                 // already carries bespoke sections
     if (SEC_SKELETONS[l.name]) { l.sections = mkSecs(l.name, SEC_SKELETONS[l.name]); continue; }
     if (!l.items.length) continue;
@@ -753,6 +788,8 @@ export function seedLists() {
     L('Yoga / Mobility', 'WET', []),  // scaffold — to fill
     L('Breath work', 'WET', []),      // scaffold — to fill
     // OE — Other Events: no packing lists for now (kept as an empty group)
+    // Containers — the bags themselves (role 'container'; kept out of trips & pickers).
+    L(CONTAINER_LIST_NAME, '', CONTAINERS_SEED, { role: CONTAINER_ROLE }),
   ]));
 }
 

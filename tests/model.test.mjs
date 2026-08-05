@@ -14,6 +14,7 @@ import {
   coerceMembership, newMembership, resolveMembership, resolveTemplate, resolveTemplateItems, buildCatalog,
   applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   normalizeSections, newSection, sectionName, groupItemsBySection, groupBySection,
+  containerNames, containerLimits,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -372,6 +373,7 @@ test('seedLists: the built-in Diving template ships pre-filled with sections', (
 
 test('seedLists: EVERY template ships with a well-formed section list', () => {
   for (const l of seedLists()) {
+    if (l.role === 'container') continue; // the Containers catalogue isn't a template
     assert.ok(Array.isArray(l.sections) && l.sections.length > 0, `${l.name} has sections`);
     assert.ok(l.sections.every((s) => s.id && s.name), `${l.name} sections are well-formed`);
     const ids = new Set(l.sections.map((s) => s.id));
@@ -1180,4 +1182,48 @@ test('buildCatalog: section survives the migration round-trip', () => {
   assert.deepEqual(tmpl.sections.map((s) => s.name), ['Lights']);
   const resolved = resolveTemplateItems(tmpl, new Map(items.map((i) => [i.id, i])), memberships);
   assert.equal(resolved[0].section, light.id);        // membership kept the section id
+});
+
+// --- Containers (bags as maintainable objects) ------------------------------
+
+test('capacityL + maxKg round-trip through the catalog', () => {
+  const bag = newItem({ name: 'Osprey 40', capacityL: 40, maxKg: 8 });
+  assert.equal(bag.capacityL, 40);
+  assert.equal(bag.maxKg, 8);
+  const m = newMembership({ itemId: bag.id, templateId: 'c1' });
+  const back = membershipFromResolved(bag, 'c1', resolveMembership(bag, m), 0, m);
+  const rebuilt = resolveMembership(applyIntrinsic(newItem({ name: 'Osprey 40' }), bag), back);
+  assert.equal(rebuilt.capacityL, 40);
+  assert.equal(rebuilt.maxKg, 8);
+});
+
+test('containerNames: merges built-in names with the user container records', () => {
+  const cl = newList({ name: 'Containers', role: 'container', items: [newItem({ name: 'Osprey 40' })] });
+  const names = containerNames([cl]);
+  assert.ok(names.includes('Checked luggage'));  // built-in default
+  assert.ok(names.includes('Osprey 40'));         // user record appended
+  assert.ok(names.indexOf('Checked luggage') < names.indexOf('Osprey 40')); // defaults first
+});
+
+test('containerLimits + bagLoads: a real bag maxKg drives the over-limit warning', () => {
+  const cl = newList({ name: 'Containers', role: 'container', items: [newItem({ name: 'Osprey 40', maxKg: 10 })] });
+  const limits = containerLimits([cl]);
+  assert.equal(limits['Osprey 40'], 10);
+  assert.equal(limits['Checked luggage'], 23); // built-in default still present
+  const entries = [newItem({ name: 'Rock', container: 'Osprey 40', weight: 12000 })]; // 12 kg
+  const [bag] = bagLoads(entries, 0, limits);
+  assert.equal(bag.limitKg, 10);
+  assert.equal(bag.over, true);
+  // Without the real limit, an unknown bag has no ceiling and never flags "over".
+  assert.equal(bagLoads(entries, 0)[0].over, false);
+});
+
+test('seedLists: ships a Containers catalogue (role container) with capacities', () => {
+  const cl = seedLists().find((l) => l.role === 'container');
+  assert.ok(cl, 'a container list exists');
+  assert.equal(cl.name, 'Containers');
+  assert.equal(cl.sections.length, 0, 'containers have no sections');
+  assert.ok(cl.items.length >= 10, `seeded with bags (${cl.items.length})`);
+  assert.ok(cl.items.some((i) => i.capacityL > 0), 'some bags have a capacity');
+  assert.ok(cl.items.some((i) => i.maxKg > 0), 'some bags have a max weight');
 });
