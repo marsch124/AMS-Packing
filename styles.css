@@ -1535,6 +1535,21 @@ legend {
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* Tiny build-version marker in the far bottom-right corner of the tab bar —
+   just a quiet reference for Martin; sits over the Settings tab's corner and
+   never intercepts taps. */
+.tab-ver {
+  position: absolute;
+  right: 4px;
+  bottom: calc(env(safe-area-inset-bottom) + 1px);
+  font-size: .52rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: var(--muted);
+  opacity: .5;
+  pointer-events: none;
+}
+
 .tabbar a {
   flex: 1;
   display: flex;

@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v60';
+const APP_VERSION = 'v61';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2682,6 +2682,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v61', '2026-08-05 · 13:00 UTC', false, 'Tiny version marker in the tab-bar corner',
+      'A very small <b>build-version label</b> (e.g. “v61”) now sits in the <b>far bottom-right corner</b> of the navigation bar, just past the Settings tab — a quiet reference so you can tell at a glance which version is running on any device. It’s deliberately faint and doesn’t get in the way of tapping Settings. The fuller “AMS Packing List · v61” line at the bottom of the Home screen is unchanged.',
+      'You can confirm the running version instantly, from any screen, without opening Settings.'),
     v('v60', '2026-08-05 · 12:00 UTC', false, 'Actions — a to-do list, per item and central',
       'A new <b>Actions</b> tab (the red one in the bottom bar) gives you a proper <b>to-do list</b>. Actions come in two kinds. <b>Tied to an item:</b> open any item’s editor (Templates tab) and use the new <b>Actions</b> panel to jot things to do for it — “replace foam tips”, “re-wax the zip”, “charge before the trip”. Because each item lives once in the catalog, its actions follow it everywhere, and the item’s row shows a small <b>☑ count</b> of open to-dos. <b>General (loose):</b> on the Actions tab tap <b>New</b> to add a to-do that isn’t about any one item — you can still tie it to an item later from the same editor. Every action can carry a <b>priority</b> (High / Normal), a <b>when</b> (a trip phase like “≥1 week ahead”, or a specific <b>date</b>), and a tick to mark it <b>done</b>. The <b>Actions</b> tab gathers them all in one place, open ones first (High before Normal, soonest first), with completed ones tucked into a collapsible <b>Done</b> group. Ticking an item’s action done is <b>permanent on that item</b> — it doesn’t reset each trip. Actions are stored on-device like everything else and are <b>included in your JSON backup</b>. Also in this release: an item’s big <b>name</b> now sits at the very top of its editor, above the “① The item itself” heading, with the redundant “Item name” label removed.',
       'One place to track everything you need to <i>do</i> — not just pack — whether it belongs to a specific piece of gear or stands on its own, sorted so the urgent, soonest things rise to the top.'),
@@ -3283,6 +3286,9 @@ function applyMode() {
 window.addEventListener('hashchange', render);
 
 (async function init() {
+  // Show the build version in the tab-bar corner marker.
+  const verEl = document.querySelector('[data-app-version]');
+  if (verEl) verEl.textContent = APP_VERSION;
   // apply saved theme (also handled inline in index.html to avoid a flash)
   const t = currentTheme();
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
