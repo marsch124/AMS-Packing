@@ -569,7 +569,7 @@ function eventForm(ev, lists, isEdit) {
       ${baseHint || transportHint ? `<p class="grp-hint">${baseHint}${transportHint}</p>` : ''}</fieldset>
     <fieldset><legend>Time of year</legend>${radioRow('season', SEASONS, ev.season)}</fieldset>
     <fieldset data-trip-only><legend>Catering</legend>${radioRow('catering', CATERING.map((c) => ({ value: c.id, label: c.label })), ev.catering)}</fieldset>
-    <fieldset><legend>Context <em>(optional — narrows Workout / Exercise lists only)</em></legend>${checkRow('contexts', CONTEXTS, ev.contexts)}</fieldset>
+    <fieldset><legend>WET Options</legend>${checkRow('contexts', CONTEXTS, ev.contexts)}</fieldset>
 
     <fieldset><legend data-activities-legend>Extra activities to pack for</legend>
       <p class="grp-hint" data-activities-hint></p>
