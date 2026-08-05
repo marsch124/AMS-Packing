@@ -13,6 +13,7 @@ import {
   maintenanceByDate, logMaintenance, addDays, daysBetween, MAINTENANCE_SOON_DAYS, MAX_PHOTOS,
   coerceMembership, newMembership, resolveMembership, resolveTemplate, resolveTemplateItems, buildCatalog,
   applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
+  normalizeSections, newSection, sectionName, groupItemsBySection, groupBySection,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1060,4 +1061,93 @@ test('buildCatalog: item metadata survives the migration round-trip', () => {
   assert.equal(bag.price, 250);
   assert.equal(bag.currency, 'USD');
   assert.equal(bag.condition, 'good');
+});
+
+// --- Sections (per-template groupings) -------------------------------------
+
+test('normalizeSections: drops blank names, keeps ids, dedups', () => {
+  const a = newSection('Lights');
+  const out = normalizeSections([a, { id: '', name: '  Rig  ' }, { name: '' }, a]);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].id, a.id);
+  assert.equal(out[0].name, 'Lights');
+  assert.equal(out[1].name, 'Rig');       // trimmed
+  assert.ok(out[1].id);                    // generated an id
+});
+
+test('coerceList / newList: sections normalize and default to empty', () => {
+  assert.deepEqual(newList({ name: 'X' }).sections, []);
+  const l = coerceList({ id: 't1', name: 'Dive', sections: [{ id: 's1', name: 'Rig' }, { name: '' }] });
+  assert.equal(l.sections.length, 1);
+  assert.equal(l.sections[0].name, 'Rig');
+});
+
+test('membership round-trip: section id survives resolve -> save', () => {
+  const item = newItem({ name: 'Head torch' });
+  const m = newMembership({ itemId: item.id, templateId: 't1', section: 's-lights' });
+  const resolved = resolveMembership(item, m);
+  assert.equal(resolved.section, 's-lights');            // read onto the resolved item
+  const back = membershipFromResolved(item, 't1', resolved, 0, null);
+  assert.equal(back.section, 's-lights');                // written back to the membership
+  // No section -> stays empty, and it is NOT an intrinsic item default.
+  assert.equal(resolveMembership(item, newMembership({ itemId: item.id, templateId: 't2' })).section, '');
+  assert.equal(item.section, '');
+});
+
+test('same item, different section per template', () => {
+  const item = newItem({ name: 'Head torch' });
+  const inDive = resolveMembership(item, newMembership({ itemId: item.id, templateId: 'dive', section: 'lights' }));
+  const inRun = resolveMembership(item, newMembership({ itemId: item.id, templateId: 'run', section: 'visibility' }));
+  assert.equal(inDive.section, 'lights');
+  assert.equal(inRun.section, 'visibility');   // independent — no cross-contamination
+});
+
+test('groupItemsBySection: template order, empty sections omitted, ungrouped last', () => {
+  const sections = [newSection('Lights'), newSection('Rig'), newSection('Regulators')];
+  const [L, R, G] = sections;
+  const items = [
+    newItem({ name: 'Reg 1', section: G.id }),
+    newItem({ name: 'Light 1', section: L.id }),
+    newItem({ name: 'Loose thing' }),                 // no section
+    newItem({ name: 'Light 2', section: L.id }),
+  ];
+  const groups = groupItemsBySection(items, sections);
+  // Rig has no items -> omitted; Lights before Regulators (template order); Ungrouped last.
+  assert.deepEqual(groups.map((g) => (g.section ? g.section.name : 'Ungrouped')), ['Lights', 'Regulators', 'Ungrouped']);
+  assert.equal(groups[0].items.length, 2);
+  assert.equal(groups[2].section, null);
+});
+
+test('groupBySection: trip entries by name, first-appearance order, Everything else last', () => {
+  const entries = [
+    newItem({ name: 'a', section: 'Regulators' }),
+    newItem({ name: 'b', section: 'Lights' }),
+    newItem({ name: 'c' }),                            // unsectioned
+    newItem({ name: 'd', section: 'Regulators' }),
+  ];
+  const groups = groupBySection(entries);
+  assert.deepEqual(groups.map((g) => g.label), ['Regulators', 'Lights', 'Everything else']);
+  assert.equal(groups[0].entries.length, 2);          // both Regulators merged
+});
+
+test('sectionName + buildTotalEntries: trip line carries the section DISPLAY NAME', () => {
+  const light = newSection('Lights');
+  const list = coerceList(newList({ id: 'dive', name: 'Diving', role: '', sections: [light] }));
+  const torch = newItem({ name: 'Head torch', section: light.id });
+  assert.equal(sectionName(list, light.id), 'Lights');
+  list.items = [torch];
+  const ev = newEvent({ mode: 'quick', activities: ['dive'] });
+  const entries = buildTotalEntries(ev, [list]);
+  assert.equal(entries[0].section, 'Lights');         // id resolved to name for the trip
+});
+
+test('buildCatalog: section survives the migration round-trip', () => {
+  const light = newSection('Lights');
+  const list = coerceList(newList({ id: 'dive', name: 'Diving', sections: [light],
+    items: [newItem({ name: 'Head torch', section: light.id })] }));
+  const { items, memberships, templates } = buildCatalog([list]);
+  const tmpl = templates.find((t) => t.id === 'dive');
+  assert.deepEqual(tmpl.sections.map((s) => s.name), ['Lights']);
+  const resolved = resolveTemplateItems(tmpl, new Map(items.map((i) => [i.id, i])), memberships);
+  assert.equal(resolved[0].section, light.id);        // membership kept the section id
 });

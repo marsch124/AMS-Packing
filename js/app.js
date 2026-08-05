@@ -2,7 +2,7 @@
 import {
   CATEGORIES, CONTAINERS, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
-  buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy,
+  buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, bagLoads, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v62';
+const APP_VERSION = 'v63';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -684,8 +684,12 @@ async function renderEventForm(existing) {
 // Event Total List (the heart)
 // ============================================================
 const VIEW_KEY = 'ams-view';
-const VIEW_MODES = ['when', 'container', 'category'];
+const VIEW_MODES = ['when', 'container', 'category', 'section'];
 function totalView() { try { const v = localStorage.getItem(VIEW_KEY); return VIEW_MODES.includes(v) ? v : 'when'; } catch { return 'when'; } }
+// Does this trip have any sectioned items? (The Section group-by only appears then.)
+function tripHasSections(ev) { return (ev.entries || []).some((e) => (e.section || '').trim()); }
+// The effective group-by for a trip: fall back off 'section' when nothing is sectioned.
+function viewFor(ev) { const v = totalView(); return (v === 'section' && !tripHasSections(ev)) ? 'when' : v; }
 function setTotalView(v) { try { localStorage.setItem(VIEW_KEY, v); } catch {} }
 let expandedEntry = null; // id of the entry whose inline editor is open
 let flagFilter = new Set(); // active "sort out" filters on the Total List: 'liquid' and/or 'charge'
@@ -743,12 +747,12 @@ async function renderEvent(eventId) {
 
   if (p.total) wrap.appendChild(logisticsSummary(ev));
 
-  const view = totalView();
+  const view = viewFor(ev);
   const segBtn = (val, label) => `<label class="seg${view === val ? ' on' : ''}"><input type="radio" name="tview" value="${val}"${view === val ? ' checked' : ''}>${label}</label>`;
   const toolbar = h(`<div class="toolbar">
     <span class="toolbar-lbl">Group by</span>
     <div class="segmented small">
-      ${segBtn('when', 'When')}${segBtn('container', 'Where')}${segBtn('category', 'Category')}
+      ${segBtn('when', 'When')}${segBtn('container', 'Where')}${segBtn('category', 'Category')}${tripHasSections(ev) ? segBtn('section', 'Section') : ''}
     </div>
     <div class="spacer"></div>
     <button class="btn ghost" data-act="add">${IC.plus}<span>Item</span></button>
@@ -985,8 +989,8 @@ function renderTotalBody(body, ev) {
     return;
   }
   if (weightSort) { renderHeaviest(body, ev, entries); return; }
-  const mode = totalView();
-  // Secondary sub-grouping: When→by container, Where→by phase, Category→by phase.
+  const mode = viewFor(ev);
+  // Secondary sub-grouping: When→by container; Where/Category/Section→by phase.
   const subOf = mode === 'when'
     ? (entries) => groupByContainer(entries).map((g) => ({ label: g.container || 'Unpacked', entries: g.entries }))
     : (entries) => entriesByPhase(entries).map((g) => ({ label: g.phase.label, entries: g.entries }));
@@ -1030,10 +1034,11 @@ function renderHeaviest(body, ev, entries) {
 
 function entryRow(ev, entry, body, showWeight = false) {
   const isRem = entry.itemType === 'reminder';
-  const mode = totalView();
+  const mode = viewFor(ev);
   // Show the dimensions NOT used as the current grouping, so the row stays informative.
   const subBits = [];
   if (entry.storage) subBits.push(`📍 ${esc(entry.storage)}`);
+  if (mode !== 'section' && entry.section) subBits.push(`🗂 ${esc(entry.section)}`);
   if (mode !== 'container' && entry.container) subBits.push(esc(entry.container));
   if (mode !== 'category' && entry.category) subBits.push(esc(entry.category));
   if (mode !== 'when') subBits.push(esc(phaseLabel(entry.phase)));
@@ -1157,6 +1162,9 @@ function promoteEntryToTemplate(entry, lists) {
 function entryEditor(ev, entry, body) {
   const ed = h('<div class="editor"></div>');
   const src = sourceItemForEntry(entry); // the template item behind this entry, if any
+  // Existing section names on this trip, offered as suggestions so an item can be
+  // moved into another section here (the choice sticks through Regenerate).
+  const tripSecNames = [...new Set((ev.entries || []).map((e) => (e.section || '').trim()).filter(Boolean))];
   ed.innerHTML = `
     <label class="field"><span>Item</span><input name="name" value="${esc(entry.name)}"></label>
     <div class="row2">
@@ -1167,6 +1175,7 @@ function entryEditor(ev, entry, body) {
       <label class="field"><span>Container</span>${selectHtml('container', CONTAINERS, entry.container)}</label>
       <label class="field"><span>When</span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), entry.phase)}</label>
     </div>
+    <label class="field"><span>Section <em>groups this item on the list</em></span><input name="section" value="${esc(entry.section)}" list="entry-sections" placeholder="optional" autocomplete="off"><datalist id="entry-sections">${tripSecNames.map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></label>
     <div class="row2">
       <label class="field"><span>Weight (g)</span><input type="number" name="weight" min="0" inputmode="numeric" value="${entry.weight || ''}" placeholder="0"></label>
       <div class="checks">
@@ -1197,6 +1206,7 @@ function entryEditor(ev, entry, body) {
     entry.qty = ($('input[name=qty]', ed).value || '').trim();
     entry.category = $('select[name=category]', ed).value;
     entry.container = $('select[name=container]', ed).value;
+    entry.section = ($('input[name=section]', ed).value || '').trim();
     entry.phase = $('select[name=phase]', ed).value;
     entry.weight = Math.max(0, parseInt($('input[name=weight]', ed).value, 10) || 0);
     entry.perNight = $('input[name=perNight]', ed).checked;
@@ -1619,6 +1629,7 @@ async function renderList(listId, openItemId) {
   wrap.appendChild(h(`<div class="toolbar">
     ${isLoose ? '' : `<label class="inline-field"><span>Group</span>${selectHtml('group', groupOpts, list.group)}</label>`}
     <div class="spacer"></div>
+    ${isLoose ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
     ${isLoose ? `<button class="btn ghost" data-batch>${IC.list}<span>Add several</span></button>` : ''}
     <button class="btn ghost" data-add>${IC.plus}<span>Add item</span></button>
   </div>`));
@@ -1656,7 +1667,17 @@ async function renderList(listId, openItemId) {
     if (!list.items.length) { body.appendChild(h(`<div class="empty"><p class="empty-s">${emptyMsg}</p></div>`)); return; }
     const shown = list.items.filter((it) => itemMatchesFilter(it, itemFilter));
     if (!shown.length) { body.appendChild(h('<div class="empty"><p class="empty-s">No items match these filters.</p></div>')); return; }
-    for (const it of shown) body.appendChild(listItemRow(list, it, () => openItem, (v) => { openItem = v; }, draw));
+    const rowFor = (it) => listItemRow(list, it, () => openItem, (v) => { openItem = v; }, draw);
+    if (isLoose || !list.sections.length) {
+      for (const it of shown) body.appendChild(rowFor(it));
+    } else {
+      // Grouped view: the template's sections in their chosen order, unsectioned last.
+      for (const g of groupItemsBySection(shown, list.sections)) {
+        const label = g.section ? g.section.name : 'Ungrouped';
+        body.appendChild(h(`<div class="sec-h${g.section ? '' : ' loose'}"><span class="sec-name">${esc(label)}</span><span class="sec-count">${g.items.length}</span></div>`));
+        for (const it of g.items) body.appendChild(rowFor(it));
+      }
+    }
   };
   draw();
   if (openItem) requestAnimationFrame(() => $('.item-editor', body)?.scrollIntoView({ block: 'center' }));
@@ -1669,6 +1690,15 @@ async function renderList(listId, openItemId) {
   wrap.querySelector('[data-batch]')?.addEventListener('click', () => {
     const added = batchAddItems(list);
     added.then((n) => { if (n > 0) { openItem = null; draw(); } });
+  });
+  wrap.querySelector('[data-sections]')?.addEventListener('click', () => {
+    manageSections(list).then((changed) => {
+      if (!changed) return;
+      // Refresh the "Sections (n)" button label and the grouped body.
+      const btn = wrap.querySelector('[data-sections] span');
+      if (btn) btn.textContent = `Sections${list.sections.length ? ` (${list.sections.length})` : ''}`;
+      draw();
+    });
   });
   wrap.querySelector('[data-rename]')?.addEventListener('click', async () => {
     const name = (prompt('Rename template:', list.name) || '').trim();
@@ -1716,6 +1746,83 @@ function batchAddItems(list) {
         finish(names.length);
       }
     });
+  });
+}
+
+// Manage a template's sections: add, rename, reorder and delete. Resolves true if
+// anything was saved (so the caller can redraw). Deleting a section keeps its items
+// — they simply fall back to "Ungrouped".
+function manageSections(list) {
+  return new Promise((resolve) => {
+    let secs = (list.sections || []).map((s) => ({ ...s })); // working copy
+    const overlay = h('<div class="overlay"></div>');
+    const body = h('<div class="modal sections-modal"></div>');
+    overlay.appendChild(body);
+    document.body.appendChild(overlay);
+    let settled = false;
+    const finish = (changed) => { if (settled) return; settled = true; overlay.remove(); document.removeEventListener('keydown', onKey); resolve(changed); };
+    const onKey = (e) => { if (e.key === 'Escape') finish(false); };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+
+    // Pull the current text-field values back into `secs` before any reorder/delete
+    // re-render, so in-progress renames aren't lost.
+    const syncFromDOM = () => {
+      $$('.sec-row', body).forEach((row, i) => { if (secs[i]) secs[i].name = ($('input', row).value || '').trim(); });
+    };
+    const draw = () => {
+      const rows = secs.map((s, i) => `<div class="sec-row" data-i="${i}">
+        <input value="${esc(s.name)}" placeholder="Section name" aria-label="Section name">
+        <button class="iconbtn sm" data-m="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">▲</button>
+        <button class="iconbtn sm" data-m="down" ${i === secs.length - 1 ? 'disabled' : ''} aria-label="Move down">▼</button>
+        <button class="iconbtn sm" data-m="del" aria-label="Delete section">${IC.trash}</button>
+      </div>`).join('');
+      body.innerHTML = `<h2>Sections — ${esc(list.name)}</h2>
+        <p class="modal-sub">Group this template's items (e.g. Lights, Rig, Regulators). Each item picks its section in its editor. Deleting a section keeps its items — they move to “Ungrouped”. Sections are specific to this template.</p>
+        <div class="sec-rows">${rows || '<p class="muted">No sections yet — add the first one below.</p>'}</div>
+        <div class="sec-add"><input class="sec-new" placeholder="New section name" aria-label="New section name"><button class="btn" data-m="add">${IC.plus}<span>Add</span></button></div>
+        <div class="modal-actions">
+          <button class="btn primary lg" data-m="save">Save sections</button>
+          <button class="btn ghost lg" data-m="cancel">Cancel</button>
+        </div>`;
+    };
+    draw();
+
+    body.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.classList.contains('sec-new')) { e.preventDefault(); body.querySelector('[data-m=add]').click(); }
+    });
+    body.addEventListener('click', async (e) => {
+      const m = e.target.closest('[data-m]')?.dataset.m;
+      if (!m) return;
+      if (m === 'cancel') { finish(false); return; }
+      if (m === 'add') {
+        syncFromDOM();
+        const inp = $('.sec-new', body);
+        const name = (inp.value || '').trim();
+        if (name) secs.push(newSection(name));
+        draw();
+        $('.sec-new', body)?.focus();
+        return;
+      }
+      const row = e.target.closest('.sec-row');
+      if (row) {
+        const i = Number(row.dataset.i);
+        syncFromDOM();
+        if (m === 'up' && i > 0) { [secs[i - 1], secs[i]] = [secs[i], secs[i - 1]]; draw(); return; }
+        if (m === 'down' && i < secs.length - 1) { [secs[i + 1], secs[i]] = [secs[i], secs[i + 1]]; draw(); return; }
+        if (m === 'del') { secs.splice(i, 1); draw(); return; }
+      }
+      if (m === 'save') {
+        syncFromDOM();
+        const kept = secs.filter((s) => s.name); // drop blank-named rows
+        const validIds = new Set(kept.map((s) => s.id));
+        // Items whose section was deleted fall back to Ungrouped.
+        for (const it of list.items) if (it.section && !validIds.has(it.section)) it.section = '';
+        list.sections = kept;
+        if (await saveGuard(db.saveList(list))) finish(true); else finish(false);
+      }
+    });
+    setTimeout(() => $('.sec-row input, .sec-new', body)?.focus(), 30);
   });
 }
 
@@ -1771,6 +1878,32 @@ function listItemRow(list, it, getOpen, setOpen, draw) {
     return holder;
   }
   return row;
+}
+
+// The per-template Section picker for the item editor (layer 2): the template's
+// sections, plus "— No section —" and "＋ New section…" which reveals a name field.
+function sectionFieldHTML(list, it) {
+  const opts = [{ value: '', label: '— No section —' }]
+    .concat((list.sections || []).map((s) => ({ value: s.id, label: s.name })))
+    .concat([{ value: '__new__', label: '＋ New section…' }]);
+  const cur = (list.sections || []).some((s) => s.id === it.section) ? it.section : '';
+  return `<label class="field"><span>Section <em>groups this item in the list</em></span>${selectHtml('section', opts, cur)}</label>
+    <label class="field section-new-field hidden"><span>New section name</span><input name="section-new" value="" placeholder="e.g. Regulators" autocomplete="off"></label>`;
+}
+
+// Read the Section picker on Save. A chosen "＋ New section…" with a typed name is
+// created on the template (reusing a same-named section if one already exists), and
+// the item is pointed at its id. Returns the section id ('' = none). When the picker
+// isn't shown (the Loose bin) the item's existing section is left untouched.
+function readSectionFromEditor(ed, list, it) {
+  const sel = $('select[name=section]', ed);
+  if (!sel) return it.section || '';
+  if (sel.value !== '__new__') return sel.value;
+  const name = ($('input[name=section-new]', ed)?.value || '').trim();
+  if (!name) return '';
+  let existing = (list.sections || []).find((s) => s.name.toLowerCase() === name.toLowerCase());
+  if (!existing) { existing = newSection(name); list.sections = [...(list.sections || []), existing]; }
+  return existing.id;
 }
 
 function itemEditor(list, it, setOpen, draw) {
@@ -1936,6 +2069,7 @@ function itemEditor(list, it, setOpen, draw) {
     <section class="layer layer-membership">
       <div class="layer-h"><span class="layer-num">2</span><span class="layer-t">In this list · ${esc(list.name)}</span><span class="layer-sub">Just for this template — changing these here doesn't touch the item in other lists.</span></div>
       <label class="field"><span>Qty</span><input name="qty" value="${esc(it.qty)}" placeholder="optional"></label>
+      ${list.role === 'loose' ? '' : sectionFieldHTML(list, it)}
       <div class="checks">
         <label class="check${it.perNight ? ' on' : ''}"><input type="checkbox" name="perNight" ${it.perNight ? 'checked' : ''}>Per night (scales qty)</label>
       </div>
@@ -2039,6 +2173,11 @@ function itemEditor(list, it, setOpen, draw) {
       $('.lifecycle', ed)?.classList.toggle('is-retired', e.target.checked);
     }
     if (e.target.name === 'interval') $('.care-custom', ed)?.classList.toggle('hidden', e.target.value !== 'custom');
+    if (e.target.name === 'section') {
+      const isNew = e.target.value === '__new__';
+      $('.section-new-field', ed)?.classList.toggle('hidden', !isNew);
+      if (isNew) $('input[name=section-new]', ed)?.focus();
+    }
     if (e.target.name === 'storage-sel') {
       const isNew = e.target.value === '__new__';
       $('.care-newstorage', ed)?.classList.toggle('hidden', !isNew);
@@ -2101,6 +2240,7 @@ function itemEditor(list, it, setOpen, draw) {
     if (x === 'save') {
       it.name = ($('input[name=name]', ed).value || '').trim();
       it.qty = ($('input[name=qty]', ed).value || '').trim();
+      it.section = readSectionFromEditor(ed, list, it);
       it.container = $('select[name=container]', ed).value;
       it.phase = $('select[name=phase]', ed).value;
       it.weight = Math.max(0, parseInt($('input[name=weight]', ed).value, 10) || 0);
@@ -2558,6 +2698,7 @@ function howtoCard() {
           <li><b>OE — Other Events:</b> small nice things (a coffee, a winter bath, a walk).</li>
         </ul>
         <p>Open a template to add or edit its items. Each item carries a Swedish alias shown as a subtitle, so your original wording is never lost. At the top of a template’s item list sit <b>quick-filter chips</b> — <b>💧 Liquids</b>, <b>⚡ Charging</b>, <b>⚠️ Restricted</b>, <b>🧰 Has care</b>, <b>📷 Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
+        <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
 
         <h3>Anatomy of an item</h3>
         <p>Every item has three organising dimensions and a set of flags &amp; conditions:</p>
@@ -2624,7 +2765,7 @@ function howtoCard() {
 
         <h3>Reading &amp; organising the list</h3>
         <ul>
-          <li><b>Group by</b> When / Where / Category — same list, three lenses.</li>
+          <li><b>Group by</b> When / Where / Category (and <b>Section</b>, once a trip has sectioned items) — same list, several lenses.</li>
           <li><b>Sort out</b> — quick filters above the list isolate all <b>💧 Liquids</b> (for the wash bag / 100 ml rule) or all <b>⚡ Charge</b> items (to round up cables and chargers). Tap a chip to show only those; tap <b>Show all</b> to bring the full list back. Ticking and editing work the same in the filtered view. Mark an item as a liquid or charge item with the 💧 / ⚡ toggles in its editor.</li>
           <li><b>🪨 Heaviest</b> — reorders the list heaviest-first with each item’s weight shown, so when a bag is over its limit you can see at a glance what to leave behind. It uses the real load (weight × quantity, including per-night scaling); items without a weight sit at the bottom. Combine it with a Liquids/Charge filter to rank just those. Add a weight to an item in its editor to make it count.</li>
           <li><b>Tap an item</b> to open a quick editor for this trip’s bits (Qty, Category, Container, When, weight, flags, note). For the item’s deeper settings — conditions, which templates it’s in, storage &amp; maintenance — tap <b>Edit the full item</b> to jump straight into the full item editor, then use Back to return to your trip. If the item was only added to this one trip, the same button offers to <b>add it to a template first</b> (you pick which) so it’s saved for reuse — then opens its full editor.</li>
@@ -2696,6 +2837,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v63', '2026-08-05 · 16:00 UTC', false, 'Sections — group a template’s items, and see them on the trip',
+      'You can now split any <b>template</b> into named <b>sections</b> and see those groupings carry all the way through to a trip’s <b>Packing List</b>. On a template, tap the new <b>Sections</b> button to add, rename, reorder or delete sections — for a Diving list that might be <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Then open any item and, under <b>“② In this list”</b>, pick its <b>Section</b> (or <b>＋ New section…</b> to make one on the spot). The template view then shows tidy, counted section blocks in the order you chose, with anything unassigned under <b>Ungrouped</b>. Crucially, a section is remembered <b>per template</b>: the same head torch can sit in <b>Lights</b> in your Diving list and a different section in your Running list, with neither affecting the other. On a <b>trip</b>, a new <b>Section</b> option appears in the <b>Group by</b> row (only when the trip actually has sections); items keep the section from the list they came from, same-named sections from different lists merge under one heading, and everything without a section falls under <b>Everything else</b>. You can also re-file an item’s section right on the trip from its quick editor, and that choice sticks. Deleting a section never deletes items — they simply move to Ungrouped. Sections are saved on-device and travel in your <b>JSON backup</b> and shared trips.',
+      'A long template becomes a clear, sectioned overview — and, for the first time, those same groupings show up on the actual packing list for a trip, so related gear (all your regulators, all your lights) stays together right where you pack.'),
     v('v62', '2026-08-05 · 14:00 UTC', false, 'Open to-dos surface on the Home screen',
       'The <b>Home</b> screen now shows a small <b>to-dos reminder</b> up top, alongside the trip ⏰, maintenance 🧰 and backup 💾 nudges — a red-tinted <b>🗒️ “To-dos to tackle”</b> card that counts your <b>open actions</b> (and calls out how many are <b>high-priority</b>), tapping through to the <b>Actions</b> tab. It only appears when something is actually open, so a clear list keeps Home clean. Nothing else on Home moved — the reminder sits with the other nudges, above the <b>Create Event</b> builder.',
       'You see what still needs <i>doing</i> the moment you open the app, without hunting for the Actions tab — the urgent, high-priority items are called out right where your eye already lands.'),

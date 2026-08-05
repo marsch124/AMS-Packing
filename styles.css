@@ -3305,3 +3305,67 @@ details.care[open] .care-h::before {
   display: grid;
   gap: 10px;
 }
+
+/* --- Sections (per-template groupings) --- */
+/* Section header inside a template's item list. */
+.sec-h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 4px 5px;
+  margin-top: 6px;
+  border-bottom: 2px solid var(--brand);
+}
+.sec-h:first-child { margin-top: 0; }
+.sec-h .sec-name {
+  font-weight: 800;
+  font-size: .98rem;
+}
+.sec-h.loose .sec-name {
+  color: var(--muted);
+  font-weight: 700;
+}
+.sec-h .sec-count {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--chip, rgba(127, 127, 127, .16));
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* Manage-sections modal. */
+.sections-modal { max-width: 420px; }
+.sections-modal .sec-rows {
+  display: grid;
+  gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.sections-modal .sec-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sections-modal .sec-row input {
+  flex: 1;
+  min-width: 0;
+}
+.sections-modal .sec-add {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.sections-modal .sec-add .sec-new {
+  flex: 1;
+  min-width: 0;
+}
+.sections-modal .iconbtn.sm[disabled] {
+  opacity: .35;
+  pointer-events: none;
+}
