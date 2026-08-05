@@ -1,6 +1,6 @@
 // app.js — screens, navigation and wiring for AMS Packing List.
 import {
-  CATEGORIES, CONTAINERS, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
+  CATEGORIES, CONTAINERS, CONTAINER_ROLE, CONTAINER_LIST_NAME, containerNames, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
@@ -210,6 +210,25 @@ async function getLooseList() {
   if (!loose) { loose = newList({ name: LOOSE_NAME, role: 'loose', builtin: true }); await db.saveList(loose); }
   return loose;
 }
+// The "Containers" catalogue — the bags/duffels/backpacks themselves, each a
+// maintainable item (photos, colour, brand, capacity, storage, care). A real list
+// under the hood with role 'container', so the item editor / care / backup all
+// work; role 'container' keeps it out of trips, the activity picker and Templates.
+async function getContainerList() {
+  const lists = await db.getLists();
+  let c = lists.find((l) => l.role === CONTAINER_ROLE);
+  if (!c) { c = newList({ name: CONTAINER_LIST_NAME, role: CONTAINER_ROLE, builtin: true }); await db.saveList(c); }
+  return c;
+}
+// Options for a "Container" (where a thing is packed) dropdown: the default names
+// merged with the user's real container records, keeping the current value even if
+// it's a one-off not in either set (so editing never silently drops it).
+function containerOpts(cur) {
+  const names = containerNames(ALL_LISTS || []);
+  if (cur && !names.some((n) => n.toLowerCase() === cur.toLowerCase())) names.push(cur);
+  return names;
+}
+
 // An item's name is "unfiled" when it appears in no real (non-loose) template.
 function isUnfiled(name, lists = ALL_LISTS) {
   const key = (name || '').trim().toLowerCase();
@@ -380,7 +399,7 @@ function activitiesPicker(lists, selected) {
   // Base and transport lists are auto-included (common core + the transport radio),
   // so they're not shown here as tickable activities.
   for (const l of lists) {
-    if (l.role === 'base' || l.role === 'transport' || l.role === 'loose') continue;
+    if (l.role === 'base' || l.role === 'transport' || l.role === 'loose' || l.role === CONTAINER_ROLE) continue;
     (byGroup.has(l.group) ? byGroup.get(l.group) : ungrouped).push(l);
   }
   const box = (l) => `<label class="check${set.has(l.id) ? ' on' : ''}"><input type="checkbox" name="activities" value="${esc(l.id)}"${set.has(l.id) ? ' checked' : ''}>${esc(l.name)}${l.items.length ? '' : ' <em>(empty)</em>'}</label>`;
@@ -1122,7 +1141,7 @@ function promoteEntryToTemplate(entry, lists) {
   return new Promise((resolve) => {
     // Loose items first (for "I don't know its template yet"), then real templates.
     const loose = lists.filter((l) => l.role === 'loose');
-    const templates = lists.filter((l) => l.role !== 'loose');
+    const templates = lists.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE);
     const opts = [...loose.map((l) => `<option value="${esc(l.id)}">${esc(l.name)} — no template yet</option>`),
       ...templates.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}</option>`)].join('');
     const body = h(`<div class="modal">
@@ -1172,7 +1191,7 @@ function entryEditor(ev, entry, body) {
       <label class="field"><span>Category</span>${selectHtml('category', CATEGORIES, entry.category)}</label>
     </div>
     <div class="row2">
-      <label class="field"><span>Container</span>${selectHtml('container', CONTAINERS, entry.container)}</label>
+      <label class="field"><span>Container</span>${selectHtml('container', containerOpts(entry.container), entry.container)}</label>
       <label class="field"><span>When</span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), entry.phase)}</label>
     </div>
     <label class="field"><span>Section <em>groups this item on the list</em></span><input name="section" value="${esc(entry.section)}" list="entry-sections" placeholder="optional" autocomplete="off"><datalist id="entry-sections">${tripSecNames.map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></label>
@@ -1583,6 +1602,7 @@ async function renderLists() {
   const ungrouped = [];
   for (const l of lists) {
     if (l.role === 'loose') continue; // shown above as its own card
+    if (l.role === CONTAINER_ROLE) continue; // the Containers catalogue has its own tab
     (byGroup.has(l.group) ? byGroup.get(l.group) : ungrouped).push(l);
   }
   for (const g of GROUPS) {
@@ -1615,23 +1635,29 @@ async function renderList(listId, openItemId) {
   ALL_LISTS = await db.getLists();
   STORAGES = collectStorages(ALL_LISTS); // for the storage-location dropdown
   const isLoose = list.role === 'loose';
+  const isContainer = list.role === CONTAINER_ROLE;
+  // The Containers catalogue has its own tab, so it drops the template chrome
+  // (group / sections / rename / delete-template) and points Back at that tab.
+  const noTemplateChrome = isLoose || isContainer;
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(`<div class="topbar">
-    <a class="iconbtn" href="#/lists" aria-label="Back">${IC.back}</a>
+    <a class="iconbtn" href="${isContainer ? '#/containers' : '#/lists'}" aria-label="Back">${IC.back}</a>
     <h1 class="grow">${esc(list.name)}</h1>
-    ${isLoose ? '' : `<button class="iconbtn" data-rename aria-label="Rename">${IC.edit}</button>
+    ${noTemplateChrome ? '' : `<button class="iconbtn" data-rename aria-label="Rename">${IC.edit}</button>
     <button class="iconbtn" data-del aria-label="Delete template">${IC.trash}</button>`}
   </div>`));
   if (isLoose) {
     wrap.appendChild(h(`<p class="muted pad">A holding place for things not in any template yet — add anything here, even if you don’t know where or when you’ll pack it. Open an item and tick a template under <b>In these templates</b> to file it; once it’s in a template it leaves this list.</p>`));
+  } else if (isContainer) {
+    wrap.appendChild(h(`<p class="muted pad">Your bags, duffels and backpacks as things in their own right — add photos, colour, brand, capacity, where each one lives and how to look after it. A container’s maintenance shows up on the <b>Care</b> tab, and every container here is offered when you pick where an item is packed.</p>`));
   }
   const groupOpts = [{ value: '', label: '— no group —' }, ...GROUPS.map((g) => ({ value: g.id, label: `${g.id} · ${g.label}` }))];
   wrap.appendChild(h(`<div class="toolbar">
-    ${isLoose ? '' : `<label class="inline-field"><span>Group</span>${selectHtml('group', groupOpts, list.group)}</label>`}
+    ${noTemplateChrome ? '' : `<label class="inline-field"><span>Group</span>${selectHtml('group', groupOpts, list.group)}</label>`}
     <div class="spacer"></div>
-    ${isLoose ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
+    ${noTemplateChrome ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
     ${isLoose ? `<button class="btn ghost" data-batch>${IC.list}<span>Add several</span></button>` : ''}
-    <button class="btn ghost" data-add>${IC.plus}<span>Add item</span></button>
+    <button class="btn ghost" data-add>${IC.plus}<span>${isContainer ? 'Add container' : 'Add item'}</span></button>
   </div>`));
 
   const itemFilter = new Set();               // active category chips for this template's list
@@ -1908,6 +1934,11 @@ function readSectionFromEditor(ed, list, it) {
 
 function itemEditor(list, it, setOpen, draw) {
   const ed = h('<div class="editor item-editor"></div>');
+  // A container (bag/duffel/backpack) is edited as an object in its own right: it
+  // keeps the name / photos / capacity / storage / care / details fields, but drops
+  // the packing-only ones (where it's packed, when, flags, conditions, sections,
+  // template membership) that only make sense for things you put INTO a bag.
+  const isContainer = list.role === CONTAINER_ROLE;
   STORAGES = collectStorages(ALL_LISTS); // freshest saved + in-use places for the dropdown
   // Care state that can't be read straight back from the DOM on save:
   //  - the photos are held here and only committed to the item on Save (so Cancel discards them),
@@ -1941,7 +1972,7 @@ function itemEditor(list, it, setOpen, draw) {
   const inListsHTML = (() => {
     // Real templates only — the Loose items bin is where things start, not a
     // place you "file into", so it never appears as a tickable row.
-    const rows = ALL_LISTS.filter((l) => l.role !== 'loose').map((l) => {
+    const rows = ALL_LISTS.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE).map((l) => {
       const here = l.id === list.id;
       const on = here || memberIds.has(l.id);
       return `<label class="check tmpl-check${on ? ' on' : ''}${here ? ' cur' : ''}">
@@ -1965,20 +1996,26 @@ function itemEditor(list, it, setOpen, draw) {
       ${selectHtml(`${name}-sel`, opts, cur || '')}
       <input class="grow-new hidden" data-grow-new="${name}" name="${name}-new" value="" placeholder="${esc(placeholder)}" autocomplete="off"></label>`;
   };
-  // Open the details panel by default only when it already holds something.
-  const detailsOpen = !!(it.color || it.size || it.manufacturer || it.model || it.owner || it.acquired
+  // Open the details panel by default only when it already holds something — or
+  // always for a container, whose colour & brand live there and are worth surfacing.
+  const detailsOpen = isContainer || !!(it.color || it.size || it.manufacturer || it.model || it.owner || it.acquired
     || it.price || it.currency || it.purchaseLink || it.expiry || it.condition || it.retired || it.serial || it.qtyOwned || it.warranty);
 
   ed.innerHTML = `
     <section class="layer layer-item">
-      <label class="field item-name"><input name="name" value="${esc(it.name)}" placeholder="Item name" aria-label="Item name"></label>
-      <div class="layer-h"><span class="layer-num">1</span><span class="layer-t">The item itself</span><span class="layer-sub">The thing itself — these stay the same everywhere you use it.</span></div>
+      <label class="field item-name"><input name="name" value="${esc(it.name)}" placeholder="${isContainer ? 'Container name — e.g. Osprey Farpoint 40' : 'Item name'}" aria-label="${isContainer ? 'Container name' : 'Item name'}"></label>
+      <div class="layer-h"><span class="layer-num">1</span><span class="layer-t">${isContainer ? 'The container itself' : 'The item itself'}</span><span class="layer-sub">${isContainer ? 'The bag / duffel / backpack itself — its photos, capacity, where it lives and how to look after it.' : 'The thing itself — these stay the same everywhere you use it.'}</span></div>
       <div class="item-head">
         <div class="item-photos" data-photos></div>
       </div>
       <input type="file" accept="image/*" hidden data-care-file multiple>
+      ${isContainer ? `
       <div class="row2">
-        <label class="field"><span>Container <em>default</em></span>${selectHtml('container', ['', ...CONTAINERS].map((c) => ({ value: c, label: c || '— none (task) —' })), it.container)}</label>
+        <label class="field"><span>Capacity <em>litres</em></span><input type="number" name="capacityL" min="0" step="0.1" inputmode="decimal" value="${it.capacityL || ''}" placeholder="e.g. 40"></label>
+        <label class="field"><span>Weight empty <em>grams</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
+      </div>` : `
+      <div class="row2">
+        <label class="field"><span>Container <em>default</em></span>${selectHtml('container', ['', ...containerOpts(it.container)].map((c) => ({ value: c, label: c || '— none (task) —' })), it.container)}</label>
         <label class="field"><span>When <em>default phase</em></span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), it.phase)}</label>
       </div>
       <label class="field"><span>Weight (g) <em>per unit</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
@@ -1987,7 +2024,7 @@ function itemEditor(list, it, setOpen, draw) {
         <label class="check${it.liquid ? ' on' : ''}"><input type="checkbox" name="liquid" ${it.liquid ? 'checked' : ''}>💧 Liquid</label>
         <label class="check${it.restricted ? ' on' : ''}"><input type="checkbox" name="restricted" ${it.restricted ? 'checked' : ''}>⚠️ Restricted</label>
       </div>
-      <label class="field charge-type-field${it.charging ? '' : ' hidden'}"><span>Charge type</span>${selectHtml('chargeType', CHARGE_TYPES.map((c) => ({ value: c.id, label: c.label })), it.chargeType)}</label>
+      <label class="field charge-type-field${it.charging ? '' : ' hidden'}"><span>Charge type</span>${selectHtml('chargeType', CHARGE_TYPES.map((c) => ({ value: c.id, label: c.label })), it.chargeType)}</label>`}
 
       <details class="care"${careOpen ? ' open' : ''}>
         <summary><span class="care-h">Storage &amp; maintenance</span><span class="care-sum">Where it lives, and how &amp; when to look after it</span></summary>
@@ -2066,7 +2103,7 @@ function itemEditor(list, it, setOpen, draw) {
       </details>
     </section>
 
-    <section class="layer layer-membership">
+    ${isContainer ? '' : `<section class="layer layer-membership">
       <div class="layer-h"><span class="layer-num">2</span><span class="layer-t">In this list · ${esc(list.name)}</span><span class="layer-sub">Just for this template — changing these here doesn't touch the item in other lists.</span></div>
       <label class="field"><span>Qty</span><input name="qty" value="${esc(it.qty)}" placeholder="optional"></label>
       ${list.role === 'loose' ? '' : sectionFieldHTML(list, it)}
@@ -2092,10 +2129,10 @@ function itemEditor(list, it, setOpen, draw) {
         <p class="inlists-hint">Tick a template to add this item to it, untick to remove it. Changes apply when you <b>Save</b>.</p>
         <div class="inlists-matrix">${inListsHTML}</div>
       </div>
-    </section>
+    </section>`}
 
     <div class="editor-actions">
-      <button type="button" class="btn danger ghost" data-x="del">${IC.trash}<span>Remove</span></button>
+      <button type="button" class="btn danger ghost" data-x="del">${IC.trash}<span>${isContainer ? 'Delete' : 'Remove'}</span></button>
       <div class="spacer"></div>
       <button type="button" class="btn" data-x="cancel">Cancel</button>
       <button type="button" class="btn primary" data-x="save">Save</button>
@@ -2231,7 +2268,10 @@ function itemEditor(list, it, setOpen, draw) {
     if (!x) return;
     if (x === 'cancel') { setOpen(null); draw(); return; }
     if (x === 'del') {
-      if (!confirm(`Remove “${it.name || 'this item'}” from the ${list.name} template?`)) return;
+      const msg = isContainer
+        ? `Delete the container “${it.name || 'this container'}”? Items already set to this container keep the name.`
+        : `Remove “${it.name || 'this item'}” from the ${list.name} template?`;
+      if (!confirm(msg)) return;
       list.items = list.items.filter((z) => z.id !== it.id);
       setOpen(null);
       if (await saveGuard(db.saveList(list))) draw();
@@ -2239,22 +2279,27 @@ function itemEditor(list, it, setOpen, draw) {
     }
     if (x === 'save') {
       it.name = ($('input[name=name]', ed).value || '').trim();
-      it.qty = ($('input[name=qty]', ed).value || '').trim();
-      it.section = readSectionFromEditor(ed, list, it);
-      it.container = $('select[name=container]', ed).value;
-      it.phase = $('select[name=phase]', ed).value;
       it.weight = Math.max(0, parseInt($('input[name=weight]', ed).value, 10) || 0);
-      it.perNight = $('input[name=perNight]', ed).checked;
-      it.charging = $('input[name=charging]', ed).checked;
-      it.chargeType = $('select[name=chargeType]', ed).value;
-      it.liquid = $('input[name=liquid]', ed).checked;
-      it.restricted = $('input[name=restricted]', ed).checked;
-      it.note = ($('input[name=note]', ed).value || '').trim();
-      it.seasons = $$('input[name=seasons]:checked', ed).map((n) => n.value);
-      it.contexts = $$('input[name=contexts]:checked', ed).map((n) => n.value);
-      it.transports = $$('input[name=transports]:checked', ed).map((n) => n.value);
-      it.catering = $$('input[name=catering]:checked', ed).map((n) => n.value);
-      it.weather = $$('input[name=weather]:checked', ed).map((n) => n.value);
+      // Packing-only fields — absent in container mode, so read them only then.
+      if (!isContainer) {
+        it.qty = ($('input[name=qty]', ed).value || '').trim();
+        it.section = readSectionFromEditor(ed, list, it);
+        it.container = $('select[name=container]', ed).value;
+        it.phase = $('select[name=phase]', ed).value;
+        it.perNight = $('input[name=perNight]', ed).checked;
+        it.charging = $('input[name=charging]', ed).checked;
+        it.chargeType = $('select[name=chargeType]', ed).value;
+        it.liquid = $('input[name=liquid]', ed).checked;
+        it.restricted = $('input[name=restricted]', ed).checked;
+        it.note = ($('input[name=note]', ed).value || '').trim();
+        it.seasons = $$('input[name=seasons]:checked', ed).map((n) => n.value);
+        it.contexts = $$('input[name=contexts]:checked', ed).map((n) => n.value);
+        it.transports = $$('input[name=transports]:checked', ed).map((n) => n.value);
+        it.catering = $$('input[name=catering]:checked', ed).map((n) => n.value);
+        it.weather = $$('input[name=weather]:checked', ed).map((n) => n.value);
+      } else {
+        it.capacityL = Math.max(0, parseFloat($('input[name=capacityL]', ed).value) || 0);
+      }
       // Care & storage
       const storageSel = $('select[name=storage-sel]', ed).value;
       it.storage = storageSel === '__new__'
@@ -2442,9 +2487,9 @@ function allItemsSection(lists) {
     <form class="ai-addform hidden" data-ai-form>
       <div class="row2">
         <label class="field"><span>Add to</span>${selectHtml('ai-list', [
-          ...lists.filter((l) => l.role !== 'loose').map((l) => ({ value: l.id, label: l.name })),
+          ...lists.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE).map((l) => ({ value: l.id, label: l.name })),
           { value: LOOSE_OPT, label: '— No template · keep as a loose item —' },
-        ], (lists.find((l) => l.role !== 'loose') || {}).id || LOOSE_OPT)}</label>
+        ], (lists.find((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE) || {}).id || LOOSE_OPT)}</label>
         <label class="field"><span>Item name</span><input name="ai-name" placeholder="e.g. Wetsuit" autocomplete="off"></label>
       </div>
       <div class="ai-addactions">
