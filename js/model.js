@@ -186,6 +186,11 @@ export function coerceItem(it) {
   it.liquid = !!it.liquid;        // liquid / gel — 100 ml hand-luggage rule
   it.restricted = !!it.restricted; // battery / restricted — carry-on rules
   it.perNight = !!it.perNight;    // quantity scales with trip length (nights)
+  // Per-template grouping. On a resolved item this holds a SECTION ID (pointing at
+  // its template's `sections`); on a trip line it holds the section's DISPLAY NAME
+  // (resolved from the source template, so same-named sections merge across lists).
+  // '' = no section. It is contextual (per membership), never intrinsic to the item.
+  it.section = typeof it.section === 'string' ? it.section : '';
   it.storage = typeof it.storage === 'string' ? it.storage : '';   // where it lives at home (free text)
   // Pictures of the item, as resized data URLs. Canonical field is `photos`;
   // a legacy single `photo` string is folded in and then dropped.
@@ -235,9 +240,29 @@ function normalizeStats(s) {
   s = s && typeof s === 'object' ? s : {};
   return { packed: n(s.packed), used: n(s.used), unused: n(s.unused), lastReviewed: typeof s.lastReviewed === 'string' ? s.lastReviewed : '' };
 }
+// A template's named, ordered SECTIONS — logical groupings the user defines per
+// template (e.g. a Diving list's "Lights", "Rig", "Regulators"). Each item's
+// membership stores which section id it belongs to; unnamed entries are dropped.
+export function normalizeSections(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const s of asArray(arr)) {
+    const sid = (s && typeof s.id === 'string' && s.id) ? s.id : id();
+    const name = typeof (s && s.name) === 'string' ? s.name.trim() : '';
+    if (!name || seen.has(sid)) continue;
+    seen.add(sid);
+    out.push({ id: sid, name });
+  }
+  return out;
+}
+export function newSection(name = '') {
+  return { id: id(), name: String(name || '').trim() };
+}
+
 export function coerceList(l) {
   if (!l || typeof l !== 'object') return l;
   l.items = asArray(l.items).map(coerceItem);
+  l.sections = normalizeSections(l.sections);   // ordered per-template groupings ([] = none)
   l.group = GROUP_IDS.includes(l.group) ? l.group : '';  // '' = ungrouped / utility list
   // role decides how the list feeds a trip:
   //  'base'      → always included on every trip (the common core),
@@ -349,6 +374,7 @@ export function newItem(partial = {}) {
     liquid: false,   // liquid/gel (100 ml rule)
     restricted: false, // battery / restricted (carry-on)
     perNight: false, // quantity scales with trip nights
+    section: '',     // per-template section (a section id, resolved from the membership)
     storage: '',     // where the physical item is kept at home (free text)
     photos: [],      // pictures of the item, as resized data URLs (max MAX_PHOTOS)
     maintenance: null, // care record (notes/link/schedule/log) — see normalizeMaintenance
@@ -364,6 +390,7 @@ export function newList(partial = {}) {
   return coerceList({
     id: id(),
     name: '',
+    sections: [],       // ordered per-template groupings ({id,name}); [] = ungrouped list
     group: '',          // 'GA' | 'WET' | 'OE' | '' (ungrouped)
     role: '',           // '' (ticked activity) | 'base' (always on) | 'transport' (auto by transport)
     transport: '',      // '' | 'Car' | 'Plane' | 'RV' — only used when role === 'transport'
@@ -423,6 +450,12 @@ export function itemMatchesEvent(item, event) {
 }
 
 // --- Total List generation ---
+// The display name of a section id within a template's `sections` ('' if none/unknown).
+export function sectionName(list, sectionId) {
+  if (!sectionId || !list) return '';
+  const s = asArray(list.sections).find((x) => x.id === sectionId);
+  return s ? s.name : '';
+}
 // Turn a building-block item into an editable Total-List entry.
 function entryFromItem(item, list) {
   return coerceItem({
@@ -441,6 +474,7 @@ function entryFromItem(item, list) {
     liquid: !!item.liquid,
     restricted: !!item.restricted,
     perNight: !!item.perNight,
+    section: sectionName(list, item.section), // resolved to the DISPLAY NAME so sections merge by name across templates
     storage: item.storage || '', // carried onto the trip so packing shows where to grab it
     sub: asArray(item.sub).slice(),
     note: item.note || '',
@@ -557,10 +591,46 @@ export function groupByContainer(entries) {
 export function groupByCategory(entries) {
   return groupByKey(entries, (e) => e.category, CATEGORIES, CATEGORY_DEFAULT).map((g) => ({ category: g.key, entries: g.entries }));
 }
-// Generic dispatcher used by the UI's group-by toggle: 'category' | 'container' | 'when'.
+// Group a template's RESOLVED items by their section id, in the template's own
+// section order, with any unsectioned items in a trailing bucket (section: null).
+// Empty defined sections are omitted so the list stays tidy. Used by the template
+// overview screen.
+export function groupItemsBySection(items, sections) {
+  const defs = asArray(sections);
+  const known = new Set(defs.map((s) => s.id));
+  const buckets = new Map(defs.map((s) => [s.id, []]));
+  const loose = [];
+  for (const it of asArray(items)) {
+    const sid = it && it.section && known.has(it.section) ? it.section : '';
+    if (sid) buckets.get(sid).push(it); else loose.push(it);
+  }
+  const out = defs.filter((s) => buckets.get(s.id).length).map((s) => ({ section: s, items: buckets.get(s.id) }));
+  if (loose.length) out.push({ section: null, items: loose });
+  return out;
+}
+
+// Group trip ENTRIES by their section NAME (first-appearance order), with the
+// unsectioned remainder in a trailing "Everything else" group. Entries carry a
+// resolved section name, so same-named sections from different templates merge.
+export function groupBySection(entries) {
+  const map = new Map(); // name -> entries, in first-seen order
+  const loose = [];
+  for (const e of asArray(entries)) {
+    const name = (e && e.section || '').trim();
+    if (!name) { loose.push(e); continue; }
+    if (!map.has(name)) map.set(name, []);
+    map.get(name).push(e);
+  }
+  const out = [...map.entries()].map(([label, list]) => ({ label, entries: list }));
+  if (loose.length) out.push({ label: 'Everything else', entries: loose });
+  return out;
+}
+
+// Generic dispatcher used by the UI's group-by toggle: 'category' | 'container' | 'section' | 'when'.
 export function groupBy(mode, entries) {
   if (mode === 'category') return groupByCategory(entries).map((g) => ({ label: g.category, entries: g.entries }));
   if (mode === 'container') return groupByContainer(entries).map((g) => ({ label: g.container || 'Unpacked', entries: g.entries }));
+  if (mode === 'section') return groupBySection(entries);
   return entriesByPhase(entries).map((g) => ({ label: g.phase.label, hint: g.phase.hint, entries: g.entries }));
 }
 
@@ -1157,6 +1227,7 @@ export function coerceMembership(m) {
   m.catering = asArray(m.catering);
   m.weather = asArray(m.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w)); // conditional-gear tags (contextual, per template)
   m.container = typeof m.container === 'string' ? m.container : '';      // '' = use item default
+  m.section = typeof m.section === 'string' ? m.section : '';            // section id within THIS template ('' = none)
   m.phase = PHASE_IDS.includes(m.phase) ? m.phase : '';                  // '' = use item default
   m.itemType = (m.itemType === 'item' || m.itemType === 'reminder') ? m.itemType : ''; // '' = use item default
   m.qty = typeof m.qty === 'string' ? m.qty : (m.qty ? String(m.qty) : '');
@@ -1171,7 +1242,7 @@ export function newMembership(partial = {}) {
     itemId: '',
     templateId: '',
     seasons: [], contexts: [], transports: [], catering: [], weather: [],
-    container: '', phase: '', itemType: '', qty: '', note: '', order: 0,
+    container: '', section: '', phase: '', itemType: '', qty: '', note: '', order: 0,
     ...partial,
   });
 }
@@ -1251,6 +1322,7 @@ export function membershipFromResolved(cat, templateId, it, order = 0, existing 
   m.catering = asArray(it.catering).slice();
   m.weather = asArray(it.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w));
   m.container = it.container !== cat.container ? it.container : '';
+  m.section = it.section || '';   // purely per-template — always stored, no catalog default
   m.phase = it.phase !== cat.phase ? it.phase : '';
   m.itemType = it.itemType !== cat.itemType ? it.itemType : '';
   m.qty = it.qty || '';
@@ -1274,6 +1346,7 @@ export function resolveMembership(item, m) {
     catering: mm.catering.slice(),
     weather: mm.weather.slice(),
     container: mm.container || base.container,
+    section: mm.section || '',   // per-template section id ('' = none); not an item default
     phase: mm.phase || base.phase,
     itemType: mm.itemType || base.itemType,
     qty: mm.qty || base.qty || '',
@@ -1384,6 +1457,7 @@ function membershipFromCopy(catItem, templateId, copy) {
     catering: asArray(copy.catering).slice(),
     weather: asArray(copy.weather).slice(),
     container: copy.container !== catItem.container ? copy.container : '',
+    section: copy.section || '',
     phase: copy.phase !== catItem.phase ? copy.phase : '',
     itemType: copy.itemType !== catItem.itemType ? copy.itemType : '',
     qty: copy.qty || '',
