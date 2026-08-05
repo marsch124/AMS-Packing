@@ -4,7 +4,7 @@ import {
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
-  effectiveQty, bagLoads, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
+  effectiveQty, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
   deriveWeather, weatherSuggestions, weatherGear, WEATHER_CONDITIONS,
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v65';
+const APP_VERSION = 'v66';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -219,6 +219,12 @@ async function getContainerList() {
   let c = lists.find((l) => l.role === CONTAINER_ROLE);
   if (!c) { c = newList({ name: CONTAINER_LIST_NAME, role: CONTAINER_ROLE, builtin: true }); await db.saveList(c); }
   return c;
+}
+// The Containers screen (#/containers) — the bags catalogue, reached from the Care
+// tab. It reuses the container-aware list renderer, so it's the same rich editor.
+async function renderContainers() {
+  const c = await getContainerList();
+  return renderList(c.id);
 }
 // Options for a "Container" (where a thing is packed) dropdown: the default names
 // merged with the user's real container records, keeping the current value even if
@@ -852,7 +858,7 @@ async function renderEvent(eventId) {
 // A collapsible "Bags & weight" panel: per-bag weight vs airline limit, plus liquids/battery counts.
 function logisticsSummary(ev) {
   const f = packingFlags(ev.entries, ev.nights);
-  const loads = bagLoads(ev.entries, ev.nights).filter((b) => b.grams > 0 || b.limitKg > 0);
+  const loads = bagLoads(ev.entries, ev.nights, containerLimits(ALL_LISTS || [])).filter((b) => b.grams > 0 || b.limitKg > 0);
   const overBags = loads.filter((b) => b.over);
   const bits = [];
   if (f.totalKg > 0) bits.push(`${f.totalKg} kg`);
@@ -1641,7 +1647,7 @@ async function renderList(listId, openItemId) {
   const noTemplateChrome = isLoose || isContainer;
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(`<div class="topbar">
-    <a class="iconbtn" href="${isContainer ? '#/containers' : '#/lists'}" aria-label="Back">${IC.back}</a>
+    <a class="iconbtn" href="${isContainer ? '#/maintenance' : '#/lists'}" aria-label="Back">${IC.back}</a>
     <h1 class="grow">${esc(list.name)}</h1>
     ${noTemplateChrome ? '' : `<button class="iconbtn" data-rename aria-label="Rename">${IC.edit}</button>
     <button class="iconbtn" data-del aria-label="Delete template">${IC.trash}</button>`}
@@ -1674,7 +1680,7 @@ async function renderList(listId, openItemId) {
   const body = h('<div class="items"></div>');
   wrap.appendChild(body);
 
-  if (!isLoose) wrap.querySelector('select[name=group]').addEventListener('change', async (e) => {
+  if (!noTemplateChrome) wrap.querySelector('select[name=group]').addEventListener('change', async (e) => {
     list.group = e.target.value;
     await saveGuard(db.saveList(list));
   });
@@ -2012,8 +2018,9 @@ function itemEditor(list, it, setOpen, draw) {
       ${isContainer ? `
       <div class="row2">
         <label class="field"><span>Capacity <em>litres</em></span><input type="number" name="capacityL" min="0" step="0.1" inputmode="decimal" value="${it.capacityL || ''}" placeholder="e.g. 40"></label>
-        <label class="field"><span>Weight empty <em>grams</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
-      </div>` : `
+        <label class="field"><span>Max weight <em>kg</em></span><input type="number" name="maxKg" min="0" step="0.1" inputmode="decimal" value="${it.maxKg || ''}" placeholder="e.g. 23"></label>
+      </div>
+      <label class="field"><span>Weight empty <em>grams</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>` : `
       <div class="row2">
         <label class="field"><span>Container <em>default</em></span>${selectHtml('container', ['', ...containerOpts(it.container)].map((c) => ({ value: c, label: c || '— none (task) —' })), it.container)}</label>
         <label class="field"><span>When <em>default phase</em></span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), it.phase)}</label>
@@ -2299,6 +2306,7 @@ function itemEditor(list, it, setOpen, draw) {
         it.weather = $$('input[name=weather]:checked', ed).map((n) => n.value);
       } else {
         it.capacityL = Math.max(0, parseFloat($('input[name=capacityL]', ed).value) || 0);
+        it.maxKg = Math.max(0, parseFloat($('input[name=maxKg]', ed).value) || 0);
       }
       // Care & storage
       const storageSel = $('select[name=storage-sel]', ed).value;
@@ -2408,6 +2416,13 @@ async function renderMaintenance() {
   wrap.appendChild(h('<div class="topbar"><h1>Care &amp; maintenance</h1></div>'));
 
   const lists = await db.getLists();
+  // Entry point to the Containers catalogue (bags/duffels/backpacks as objects).
+  const containerCount = (lists.find((l) => l.role === CONTAINER_ROLE)?.items || []).length;
+  wrap.appendChild(h(`<a class="care-link" href="#/containers">
+    <span class="care-link-ic">🎒</span>
+    <span class="care-link-body"><b>Containers</b><span class="care-link-sub">Your bags, duffels &amp; backpacks — photos, capacity, storage &amp; care${containerCount ? ` · ${containerCount}` : ''}</span></span>
+    <span class="care-link-go">${IC.fwd}</span>
+  </a>`));
   ALL_LISTS = lists; // so isUnfiled() in the All-items rows reflects the current data
   const listById = new Map(lists.map((l) => [l.id, l]));
   const rows = maintenanceList(lists);
@@ -2759,6 +2774,9 @@ function howtoCard() {
         <h3>Loose items — things not in a template yet</h3>
         <p>You don’t have to file an item into a template just to keep it. At the top of the <b>Templates</b> tab there’s a <b>Loose items</b> card — a holding place for anything you want to jot down before you’ve decided where or when to pack it. Open it and use <b>Add several</b> to type or paste a whole batch (<b>one item per line</b>), or <b>Add item</b> for a single one. Loose items are <b>never</b> added to a trip and never appear in the activity picker; they simply wait. When you’re ready, open a loose item and tick a template under <b>In these templates</b> — it’s filed there and <b>automatically drops out</b> of the Loose items list. Anything still loose (here or in the Care tab’s <b>All items</b>) carries a <b>⚠️ No template</b> flag so it’s never quietly forgotten.</p>
 
+        <h3>Containers — your bags as objects</h3>
+        <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>🎒 Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
+
         <h3>The timeline (phases)</h3>
         <p>Items are packed in stages, in this order: <b>Preparations</b> (book/cancel/charge, done ahead) → <b>≥1 week ahead</b> (things you don't use at home) → <b>Day before</b> (stage / move to the RV) → <b>Morning of</b> → <b>At the front door</b> (last check as you leave) → <b>Wear / carry</b> on the day → <b>After / recovery</b> (shower, change, recovery).</p>
 
@@ -2882,6 +2900,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v66', '2026-08-05 · 19:30 UTC', false, 'Containers — your bags as things in their own right',
+      'Your <b>bags, duffels and backpacks</b> are now proper records, not just names in a dropdown. Open the <b>Care</b> tab and tap <b>🎒 Containers</b> to find them. Each container is edited like any item — <b>photos</b>, <b>colour</b>, <b>brand</b>, where it’s <b>stored</b>, and its full <b>care/maintenance</b> record — plus two container-specific fields: <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Because a container is a maintainable object, its upkeep (proof a rain cover, oil a zip, service a wheeled case) shows up on the <b>Care</b> tab alongside everything else, and it’s all included in your <b>JSON backup</b>. Two nice knock-ons: every container you add is offered when you pick <b>where an item is packed</b>, and — the big one — the trip <b>Bags &amp; weight</b> panel now warns you against <b>each bag’s own max weight</b> (not just a generic carry-on/checked guess), so “over limit” is finally accurate for the specific bag you’re using. Your list comes <b>pre-seeded</b> with your usual bags (carry-on, checked case, Bellroy, hiking pack, duffel, golf bag, toiletry bag…) and sensible capacities — all editable, so tweak, add or remove to match your real kit.',
+      'A single home for your bags — what they are, how big, how heavy they’re allowed to be, where they live and how to look after them — and accurate over-weight warnings per bag when you pack.'),
     v('v65', '2026-08-05 · 18:00 UTC', false, 'Context now applies to Workout / Exercise lists only',
       'Two tidy-ups to the <b>Context</b> choice when you create an event. First, the <b>Training</b> option is <b>gone</b> — the choices are now just <b>Indoor</b>, <b>Outdoor</b> and <b>Race</b>. Second, and more importantly, Context now <b>only affects your Workout / Exercise &amp; Training (WET) lists</b> — Swim, Bike, Run and the like — where “indoor vs outdoor vs race” genuinely changes the kit. It <b>no longer touches</b> your Goal-Activity lists (Golf, Hiking, Diving…), the common Travel base, or the transport lists: those are always included in full regardless of the Context you pick. So choosing <b>Outdoor</b> for a trip narrows your <b>Run</b> gear to the outdoor set without hiding anything from, say, your Hiking or Travel packing.',
       'The Context switch does exactly what you’d expect — it fine-tunes your workout kit — without silently dropping items from your other lists.'),
@@ -3431,6 +3452,7 @@ async function renderRoute() {
   if (hash === '#/events') return renderEvents();
   if (hash === '#/lists') return renderLists();
   if (hash === '#/maintenance') return renderMaintenance();
+  if (hash === '#/containers') return renderContainers();
   if (hash === '#/actions') return renderActions();
   if (hash === '#/refine') return renderRefine();
   if (hash === '#/settings') return renderSettings();
@@ -3473,7 +3495,7 @@ function setActiveTab() {
   const hash = location.hash || '#/';
   const base = hash.startsWith('#/events') || hash.startsWith('#/event/') ? '#/events'
     : hash.startsWith('#/list') || hash === '#/refine' ? '#/lists'
-    : hash.startsWith('#/maintenance') ? '#/maintenance'
+    : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') ? '#/maintenance'
     : hash.startsWith('#/actions') ? '#/actions'
     : hash.startsWith('#/settings') ? '#/settings' : '#/';
   $$('.tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === base));
@@ -3485,7 +3507,7 @@ function currentSection() {
   const hash = location.hash || '#/';
   if (hash.startsWith('#/events') || hash.startsWith('#/event/')) return 'events';
   if (hash.startsWith('#/list') || hash === '#/refine') return 'templates';
-  if (hash.startsWith('#/maintenance')) return 'care';
+  if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers')) return 'care';
   if (hash.startsWith('#/actions')) return 'actions';
   if (hash.startsWith('#/settings')) return 'settings';
   return 'home';

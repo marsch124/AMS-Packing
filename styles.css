@@ -3369,3 +3369,23 @@ details.care[open] .care-h::before {
   opacity: .35;
   pointer-events: none;
 }
+
+/* --- Care tab → Containers link --- */
+.care-link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: var(--shadow);
+  color: inherit;
+  text-decoration: none;
+}
+.care-link:active { transform: translateY(1px); }
+.care-link-ic { font-size: 1.35rem; flex: none; }
+.care-link-body { flex: 1; min-width: 0; display: grid; gap: 1px; }
+.care-link-sub { color: var(--muted); font-size: .8rem; }
+.care-link-go { flex: none; color: var(--muted); display: flex; }

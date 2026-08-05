@@ -244,6 +244,7 @@ export function coerceItem(it) {
   it.qtyOwned = Number.isFinite(it.qtyOwned) && it.qtyOwned >= 0 ? Math.floor(it.qtyOwned) : 0; // 0 = unset
   it.warranty = isYMD(it.warranty) ? it.warranty : '';            // warranty-until date
   it.capacityL = Number.isFinite(it.capacityL) && it.capacityL >= 0 ? it.capacityL : 0; // packing capacity in litres; 0 = unset (used by containers)
+  it.maxKg = Number.isFinite(it.maxKg) && it.maxKg >= 0 ? it.maxKg : 0;                 // max load weight in kg; 0 = unset (used by containers → airline warnings)
   return it;
 }
 // A care record: how to look after the physical thing, plus an optional recurring
@@ -413,6 +414,7 @@ export function newItem(partial = {}) {
     acquired: '', price: 0, currency: '', purchaseLink: '',
     expiry: '', condition: '', retired: false, retiredReason: '', serial: '', qtyOwned: 0, warranty: '',
     capacityL: 0,    // packing capacity in litres (used by containers; 0 = unset)
+    maxKg: 0,        // max load weight in kg (used by containers; 0 = unset)
     ...partial,
   });
 }
@@ -726,8 +728,25 @@ export function effectiveQty(entry, nights = 0) {
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 
-// Per-container weight totals (kg) with airline-limit warnings.
-export function bagLoads(entries, nights = 0) {
+// A per-container-name weight-limit map (kg): the built-in airline defaults,
+// overlaid with any real container record's own `maxKg` (a bag the user has
+// specced). Later wins, so a user's own limit overrides the generic default.
+export function containerLimits(lists = []) {
+  const out = { ...CONTAINER_LIMITS_KG };
+  for (const l of asArray(lists)) {
+    if (l.role !== CONTAINER_ROLE) continue;
+    for (const it of asArray(l.items)) {
+      const name = (it.name || '').trim();
+      if (name && Number(it.maxKg) > 0) out[name] = Number(it.maxKg);
+    }
+  }
+  return out;
+}
+
+// Per-container weight totals (kg) with over-limit warnings. `limits` maps a
+// container name to its max kg; defaults to the built-in airline ceilings, but the
+// app passes containerLimits(lists) so each real bag's own limit is honoured.
+export function bagLoads(entries, nights = 0, limits = CONTAINER_LIMITS_KG) {
   const map = new Map();
   for (const e of asArray(entries)) {
     if (e.itemType === 'reminder') continue;
@@ -741,7 +760,7 @@ export function bagLoads(entries, nights = 0) {
   return [...map.values()]
     .sort((a, b) => (order.has(a.container) ? order.get(a.container) : 999) - (order.has(b.container) ? order.get(b.container) : 999))
     .map((b) => {
-      const limitKg = CONTAINER_LIMITS_KG[b.container] || 0;
+      const limitKg = (limits && limits[b.container]) || 0;
       const kg = Math.round(b.grams / 100) / 10;
       return { ...b, kg, limitKg, over: limitKg > 0 && b.grams / 1000 > limitKg };
     });
@@ -1326,6 +1345,7 @@ export function applyIntrinsic(cat, it) {
   cat.qtyOwned = Number.isFinite(it.qtyOwned) ? it.qtyOwned : 0;
   cat.warranty = it.warranty || '';
   cat.capacityL = Number.isFinite(it.capacityL) ? it.capacityL : 0;
+  cat.maxKg = Number.isFinite(it.maxKg) ? it.maxKg : 0;
   if (it.stats) cat.stats = it.stats;
   return coerceItem(cat);
 }
@@ -1345,7 +1365,7 @@ export function catalogItemFromResolved(it) {
     purchaseLink: it.purchaseLink || '', expiry: it.expiry || '', condition: it.condition || '',
     retired: !!it.retired, retiredReason: it.retiredReason || '',
     serial: it.serial || '', qtyOwned: it.qtyOwned || 0, warranty: it.warranty || '',
-    capacityL: it.capacityL || 0,
+    capacityL: it.capacityL || 0, maxKg: it.maxKg || 0,
   });
 }
 
@@ -1479,6 +1499,7 @@ function buildCatalogItem(copies) {
     qtyOwned: (copies.map((c) => Number(c.qtyOwned)).find((q) => q > 0)) || 0,
     warranty: _firstNonEmpty(copies.map((c) => c.warranty)),
     capacityL: (copies.map((c) => Number(c.capacityL)).find((v) => v > 0)) || 0,
+    maxKg: (copies.map((c) => Number(c.maxKg)).find((v) => v > 0)) || 0,
     // Conditions (incl. weather), note and qty are contextual → they live on the
     // membership, so the catalog item keeps them empty.
     seasons: [], contexts: [], transports: [], catering: [], weather: [],
