@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v66';
+const APP_VERSION = 'v67';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2900,6 +2900,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v67', '2026-08-05 · 20:30 UTC', false, 'Every item now has a weight',
+      'Every packable item in the built-in templates now carries a <b>sensible weight estimate</b> (in grams), so the <b>Bags &amp; weight</b> panel and the <b>Heaviest-first</b> view work properly from the start — no more “add a weight to see totals”. The figures are honest guesses based on each item’s type (a t-shirt ~150 g, running shoes ~300 g, a drysuit ~3.5 kg, a phone ~200 g, and so on); <b>to-dos/reminders</b> carry no weight, as they’re not packed. They’re all <b>fully editable</b> — open any item and set its real weight to make your bag totals exact. Combined with the new <b>Containers</b> (each bag’s own max weight), your trips now show a realistic <b>total load</b> and a reliable <b>over-limit</b> warning per bag straight away. <b>Note:</b> this arrives as a refresh of the built-in starter templates, so any weight you’d set yourself on a built-in item is replaced by the estimate — just re-enter it. Your own templates are untouched.',
+      'Bag totals and the over-weight warnings are useful immediately — the whole trip has real weights out of the box, ready for you to fine-tune.'),
     v('v66', '2026-08-05 · 19:30 UTC', false, 'Containers — your bags as things in their own right',
       'Your <b>bags, duffels and backpacks</b> are now proper records, not just names in a dropdown. Open the <b>Care</b> tab and tap <b>🎒 Containers</b> to find them. Each container is edited like any item — <b>photos</b>, <b>colour</b>, <b>brand</b>, where it’s <b>stored</b>, and its full <b>care/maintenance</b> record — plus two container-specific fields: <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Because a container is a maintainable object, its upkeep (proof a rain cover, oil a zip, service a wheeled case) shows up on the <b>Care</b> tab alongside everything else, and it’s all included in your <b>JSON backup</b>. Two nice knock-ons: every container you add is offered when you pick <b>where an item is packed</b>, and — the big one — the trip <b>Bags &amp; weight</b> panel now warns you against <b>each bag’s own max weight</b> (not just a generic carry-on/checked guess), so “over limit” is finally accurate for the specific bag you’re using. Your list comes <b>pre-seeded</b> with your usual bags (carry-on, checked case, Bellroy, hiking pack, duffel, golf bag, toiletry bag…) and sensible capacities — all editable, so tweak, add or remove to match your real kit.',
       'A single home for your bags — what they are, how big, how heavy they’re allowed to be, where they live and how to look after them — and accurate over-weight warnings per bag when you pack.'),

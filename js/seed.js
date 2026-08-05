@@ -602,15 +602,91 @@ const RVBASE = [
   it('Work gear (see work list)', { sv: 'Jobb-grejor / Jobblistan', cat: REM, rem: true }),
 ];
 
+// Fallback per-unit weight (grams) by category, for any item a keyword doesn't hit.
+const CAT_WEIGHT = {
+  'Clothing': 200, 'Adventure clothing': 350, 'Footwear': 650, 'Sport gear': 400,
+  'Electronics': 250, 'Charging': 90, 'Toiletries': 90, 'Pharmacy / meds': 40,
+  'Food & drink': 150, 'Documents & money': 40, 'Comfort & misc': 150, 'Reminders': 0,
+};
+// Representative per-unit weights (grams) by NAME keyword, matched as a substring,
+// ordered specific → generic (first match wins). These are honest estimates, all
+// editable per item. Anything unmatched falls back to CAT_WEIGHT by category.
+const WEIGHT_RULES = [
+  // — Specifics that must beat a shorter generic substring below —
+  ['neck pillow', 200], ['pillow', 300], ['kitchen towel', 120], ['day pack', 600],
+  // — Diving gear —
+  ['drysuit undergarment', 800], ['drysuit hood', 150], ['drysuit socks', 150], ['drysuit inflation', 300], ['drysuit', 3500],
+  ['backup regulator', 900], ['deco / stage regulator', 1000], ['primary regulator', 1200], ['regulator', 1000],
+  ['spg', 200], ['pressure gauge', 200], ['backplate + wing', 1800], ['wing', 1500], ['harness', 450],
+  ['weight pockets', 4000], ['weights', 4000], ['dsmb', 300], ['surface marker', 300], ['spool', 120],
+  ['primary canister light', 900], ['canister light', 900], ['backup light', 200], ['tank marker light', 80], ['spotting light', 300],
+  ['backup mask', 150], ['mask defog', 80], ['mask', 150], ['spring straps', 120], ['dive computer', 120],
+  ['wetnotes', 120], ['cutting tool', 80], ['line cutter', 80], ['save-a-dive', 500], ['dry gloves', 200], ['wet gloves', 150],
+  ['sky-hooks', 200], ['rope ladders', 1500], ['pitons', 900], ['tether cord', 60], ['nose clip', 10],
+  ['pull buoy', 300], ['paddles', 200], ['tow buoy', 300], ['snorkel', 150], ['swim cap', 30], ['fins', 700],
+  ['wetsuit', 900], ['hood + warm hood', 250],
+  // — Golf —
+  ['clubs', 4000], ['golf gear bag', 300], ['club protector', 250], ['club cleaner', 50], ['club towel', 100],
+  ['divot tool', 30], ['ball marker', 10], ['balls', 500], ['tees', 40], ['golf pen', 15],
+  ['golf gloves', 90], ['golf mittens', 90], ['golf beanie', 80], ['golf cap', 80], ['golf trousers', 400], ['golf shoes', 500], ['glove', 90],
+  // — Bike —
+  ['bike computer', 100], ['bike stand', 800], ['bike alarm', 60], ['bromptons', 12000], ['bike', 9000],
+  ['helmet', 300], ['repair kit', 300], ['pump', 150], ['padlock', 120], ['lock', 400],
+  ['cycling shoes', 350], ['cycling jacket', 450], ['cycling jersey', 250], ['cycling shorts', 220], ['cycling t-shirt', 180], ['cycling glasses', 30], ['radar', 100], ['di2', 300],
+  // — Hiking / climbing —
+  ['trekking poles', 500], ['sit pad', 200], ['platypus', 150], ['rope', 1200], ['emergency blanket', 60], ['rescue-folie', 60],
+  ['crampons', 800], ['climbing spikes', 800], ['avalanche', 1000], ['guidebook', 300], ['hiking map', 120],
+  ['ski goggles', 120], ['rain cover', 120], ['gaiters', 150], ['heat pads', 100], ['skis', 3500], ['skates', 1500], ['snowshoes', 1800],
+  // — Footwear —
+  ['running shoes', 300], ['approach shoes', 700], ['approach', 700], ['boots', 900], ['sneakers', 650],
+  ['city shoes', 700], ['indoor slippers', 200], ['slippers', 200], ['sandals', 400], ['teva', 400], ['sliders', 250], ['neoprene boots', 400], ['shoes', 650],
+  // — Electronics / charging —
+  ['macbook', 1600], ['work laptop', 1500], ['laptop', 1500], ['ipad', 480], ['iphone power pack', 350], ['iphone tripod', 200], ['iphone', 200],
+  ['phone mount', 80], ['phone', 200], ['apple watch', 50], ['apple pencil', 20], ['garmin', 60],
+  ['airpods max', 400], ['airpods', 60], ['headphones', 70], ['power bank', 350], ['powerbank', 350], ['power pack', 350], ['spare batteries', 100],
+  ['massage gun', 700], ['hair dryer', 500], ['hair straightener', 400], ['straightener', 400], ['ace pro', 150], ['insta360', 150],
+  ['drone', 250], ['dji', 150], ['camera accessories', 150], ['camera', 300], ['stryd', 10], ['spacemouse', 150], ['mouse', 90],
+  ['ereader', 200], ['targus', 400], ['220v', 100], ['adapter', 100], ['power strip', 200], ['multi-plug', 150], ['6-way', 150],
+  ['blood-pressure', 350], ['oximeter', 60], ['thermometer', 30], ['form goggles', 60], ['form-goggles', 60],
+  ['laser rangefinder', 200], ['headlamp', 95], ['light', 120], ['charging cable', 40], ['charger', 90],
+  // — Clothing —
+  ['sports bra', 80], ['bra', 80], ['underwear', 60], ['boxers', 60], ['compression socks', 60], ['hiking socks', 70], ['running socks', 60], ['socks', 50],
+  ['merino wool', 250], ['woolpower', 250], ['base layer', 250], ['fleece top', 350], ['fleece trousers', 400], ['fleece', 350],
+  ['down jacket', 500], ['windbreaker', 350], ['shell garment', 350], ['poncho', 300], ['rain suit', 400], ['jacket', 500],
+  ['vests & t-shirts', 150], ['t-shirt', 150], ['polo', 220], ['adventure shirt', 220], ['shirt', 220], ['sweater', 350],
+  ['adventure trousers', 450], ['three-quarter', 250], ['long trousers', 400], ['trousers', 400], ['shorts', 250], ['skirt', 200], ['dress', 300], ['belt', 150],
+  ['reading glasses', 30], ['sun hat', 100], ['cap', 80], ['beanie', 80], ['headband', 40], ['alpine mittens', 110], ['flop mittens', 90], ['gloves', 90], ['mittens', 90],
+  ['neck gaiter', 60], ['swim trunks', 150], ['swimsuit', 150], ['swimwear', 150], ['sarong', 200], ['lounge pants', 300], ['loungewear', 300], ['bathrobe', 600],
+  ['reflectors', 40], ['reflex', 40], ['change of clothes', 500], ['change + a little', 500], ['spare change', 500], ['warm change', 500],
+  ['warm vest', 300], ['running vest', 300], ['vest', 300], ['sleeves', 80], ['hair tie', 15],
+  // — Toiletries & meds —
+  ['first-aid', 300], ['knee bandage', 120], ['body massage oil', 150], ['massage oil', 150], ['towels, shower', 500], ['towel', 400], ['wash bag', 300], ['neti pot', 150],
+  ['shampoo', 200], ['conditioner', 200], ['shower gel', 200], ['body lotion', 200], ['biotherm', 150], ['moisturiser', 150], ['razor', 120],
+  ['sunscreen', 150], ['sun protection', 150], ['aftersun', 150], ['face products', 150], ['mosquito', 120], ['toilet paper', 120],
+  ['toothpaste', 100], ['deodorant', 100], ['hairbrush', 100], ['hand sanitizer', 80], ['hand-sanitizer', 80], ['foot file', 40],
+  ['nail clipper', 30], ['small scissors', 40], ['scissors', 40], ['tweezers', 15], ['dental floss', 20], ['floss', 20], ['toothbrush', 20], ['tooth pickers', 10],
+  ['earplugs', 10], ['lip balm', 15], ['lipsyl', 15], ['hair ties', 15], ['glasses cleaner', 30], ['glasses case', 60], ['contacts', 30],
+  ['panty liners', 60], ['magic pearls', 100], ['blister', 20], ['finger tape', 20], ['tape', 30], ['tablets', 30], ['pills', 30], ['pill', 20],
+  ['medicine', 40], ['medication', 40], ['vitamins', 60], ['resorb', 50], ['cortisone', 40], ['cold-sore', 20], ['ear drops', 30],
+  ['waxoff', 30], ['allergy', 30], ['plasters', 20], ['iron', 30], ['seasickness', 20], ['stomach', 40],
+  // — Food & drink —
+  ['filled water', 700], ['water bottle', 150], ['nalgene', 200], ['training bottle', 120], ['thermos', 400], ['sports drink', 400],
+  ['trail mix', 150], ['hobbit food', 150], ['snack bag', 40], ['snack', 150], ['bars', 60], ['bar', 60], ['gel', 40],
+  ['recovery food', 200], ['travel food', 200], ['run food', 150], ['lentils', 500], ['fluid', 400], ['water', 500], ['fruit', 120],
+  // — Documents —
+  ['wallet', 150], ['keys, phone', 200], ['passport', 40], ['licence', 20], ['boarding pass', 15], ['token', 30],
+  ['membership card', 15], ['logbook', 150], ['insurance', 30], ['card', 20], ['currency', 60], ['tickets', 20], ['keys', 60],
+  // — Comfort & misc —
+  ['leatherman', 150], ['beach blanket', 400], ['luggage scale', 100], ['shopping bags', 100],
+  ['shoehorn', 40], ['shoe polish', 100], ['silk', 180], ['crochet', 200], ['reading', 300], ['dry bag', 100], ['laundry bag', 60],
+  ['handkerchief', 15], ['marker pen', 15], ['ballograf', 15], ['mountain pen', 15], ['pen', 15],
+  ['glasses', 30], ['tissue', 50], ['umbrella', 350], ['case', 60],
+];
+
 // Tag items with sensible defaults for weight / flags (#3) by name, so the feature
 // has real data out of the box. Everything stays editable per item.
 function tagSeed(lists) {
   const any = (n, words) => words.some((w) => n.includes(w));
-  const WEIGHTS = { // grams, representative
-    'running shoes': 300, 'cycling shoes': 350, 'golf shoes': 500, 'approach shoes': 700,
-    boots: 900, 'macbook pro': 1600, ipad: 480, powerbank: 350, clubs: 4000, wetsuit: 900,
-    'down jacket': 500, headlamp: 95, 'rain suit': 400, umbrella: 350, laptop: 1500,
-  };
   for (const l of lists) {
     for (const it of l.items) {
       const n = it.name.toLowerCase();
@@ -619,7 +695,13 @@ function tagSeed(lists) {
         'hand sanitizer', 'mosquito', 'toothpaste', 'sun protection', 'lip balm', 'face products',
         'cold-sore', 'cortisone', 'moisturiser', 'balm', 'gel', 'neti pot', 'shower'])) it.liquid = true;
       if (any(n, ['powerbank', 'power pack', 'drone', 'battery', 'batteries', 'whoop', 'e-bike', 'bromptons'])) it.restricted = true;
-      for (const k in WEIGHTS) { if (n.includes(k)) { it.weight = WEIGHTS[k]; break; } }
+      // Weight: reminders carry none; explicit/seeded weights (e.g. containers) are
+      // kept; otherwise a keyword estimate, falling back to the category default.
+      if (it.itemType === 'reminder') { it.weight = 0; continue; }
+      if (it.weight > 0) continue;
+      let w = 0;
+      for (const [k, g] of WEIGHT_RULES) { if (n.includes(k)) { w = g; break; } }
+      it.weight = w || CAT_WEIGHT[it.category] || 120;
     }
   }
   return lists;
