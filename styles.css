@@ -507,6 +507,31 @@ em {
   font-size: .8rem;
 }
 
+/* Backup reminder — a warm amber tint to set it apart from the trip/care nudges. */
+.nudge.backup {
+  background: color-mix(in srgb, var(--warn) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+}
+.nudge-x {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.nudge-x:hover { background: color-mix(in srgb, var(--muted) 18%, transparent); }
+
+/* Data-safety status lines in Settings → Your data. */
+.data-status {
+  font-size: .9rem;
+  margin: 2px 0 0;
+}
+.warn-txt { color: var(--warn); }
+
 .nudge-go {
   flex: none;
   color: var(--brand);

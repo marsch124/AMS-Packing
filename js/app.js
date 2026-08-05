@@ -17,7 +17,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v57';
+const APP_VERSION = 'v58';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -65,6 +65,56 @@ function openPhotoLightbox(src) {
 // Settings and persisted in localStorage.
 let STORAGES = [];
 const STORAGE_LOC_KEY = 'ams-storage-locations';
+
+// --- Data safety: persistent storage + backup reminders ---
+// All data lives in this device's IndexedDB (see db.js). Two guards:
+//  (1) ask the browser to mark that storage "persistent" so it isn't evicted
+//      under storage pressure or Safari's inactivity clean-up;
+//  (2) keep track of when the user last exported a backup and nudge them when
+//      it's been a while, since a saved file is the real insurance.
+const LAST_BACKUP_KEY = 'ams-last-backup';        // YYYY-MM-DD of the last JSON export
+const BACKUP_NUDGE_SNOOZE_KEY = 'ams-backup-snooze'; // YYYY-MM-DD until which the home nudge stays hidden
+const BACKUP_STALE_DAYS = 30;                     // remind if the last backup is older than this
+const BACKUP_SNOOZE_DAYS = 7;                     // after "remind me later", stay quiet this long
+
+// Ask the browser to protect our storage from automatic eviction. Safe to call
+// every launch: it's a no-op once granted, and silently unsupported elsewhere.
+async function ensurePersistentStorage() {
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      if (!(await navigator.storage.persisted())) await navigator.storage.persist();
+    }
+  } catch { /* unsupported — ignore */ }
+}
+async function storageProtected() {
+  try { return !!(navigator.storage && navigator.storage.persisted && await navigator.storage.persisted()); }
+  catch { return false; }
+}
+function lastBackupISO() { try { return localStorage.getItem(LAST_BACKUP_KEY) || ''; } catch { return ''; } }
+function markBackedUp() { try { localStorage.setItem(LAST_BACKUP_KEY, todayISO()); } catch { /* ignore */ } }
+// Whole days since the last backup, or null if one has never been made.
+function daysSinceBackup() {
+  const iso = lastBackupISO();
+  if (!iso) return null;
+  const ms = Date.now() - new Date(`${iso}T00:00:00`).getTime();
+  return ms >= 0 ? Math.floor(ms / 86400000) : 0;
+}
+function snoozeBackupNudge() {
+  const until = new Date(Date.now() + BACKUP_SNOOZE_DAYS * 86400000).toISOString().slice(0, 10);
+  try { localStorage.setItem(BACKUP_NUDGE_SNOOZE_KEY, until); } catch { /* ignore */ }
+}
+function backupNudgeSnoozed() {
+  try { const u = localStorage.getItem(BACKUP_NUDGE_SNOOZE_KEY); return !!u && u > todayISO(); }
+  catch { return false; }
+}
+// Show the home reminder only when there's real work to lose (at least one event)
+// and either no backup exists yet or it's gone stale — and it isn't snoozed.
+function shouldRemindBackup(events) {
+  if (!events || !events.length) return false;
+  if (backupNudgeSnoozed()) return false;
+  const d = daysSinceBackup();
+  return d === null || d >= BACKUP_STALE_DAYS;
+}
 function loadStorageLocs() {
   try {
     const raw = localStorage.getItem(STORAGE_LOC_KEY);
@@ -369,6 +419,19 @@ async function renderHome() {
       <span class="nudge-body"><b>Maintenance due</b> — ${care.due} item${care.due === 1 ? ' needs' : 's need'} looking after<span class="nudge-sub">${esc(parts)}</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
+  }
+
+  // Backup reminder: a saved file is the real insurance for on-device data.
+  if (shouldRemindBackup(events)) {
+    const d = daysSinceBackup();
+    const msg = d === null ? 'you haven’t saved a backup yet' : `it’s been ${d} day${d === 1 ? '' : 's'} since your last one`;
+    const nudge = h(`<div class="nudge backup">
+      <span class="nudge-ic">💾</span>
+      <a class="nudge-body" href="#/settings"><b>Back up your data</b> — ${esc(msg)}<span class="nudge-sub">Tap to open Settings → Export backup</span></a>
+      <button class="nudge-x" type="button" aria-label="Remind me later" title="Remind me later">✕</button>
+    </div>`);
+    nudge.querySelector('.nudge-x').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); snoozeBackupNudge(); render(); });
+    wrap.appendChild(nudge);
   }
 
   wrap.appendChild(h('<p class="muted pad">Set your trip details — your common base and your transport’s kit come in automatically. Tick any extra activities, then press <b>Create Event</b> to build one combined <b>Packing List</b> to pack from.</p>'));
@@ -2500,7 +2563,8 @@ function howtoCard() {
         <p><b>Excel</b> exports a trip as an .xlsx (phase, container, item, qty, packed, note). Settings can export every event at once.</p>
 
         <h3>Your data &amp; privacy</h3>
-        <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. Back it up or restore it as JSON from Settings. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
+        <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
+        <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Export backup (JSON)</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The app remembers your last backup and gives a gentle <b>💾</b> reminder on the Home screen when it’s been a while. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
 
       </div>
     </details>
@@ -2518,6 +2582,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v58', '2026-08-04 · 19:30 UTC', false, 'Keep your data safe — storage protection + backup reminders',
+      'Two safeguards for the work you put into your lists, since everything lives <b>on this device</b> (in the browser) and nothing is uploaded. <b>(1) Storage protection:</b> on launch the app now asks the browser to mark its storage as <b>persistent</b>, so your data isn’t auto-deleted under storage pressure or by Safari’s clean-up of sites left unused. <b>(2) Backup reminders:</b> the app remembers when you last saved a backup and shows a gentle <b>💾 Back up your data</b> reminder on the Home screen when you have trips and it’s been a while (or you’ve never backed up) — tap it to jump to the export, or ✕ to be reminded later. <b>Settings → Your data</b> now also shows, at a glance, whether your storage is <b>🔒 protected</b> and <b>when you last backed up</b>. Nothing about your data changed — these just make it harder to lose. The strongest protection is still to <b>install the app</b> (iPhone: Share → Add to Home Screen; Mac: File → Add to Dock) and keep an <b>exported backup</b> in Files / iCloud Drive.',
+      'Your hard-entered lists are far less likely to vanish: the browser is asked to protect them, and the app nudges you to keep a backup file — the real insurance if a browser ever clears its data.'),
     v('v57', '2026-08-04 · 17:00 UTC', false, 'Mark an item “Not in use” instead of deleting it',
       'Items you no longer pack — <b>sold, broken, destroyed, replaced, lost</b> — can now be set to <b>“Not in use”</b> without losing the record. In an item’s editor, open <b>Details &amp; ownership</b> and tick <b>🚫 Not in use</b>; a small <b>Reason</b> dropdown then lets you note why (Sold / Broken / Destroyed / Replaced / Lost / Other). A “Not in use” item is <b>kept exactly as it was</b> — its photos, care record, history and template memberships all stay — but it is <b>never added to a new trip’s packing list</b>, so retired gear stops cluttering what you actually pack. In your template and Care lists it stays visible but <b>greyed out</b> with a <b>🚫 Not in use</b> tag, and a new <b>🚫 Not in use</b> filter chip lets you round up everything you’ve retired. Existing trips already built are untouched. This is different from the <b>Condition</b> field (New / Good / Worn / Needs replacing), which grades a thing you still own and pack — an item usually goes <b>Needs replacing</b> first, then <b>Not in use</b> once you’ve actually replaced it.',
       'Retire gear you no longer use — sold, broken or replaced — and it drops out of every future packing list while its full record stays on file, so nothing’s lost and nothing irrelevant clutters your trips.'),
@@ -2705,9 +2772,21 @@ async function renderSettings() {
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h('<div class="topbar"><h1>Settings</h1></div>'));
 
+  const protectedNow = await storageProtected();
+  const dsb = daysSinceBackup();
+  const backupStatus = dsb === null
+    ? '<b class="warn-txt">No backup saved yet</b> — export one and keep it somewhere safe (Files / iCloud Drive).'
+    : dsb === 0 ? 'Last backup: <b>today</b>.'
+    : `Last backup: <b>${dsb} day${dsb === 1 ? '' : 's'} ago</b>${dsb >= BACKUP_STALE_DAYS ? ' — <b class="warn-txt">time for a fresh one</b>.' : '.'}`;
+  const protectStatus = protectedNow
+    ? '🔒 <b>Storage protected</b> — the browser has been asked not to auto-delete your data.'
+    : '⚠️ <b>Storage not yet protected</b> — <b>install</b> the app (iPhone: Share → Add to Home Screen; Mac: File → Add to Dock) so your data isn’t auto-deleted, and take regular backups.';
+
   const card = h(`<div class="card block">
     <h2>Your data</h2>
-    <p class="muted">Everything is stored on this device. Back it up as JSON, or export a spreadsheet.</p>
+    <p class="muted">Everything is stored <b>on this device only</b> — nothing is uploaded. Because it lives in the browser, a saved backup file is your real safety net.</p>
+    <p class="data-status">${protectStatus}</p>
+    <p class="data-status">${backupStatus}</p>
     <div class="btnrow">
       <button class="btn" data-x="export">Export backup (JSON)</button>
       <button class="btn" data-x="import">Import backup</button>
@@ -2794,6 +2873,8 @@ async function renderSettings() {
     if (x === 'export') {
       const json = await db.exportJSON();
       downloadBlob(new Blob([json], { type: 'application/json' }), `ams-packing-list-backup-${todayISO()}.json`);
+      markBackedUp();       // note when we last backed up, to keep the reminder honest
+      render();             // refresh the "Last backup" status shown below
     } else if (x === 'import') { file.click(); }
     else if (x === 'xlsxall') { await exportAllEventsXlsx(); }
   });
@@ -2955,6 +3036,7 @@ window.addEventListener('hashchange', render);
   const t = currentTheme();
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
   await db.ensureSeeded();
+  ensurePersistentStorage(); // ask the browser to protect our data (non-blocking)
   await render();
   // Item editors open via partial re-renders (not the router), so watch the
   // app subtree and re-evaluate the accent mode whenever the DOM changes.
