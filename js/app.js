@@ -9,6 +9,7 @@ import {
   deriveWeather, weatherSuggestions, weatherGear, WEATHER_CONDITIONS,
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
   maintenanceList, maintenanceSummary, maintenanceByDate, logMaintenance, addDays, daysBetween,
+  newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
 } from './model.js';
 import * as db from './db.js';
 import * as weather from './weather.js';
@@ -17,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v59';
+const APP_VERSION = 'v60';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -191,6 +192,12 @@ function conditionBadgeHTML(it) {
 // templates" matrix can show — by the item's stable catalog id — which templates
 // it currently belongs to. Refreshed whenever a list opens.
 let ALL_LISTS = [];
+
+// Every stored action, cached so item rows can show a pending-action badge and the
+// item editor can seed its action buffer synchronously. Refreshed on each render.
+let ALL_ACTIONS = [];
+async function refreshActions() { ALL_ACTIONS = await db.getActions(); return ALL_ACTIONS; }
+const openActionsForItem = (itemId) => (itemId ? ALL_ACTIONS.filter((a) => a.itemId === itemId && !a.done).length : 0);
 
 // The "Loose items" bin — where items live before they belong to any template.
 // It's a real list under the hood (so the editor, care, matrix all work) but
@@ -1698,6 +1705,25 @@ function batchAddItems(list) {
   });
 }
 
+// ---- Actions (to-dos) shared helpers ----
+const IC_FLAG = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4M6 4h11l-2 4 2 4H6"/></svg>';
+// The "when" choices: any time, or one of the trip phases.
+const ACTION_WHEN_OPTS = [{ value: '', label: 'Any time' }, ...PHASES.map((p) => ({ value: p.id, label: p.label }))];
+function actionWhenSelectHtml(dataAttr, val) {
+  return `<select ${dataAttr}>${ACTION_WHEN_OPTS.map((o) => `<option value="${esc(o.value)}"${o.value === (val || '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+}
+// A short human phrase for an action's timing, for chips.
+function actionWhenLabel(a) {
+  if (a.whenDate) return prettyDate(a.whenDate);
+  if (a.whenPhase) return phaseLabel(a.whenPhase);
+  return '';
+}
+// The small chips shown after an action's text (priority + timing).
+function actionChipsHtml(a) {
+  const when = actionWhenLabel(a);
+  return `${a.priority === 'high' ? '<span class="act-chip high">High</span>' : ''}${when ? `<span class="act-chip when">${IC.cal}${esc(when)}</span>` : ''}`;
+}
+
 function listItemRow(list, it, getOpen, setOpen, draw) {
   const tags = [it.owner ? `👤 ${it.owner}` : '', it.storage ? `📍 ${it.storage}` : '', it.container, ...(it.seasons || []), ...(it.contexts || []), ...(it.transports || [])].filter(Boolean);
   const chShort = it.charging ? chargeTypeShort(it.chargeType) : '';
@@ -1708,6 +1734,7 @@ function listItemRow(list, it, getOpen, setOpen, draw) {
     + `${it.restricted ? '<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">⚠️</span>' : ''}`
     + `${(it.photos || []).length ? `<span class="badge photo" title="${esc((it.photos.length === 1 ? 'Has a photo' : `${it.photos.length} photos`))}">📷${it.photos.length > 1 ? ` ${it.photos.length}` : ''}</span>` : ''}`
     + `${care ? `<span class="badge maint ${care.state}" title="${esc(`Maintenance: ${dueLabel(care)}`)}">${CARE_EMOJI[care.state]}</span>` : ''}`
+    + `${openActionsForItem(it._itemId) ? `<span class="badge act" title="${esc(`${openActionsForItem(it._itemId)} open to-do${openActionsForItem(it._itemId) === 1 ? '' : 's'}`)}">☑ ${openActionsForItem(it._itemId)}</span>` : ''}`
     + `${it.retired ? `<span class="badge retired" title="${esc('Not in use' + (it.retiredReason ? ` — ${retireReasonLabel(it.retiredReason)}` : '') + ' — kept on record, never added to a trip')}">🚫 Not in use</span>` : ''}`
     + conditionBadgeHTML(it);
   const thumb = (it.photos || []).length ? `<img class="row-thumb" src="${esc(it.photos[0])}" alt="">` : '';
@@ -1741,6 +1768,12 @@ function itemEditor(list, it, setOpen, draw) {
   let photos = (it.photos || []).slice();
   const m = it.maintenance || { notes: '', link: '', intervalDays: 0, lastDone: '', log: [] };
   let careLog = (m.log || []).slice();
+  // Actions (to-dos) tied to this item, buffered here and committed on Save (so
+  // Cancel discards edits, like photos & the care log). Seeded from the cache by
+  // the item's stable catalog id; a brand-new item starts empty and its actions
+  // are written once the item earns its id on Save.
+  let actions = ALL_ACTIONS.filter((a) => it._itemId && a.itemId === it._itemId).map((a) => ({ ...a }));
+  const actionsOpen = actions.length > 0;
   const curInterval = m.intervalDays || 0;
   const intervalIsPreset = MAINTENANCE_INTERVALS.some((p) => p.days === curInterval);
   const intervalSel = intervalIsPreset ? String(curInterval) : (curInterval ? 'custom' : '0');
@@ -1791,10 +1824,10 @@ function itemEditor(list, it, setOpen, draw) {
 
   ed.innerHTML = `
     <section class="layer layer-item">
+      <label class="field item-name"><input name="name" value="${esc(it.name)}" placeholder="Item name" aria-label="Item name"></label>
       <div class="layer-h"><span class="layer-num">1</span><span class="layer-t">The item itself</span><span class="layer-sub">The thing itself — these stay the same everywhere you use it.</span></div>
       <div class="item-head">
         <div class="item-photos" data-photos></div>
-        <label class="field item-name"><span>Item name</span><input name="name" value="${esc(it.name)}"></label>
       </div>
       <input type="file" accept="image/*" hidden data-care-file multiple>
       <div class="row2">
@@ -1835,6 +1868,17 @@ function itemEditor(list, it, setOpen, draw) {
             <input type="url" name="mlink" value="${esc(m.link)}" placeholder="https://…" autocomplete="off"></label>
 
           <div class="care-history" data-history></div>
+        </div>
+      </details>
+
+      <details class="care actions-panel"${actionsOpen ? ' open' : ''}>
+        <summary><span class="care-h">Actions <em>to-dos</em></span><span class="care-sum">Things to do for this item — they also show on the Actions tab</span></summary>
+        <div class="care-body">
+          <div class="act-list" data-act-list></div>
+          <div class="act-add">
+            <input class="act-add-text" data-act-new placeholder="Add a to-do… e.g. Replace foam tips" autocomplete="off">
+            <button type="button" class="btn sm" data-act-addbtn>${IC.plus}<span>Add</span></button>
+          </div>
         </div>
       </details>
 
@@ -1930,9 +1974,51 @@ function itemEditor(list, it, setOpen, draw) {
     box.innerHTML = `<div class="care-hhead">Maintenance history</div>${rows}`;
   };
   drawHistory();
+  // Read the current on-screen action rows back into the buffer (text / when /
+  // priority / done live in the DOM; add & delete mutate the buffer directly).
+  const syncActionsFromDOM = () => {
+    $$('.act-row', ed).forEach((row) => {
+      const a = actions[+row.dataset.actI];
+      if (!a) return;
+      a.text = ($('[data-act-text]', row).value || '').trim();
+      a.whenPhase = $('[data-act-when]', row).value || '';
+      a.priority = $('[data-act-flag]', row).classList.contains('on') ? 'high' : 'normal';
+      const wasDone = a.done;
+      a.done = $('[data-act-done]', row).checked;
+      if (a.done && !wasDone) a.doneAt = new Date().toISOString();
+      if (!a.done) a.doneAt = '';
+    });
+  };
+  const drawActions = () => {
+    const box = $('[data-act-list]', ed);
+    if (!box) return;
+    if (!actions.length) { box.innerHTML = '<p class="act-empty">No to-dos yet — add one below.</p>'; return; }
+    box.innerHTML = actions.map((a, i) => `
+      <div class="act-row${a.done ? ' done' : ''}" data-act-i="${i}">
+        <label class="act-check"><input type="checkbox" data-act-done ${a.done ? 'checked' : ''}><span class="act-box">${IC.check}</span></label>
+        <input class="act-text" data-act-text value="${esc(a.text)}" placeholder="To-do">
+        <div class="act-controls">
+          ${actionWhenSelectHtml('data-act-when', a.whenPhase)}
+          <button type="button" class="act-flag${a.priority === 'high' ? ' on' : ''}" data-act-flag title="High priority">${IC_FLAG}</button>
+          <button type="button" class="iconbtn sm act-del" data-act-del aria-label="Delete to-do">${IC.trash}</button>
+        </div>
+      </div>`).join('');
+  };
+  drawActions();
+  const addAction = () => {
+    const input = $('[data-act-new]', ed);
+    const text = (input.value || '').trim();
+    if (!text) { input.focus(); return; }
+    syncActionsFromDOM();            // keep any in-progress edits to existing rows
+    actions.push(newAction({ text }));
+    input.value = '';
+    drawActions();
+    input.focus();
+  };
 
   ed.addEventListener('change', async (e) => {
-    if (e.target.type === 'checkbox') e.target.closest('label')?.classList.toggle('on', e.target.checked);
+    if (e.target.matches('[data-act-done]')) e.target.closest('.act-row')?.classList.toggle('done', e.target.checked);
+    if (e.target.type === 'checkbox' && !e.target.matches('[data-act-done]')) e.target.closest('label')?.classList.toggle('on', e.target.checked);
     if (e.target.name === 'charging') $('.charge-type-field', ed)?.classList.toggle('hidden', !e.target.checked);
     if (e.target.name === 'retired') {
       $('.retire-reason-field', ed)?.classList.toggle('hidden', !e.target.checked);
@@ -1965,7 +2051,16 @@ function itemEditor(list, it, setOpen, draw) {
     }
   });
 
+  ed.addEventListener('keydown', (e) => {
+    if (e.target.matches('[data-act-new]') && e.key === 'Enter') { e.preventDefault(); addAction(); }
+  });
+
   ed.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-act-addbtn]')) { e.preventDefault(); addAction(); return; }
+    const flag = e.target.closest('[data-act-flag]');
+    if (flag) { flag.classList.toggle('on'); return; }
+    const delRow = e.target.closest('[data-act-del]')?.closest('.act-row');
+    if (delRow) { syncActionsFromDOM(); actions.splice(+delRow.dataset.actI, 1); drawActions(); return; }
     const viewIdx = e.target.closest('[data-photo-view]')?.dataset.photoView;
     if (viewIdx != null) { openPhotoLightbox(photos[+viewIdx]); return; }
     const rmIdx = e.target.closest('[data-photo-rm]')?.dataset.photoRm;
@@ -2043,9 +2138,12 @@ function itemEditor(list, it, setOpen, draw) {
       it.serial = ($('input[name=serial]', ed).value || '').trim();
       it.warranty = $('input[name=warranty]', ed).value || '';
       it.expiry = $('input[name=expiry]', ed).value || '';
-      // Read the "In these templates" matrix now, before the editor is torn down.
+      // Read the "In these templates" matrix and the action rows now, before the
+      // editor is torn down.
       const nameKey = it.name.trim().toLowerCase();
       const wanted = nameKey ? $$('input[name=tmpl]:not([disabled])', ed).map((b) => ({ id: b.value, checked: b.checked })) : [];
+      syncActionsFromDOM();
+      const actionsToSave = actions.filter((a) => (a.text || '').trim());
       setOpen(null);
       const ok = await saveGuard((async () => {
         await db.saveList(list); // this template: the item's shared edits + its membership here
@@ -2055,6 +2153,8 @@ function itemEditor(list, it, setOpen, draw) {
         let itemId = it._itemId
           || (await db.getList(list.id))?.items.find((z) => (z.name || '').trim().toLowerCase() === nameKey)?._itemId;
         if (!itemId) return;
+        // Commit this item's to-dos (tied by the stable catalog id).
+        await db.replaceItemActions(itemId, it.name, actionsToSave);
         // Reconcile the OTHER templates by that id: a tick adds a membership, an
         // untick removes it. No name-matching, and a rename needs no special handling
         // because every template shares the one catalog item — the new name shows
@@ -2086,7 +2186,7 @@ function itemEditor(list, it, setOpen, draw) {
           }
         }
       })());
-      if (ok) { ALL_LISTS = await db.getLists(); draw(); }
+      if (ok) { ALL_LISTS = await db.getLists(); await refreshActions(); draw(); }
     }
   });
   return ed;
@@ -2582,6 +2682,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v60', '2026-08-05 · 12:00 UTC', false, 'Actions — a to-do list, per item and central',
+      'A new <b>Actions</b> tab (the red one in the bottom bar) gives you a proper <b>to-do list</b>. Actions come in two kinds. <b>Tied to an item:</b> open any item’s editor (Templates tab) and use the new <b>Actions</b> panel to jot things to do for it — “replace foam tips”, “re-wax the zip”, “charge before the trip”. Because each item lives once in the catalog, its actions follow it everywhere, and the item’s row shows a small <b>☑ count</b> of open to-dos. <b>General (loose):</b> on the Actions tab tap <b>New</b> to add a to-do that isn’t about any one item — you can still tie it to an item later from the same editor. Every action can carry a <b>priority</b> (High / Normal), a <b>when</b> (a trip phase like “≥1 week ahead”, or a specific <b>date</b>), and a tick to mark it <b>done</b>. The <b>Actions</b> tab gathers them all in one place, open ones first (High before Normal, soonest first), with completed ones tucked into a collapsible <b>Done</b> group. Ticking an item’s action done is <b>permanent on that item</b> — it doesn’t reset each trip. Actions are stored on-device like everything else and are <b>included in your JSON backup</b>. Also in this release: an item’s big <b>name</b> now sits at the very top of its editor, above the “① The item itself” heading, with the redundant “Item name” label removed.',
+      'One place to track everything you need to <i>do</i> — not just pack — whether it belongs to a specific piece of gear or stands on its own, sorted so the urgent, soonest things rise to the top.'),
     v('v59', '2026-08-05 · 08:00 UTC', false, 'Backups now include your Storage places too',
       'A follow-up so a <b>JSON backup is a truly complete restore point</b>. Your <b>photos, care records and every item detail were already saved</b> in the backup (they live inside each item), and so were all your templates and trips. The one thing that lived <b>outside</b> the main store was the custom <b>Storage places</b> list you manage in Settings — plus your theme and list-view choice. Those are now <b>included in Export backup (JSON)</b> and <b>restored on Import</b>. Storage places are <b>merged</b> on import (you never lose a place you already had). Older backup files still import fine — they simply have no places to add. Nothing about the data itself changed; the backup is just now 100% complete.',
       'Export/Import is now a full, faithful copy of everything you’ve set up — including your custom storage places — so moving to a new device or recovering after a browser wipe leaves nothing behind.'),
@@ -2766,6 +2869,124 @@ function versionHistoryCard() {
       </div>
     </details>
   </div>`);
+}
+
+// ============================================================
+// Actions — the central to-do list. Every action shows here, whether it's tied
+// to an item (and so also shown on that item) or "General" (loose). New loose
+// actions are added here too.
+// ============================================================
+let actionEditId = null;       // id of the action whose inline editor is open ('__new__' = the add form)
+let actionShowDone = false;    // whether the collapsed "Done" group is expanded
+
+async function renderActions() {
+  const wrap = h('<section class="screen"></section>');
+  wrap.appendChild(h(`<div class="topbar"><h1>Actions</h1><button class="btn primary" data-new>${IC.plus}<span>New</span></button></div>`));
+  wrap.appendChild(h('<p class="screen-intro">Your to-do list. An action tied to an item also shows on that item; “General” ones live only here.</p>'));
+
+  const [actionsAll, catalog] = await Promise.all([db.getActions(), db.getCatalogItems()]);
+  ALL_ACTIONS = actionsAll;
+  const nameById = new Map(catalog.map((i) => [i.id, i.name]));
+  const itemLabelFor = (a) => (a.itemId ? (nameById.get(a.itemId) || a.itemName || '(item)') : '');
+  // Item picker for the inline editor: General + every catalog item, by name.
+  const itemOpts = [{ value: '', label: '— General (not tied to an item) —' }]
+    .concat(catalog.slice().sort((x, y) => (x.name || '').localeCompare(y.name || '')).map((i) => ({ value: i.id, label: i.name || '(unnamed)' })));
+
+  const body = h('<div class="act-screen"></div>');
+  wrap.appendChild(body);
+
+  // A read-only row; tap the body to open its editor, tick the box to complete.
+  function actionRow(a) {
+    const itemName = itemLabelFor(a);
+    const row = h(`<div class="act-brow${a.done ? ' done' : ''}">
+      <label class="act-check"><input type="checkbox" ${a.done ? 'checked' : ''}><span class="act-box">${IC.check}</span></label>
+      <button class="act-body" type="button">
+        <span class="act-btext">${esc(a.text || '(empty)')}</span>
+        <span class="act-bsub">${itemName ? `<span class="act-item">${esc(itemName)}</span>` : '<span class="act-item general">General</span>'}${actionChipsHtml(a)}</span>
+      </button>
+    </div>`);
+    $('input', row).addEventListener('change', async (e) => {
+      a.done = e.target.checked; a.doneAt = a.done ? new Date().toISOString() : '';
+      await db.saveAction(a); await refreshActions(); draw();
+    });
+    $('.act-body', row).addEventListener('click', () => { actionEditId = a.id; draw(); });
+    return row;
+  }
+
+  // The inline editor for one action (existing or brand-new).
+  function actionEditor(a, isNew) {
+    const withData = (html, attr) => html.replace('<select', `<select ${attr}`);
+    const ed = h(`<div class="act-editor">
+      <label class="field"><span>To-do</span><input data-f="text" value="${esc(a.text)}" placeholder="e.g. Replace foam tips" autocomplete="off"></label>
+      <label class="field"><span>Tied to</span>${withData(selectHtml('actitem', itemOpts, a.itemId), 'data-f="item"')}</label>
+      <div class="row2">
+        <label class="field"><span>Priority</span>${withData(selectHtml('actprio', ACTION_PRIORITIES.map((p) => ({ value: p.id, label: p.label })), a.priority), 'data-f="prio"')}</label>
+        <label class="field"><span>When <em>trip phase</em></span>${actionWhenSelectHtml('data-f="phase"', a.whenPhase)}</label>
+      </div>
+      <label class="field"><span>Or a specific date</span><input type="date" data-f="date" value="${esc(a.whenDate)}"></label>
+      <div class="editor-actions">
+        ${isNew ? '' : `<button type="button" class="btn danger ghost" data-a="del">${IC.trash}<span>Delete</span></button>`}
+        <div class="spacer"></div>
+        <button type="button" class="btn" data-a="cancel">Cancel</button>
+        <button type="button" class="btn primary" data-a="save">Save</button>
+      </div>
+    </div>`);
+    ed.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-a]')?.dataset.a;
+      if (!act) return;
+      if (act === 'cancel') { actionEditId = null; draw(); return; }
+      if (act === 'del') {
+        if (!confirm('Delete this to-do?')) return;
+        await db.deleteAction(a.id); await refreshActions(); actionEditId = null; draw(); return;
+      }
+      if (act === 'save') {
+        const text = ($('[data-f=text]', ed).value || '').trim();
+        if (!text) { $('[data-f=text]', ed).focus(); return; }
+        const itemId = $('[data-f=item]', ed).value;
+        a.text = text;
+        a.itemId = itemId;
+        a.itemName = itemId ? (nameById.get(itemId) || '') : '';
+        a.priority = $('[data-f=prio]', ed).value;
+        a.whenPhase = $('[data-f=phase]', ed).value;
+        a.whenDate = $('[data-f=date]', ed).value || '';
+        await db.saveAction(a); await refreshActions();
+        actionEditId = null; draw();
+      }
+    });
+    setTimeout(() => $('[data-f=text]', ed)?.focus(), 20);
+    return ed;
+  }
+
+  function draw() {
+    const list = ALL_ACTIONS.slice().sort(compareActions);
+    const open = list.filter((a) => !a.done);
+    const done = list.filter((a) => a.done);
+    body.innerHTML = '';
+
+    if (actionEditId === '__new__') body.appendChild(actionEditor(newAction(), true));
+
+    if (!open.length && !done.length && actionEditId !== '__new__') {
+      body.appendChild(h('<div class="empty"><p class="empty-t">No actions yet</p><p class="empty-s">Tap “New” to add a to-do, or add one from any item’s editor.</p></div>'));
+      return;
+    }
+
+    const openWrap = h('<div class="act-group"></div>');
+    open.forEach((a) => openWrap.appendChild(a.id === actionEditId ? actionEditor(a, false) : actionRow(a)));
+    if (open.length) body.appendChild(openWrap);
+
+    if (done.length) {
+      const det = h(`<details class="act-done"${actionShowDone ? ' open' : ''}><summary>Done <span class="act-done-n">${done.length}</span></summary></details>`);
+      const dWrap = h('<div class="act-group"></div>');
+      done.forEach((a) => dWrap.appendChild(a.id === actionEditId ? actionEditor(a, false) : actionRow(a)));
+      det.appendChild(dWrap);
+      det.addEventListener('toggle', () => { actionShowDone = det.open; });
+      body.appendChild(det);
+    }
+  }
+
+  $('[data-new]', wrap).addEventListener('click', () => { actionEditId = '__new__'; draw(); });
+  draw();
+  return wrap;
 }
 
 // ============================================================
@@ -2995,6 +3216,7 @@ async function renderRoute() {
   if (hash === '#/events') return renderEvents();
   if (hash === '#/lists') return renderLists();
   if (hash === '#/maintenance') return renderMaintenance();
+  if (hash === '#/actions') return renderActions();
   if (hash === '#/refine') return renderRefine();
   if (hash === '#/settings') return renderSettings();
   const tripLink = m(/^#\/t\/(.+)$/);
@@ -3018,6 +3240,7 @@ let rendering = false;
 async function render() {
   if (rendering) return; rendering = true;
   try {
+    await refreshActions();     // fresh action data for badges, the editor buffer & the Actions screen
     const node = await renderRoute();
     app.innerHTML = '';
     app.appendChild(node);
@@ -3036,6 +3259,7 @@ function setActiveTab() {
   const base = hash.startsWith('#/events') || hash.startsWith('#/event/') ? '#/events'
     : hash.startsWith('#/list') || hash === '#/refine' ? '#/lists'
     : hash.startsWith('#/maintenance') ? '#/maintenance'
+    : hash.startsWith('#/actions') ? '#/actions'
     : hash.startsWith('#/settings') ? '#/settings' : '#/';
   $$('.tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === base));
 }
@@ -3047,6 +3271,7 @@ function currentSection() {
   if (hash.startsWith('#/events') || hash.startsWith('#/event/')) return 'events';
   if (hash.startsWith('#/list') || hash === '#/refine') return 'templates';
   if (hash.startsWith('#/maintenance')) return 'care';
+  if (hash.startsWith('#/actions')) return 'actions';
   if (hash.startsWith('#/settings')) return 'settings';
   return 'home';
 }

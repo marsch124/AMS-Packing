@@ -14,18 +14,19 @@
 // rest of the app keeps working exactly as before while the storage underneath is
 // relational. All data stays on this device; export/import moves it as JSON/CSV/Excel.
 import {
-  coerceList, coerceEvent, coerceItem, coerceMembership, normName,
+  coerceList, coerceEvent, coerceItem, coerceMembership, coerceAction, normName,
   resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   buildTripBundle, parseTripBundle, sortEventsForList,
 } from './model.js';
 import { seedLists } from './seed.js';
 
 const DB_NAME = 'ams-packing-list';
-const DB_VERSION = 2;               // v2: relational stores (items/memberships/templates)
+const DB_VERSION = 3;               // v3: adds the `actions` store (to-dos); v2: relational stores
 const ITEMS = 'items';
 const MEMBERSHIPS = 'memberships';
 const TEMPLATES = 'templates';
 const EVENTS = 'events';
+const ACTIONS = 'actions';          // standalone to-do store (tied-to-item or loose)
 const LISTS = 'lists';              // legacy v1 store — read once to migrate, then ignored
 // Bump when the built-in seed data changes, to refresh the built-in templates on next load.
 const SEED_VERSION = 9;             // v9: storage moved to the relational catalog
@@ -42,6 +43,7 @@ function open() {
       if (!db.objectStoreNames.contains(ITEMS)) db.createObjectStore(ITEMS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(MEMBERSHIPS)) db.createObjectStore(MEMBERSHIPS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(TEMPLATES)) db.createObjectStore(TEMPLATES, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(ACTIONS)) db.createObjectStore(ACTIONS, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -218,6 +220,42 @@ export function getEvent(id) { return getOneRaw(EVENTS, id).then((e) => (e ? coe
 export function saveEvent(event) { event.updatedAt = new Date().toISOString(); return putOne(EVENTS, event); }
 export function deleteEvent(id) { return delOne(EVENTS, id); }
 
+// --- Actions (to-dos) — a flat store, like events ---
+
+export async function getActions() {
+  const raw = await getAllRaw(ACTIONS);
+  return (raw || []).map(coerceAction);
+}
+export async function getActionsForItem(itemId) {
+  if (!itemId) return [];
+  return (await getActions()).filter((a) => a.itemId === itemId);
+}
+export function saveAction(action) {
+  const a = coerceAction({ ...action });
+  a.updatedAt = new Date().toISOString();
+  return putOne(ACTIONS, a);
+}
+export function deleteAction(id) { return delOne(ACTIONS, id); }
+// Reconcile the stored actions for one item to match `wanted` (used by the item
+// editor, which buffers its action edits and commits them on Save). Deletes the
+// item's actions that are no longer wanted, then writes the current set.
+export async function replaceItemActions(itemId, itemName, wanted) {
+  if (!itemId) return;
+  const existing = await getActionsForItem(itemId);
+  const keep = new Set((wanted || []).map((a) => a.id));
+  const puts = (wanted || []).map((a) => ({ store: ACTIONS, value: coerceAction({ ...a, itemId, itemName, updatedAt: new Date().toISOString() }) }));
+  const dels = existing.filter((a) => !keep.has(a.id)).map((a) => ({ store: ACTIONS, key: a.id }));
+  await writeBatch(puts, dels);
+}
+
+// The raw catalog items (the shared "thing itself" records), for screens that
+// need every item once — e.g. the central Actions list resolving item names,
+// and its "tie to an item" picker.
+export async function getCatalogItems() {
+  const raw = await getAllRaw(ITEMS);
+  return (raw || []).map(coerceItem);
+}
+
 // --- Catalog write helpers (seed / migrate / reseed) ---
 
 async function replaceCatalog(catalog) {
@@ -276,9 +314,9 @@ export async function ensureSeeded() {
 // is a complete restore point. Photos/care/all item detail are already inside
 // `lists` because getLists() resolves the full item shape.
 export async function exportJSON(extra = {}) {
-  const [lists, events] = await Promise.all([getLists(), getEvents()]);
+  const [lists, events, actions] = await Promise.all([getLists(), getEvents(), getActions()]);
   return JSON.stringify(
-    { app: 'ams-packing-list', version: 1, exportedAt: new Date().toISOString(), lists, events, ...extra },
+    { app: 'ams-packing-list', version: 1, exportedAt: new Date().toISOString(), lists, events, actions, ...extra },
     null, 2,
   );
 }
@@ -290,25 +328,29 @@ export async function importJSON(text, { merge = false } = {}) {
   }
   const lists = Array.isArray(data.lists) ? data.lists.map(coerceList) : [];
   const events = Array.isArray(data.events) ? data.events.map(coerceEvent) : [];
+  const actions = Array.isArray(data.actions) ? data.actions.map(coerceAction) : [];
   if (!merge) {
     // Replace: rebuild the catalog from the imported lists in one shot.
     await replaceCatalog(buildCatalog(lists));
     const db = await open();
-    const tx = db.transaction(EVENTS, 'readwrite');
+    const tx = db.transaction([EVENTS, ACTIONS], 'readwrite');
     tx.objectStore(EVENTS).clear();
     for (const e of events) tx.objectStore(EVENTS).put(e);
+    tx.objectStore(ACTIONS).clear();
+    for (const a of actions) tx.objectStore(ACTIONS).put(a);
     await txP(tx);
   } else {
-    // Merge: decompose each imported list into the existing catalog, add events.
+    // Merge: decompose each imported list into the existing catalog, add events + actions.
     for (const l of lists) await saveList(l);
-    if (events.length) {
+    if (events.length || actions.length) {
       const db = await open();
-      const tx = db.transaction(EVENTS, 'readwrite');
+      const tx = db.transaction([EVENTS, ACTIONS], 'readwrite');
       for (const e of events) tx.objectStore(EVENTS).put(e);
+      for (const a of actions) tx.objectStore(ACTIONS).put(a);
       await txP(tx);
     }
   }
-  return { lists: lists.length, events: events.length, prefs: (data.prefs && typeof data.prefs === 'object') ? data.prefs : null };
+  return { lists: lists.length, events: events.length, actions: actions.length, prefs: (data.prefs && typeof data.prefs === 'object') ? data.prefs : null };
 }
 
 // --- Trip sharing (one event, backend-free) ---

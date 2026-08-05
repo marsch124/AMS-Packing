@@ -45,11 +45,11 @@
   }
 }
 
-/* Section themes — each of the five sections tints its whole page.
-   Only --brand/--brand-2 change per section; chips, links, buttons, headings,
-   tabs, pills and progress bars all reference them, so every page recolours
-   automatically in light & dark. Home = blue, Events = green, Templates =
-   violet, Care = teal, Settings = slate. */
+/* Section themes — each section tints its whole page. Only --brand/--brand-2
+   change per section; chips, links, buttons, headings, tabs, pills and progress
+   bars all reference them, so every page recolours automatically in light &
+   dark. Home = blue, Events = green, Templates = violet, Care = teal,
+   Actions = red, Settings = slate. */
 :root[data-section="home"] {
   --brand: #2f6fe0;
   --brand-2: #2356b8;
@@ -74,6 +74,12 @@
 }
 
 /* Care & maintenance */
+:root[data-section="actions"] {
+  --brand: #dc3d43;
+  --brand-2: #b52a30;
+}
+
+/* Actions — the central to-do list (red) */
 :root[data-section="settings"] {
   --brand: #64748b;
   --brand-2: #475569;
@@ -1043,6 +1049,11 @@ legend {
 .badge.unfiled {
   color: var(--warn);
   background: color-mix(in srgb, var(--warn) 16%, transparent);
+}
+
+.badge.act {
+  color: #dc3d43;
+  background: color-mix(in srgb, #dc3d43 16%, transparent);
 }
 
 /* Item condition — only shown when it needs attention (worn / needs-replacing). */
@@ -2904,6 +2915,9 @@ details.care[open] .care-h::before {
 /* The inline "＋ Add new…" text box under a growing dropdown (colour/size/…). */
 .item-editor .grow-new { margin-top: 6px; }
 
+.item-editor .item-name {
+  margin-bottom: 14px;
+}
 .item-editor .item-name input {
   font-size: 1.2rem;
   font-weight: 700;
@@ -3045,4 +3059,228 @@ details.care[open] .care-h::before {
   font-style: normal;
   font-weight: 600;
   opacity: .85;
+}
+/* ============================================================
+   Actions (to-dos) — the item-editor panel and the central list.
+   ============================================================ */
+
+/* A reusable round-box checkbox used by both the editor rows and the
+   central list. The native input is hidden and drives the .act-box. */
+.act-check {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.act-check input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  margin: 0;
+  cursor: pointer;
+}
+.act-box {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--line);
+  border-radius: 7px;
+  background: var(--card);
+  color: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.act-box .ic {
+  width: 15px;
+  height: 15px;
+}
+.act-check input:checked+.act-box {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+
+/* --- Item-editor Actions panel --- */
+.act-list {
+  display: grid;
+  gap: 8px;
+}
+.act-empty {
+  color: var(--muted);
+  font-size: .88rem;
+  margin: 2px 0;
+}
+.act-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.act-row .act-text {
+  flex: 1 1 140px;
+  padding: 7px 9px;
+}
+.act-row.done .act-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.act-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.act-controls select {
+  width: auto;
+  padding: 7px 8px;
+  font-size: .85rem;
+}
+.act-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--muted);
+  cursor: pointer;
+}
+.act-flag .ic {
+  width: 17px;
+  height: 17px;
+}
+.act-flag.on {
+  color: #dc3d43;
+  border-color: #dc3d43;
+  background: color-mix(in srgb, #dc3d43 12%, transparent);
+}
+.act-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.act-add .act-add-text {
+  flex: 1 1 auto;
+}
+.act-add .btn {
+  flex: 0 0 auto;
+}
+
+/* --- Central Actions screen --- */
+.screen-intro {
+  color: var(--muted);
+  font-size: .9rem;
+  margin: -4px 0 2px;
+}
+.act-screen {
+  display: grid;
+  gap: 14px;
+}
+.act-group {
+  display: grid;
+  gap: 8px;
+}
+.act-brow {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 11px 12px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.act-brow.done {
+  opacity: .68;
+}
+.act-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.act-btext {
+  font-weight: 600;
+  color: var(--ink);
+}
+.act-brow.done .act-btext {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+.act-bsub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: .8rem;
+}
+.act-item {
+  color: var(--brand);
+  font-weight: 600;
+}
+.act-item.general {
+  color: var(--muted);
+  font-weight: 500;
+}
+.act-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: .72rem;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--line-2);
+  color: var(--muted);
+}
+.act-chip .ic {
+  width: 12px;
+  height: 12px;
+}
+.act-chip.high {
+  color: #dc3d43;
+  background: color-mix(in srgb, #dc3d43 14%, transparent);
+}
+.act-done {
+  margin-top: 2px;
+}
+.act-done>summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 6px 2px;
+  list-style: none;
+}
+.act-done>summary::-webkit-details-marker {
+  display: none;
+}
+.act-done-n {
+  display: inline-block;
+  min-width: 18px;
+  text-align: center;
+  font-size: .72rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--muted);
+  margin-left: 4px;
+}
+.act-done .act-group {
+  margin-top: 8px;
+}
+.act-editor {
+  background: var(--card);
+  border: 1px solid var(--brand);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
 }

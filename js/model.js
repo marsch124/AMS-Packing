@@ -264,7 +264,66 @@ export function coerceEvent(e) {
   return e;
 }
 
+// --- Actions (to-dos) -------------------------------------------------------
+// A small to-do, optionally tied to a catalog item (`itemId`) or "loose" (itemId
+// ''). Actions live in their OWN store (not on the item), so the central Actions
+// list has ONE clean source and a loose action needs no item at all. Ticking
+// `done` is permanent on the action — it does not reset per trip.
+export const ACTION_PRIORITIES = [
+  { id: 'high',   label: 'High' },
+  { id: 'normal', label: 'Normal' },
+];
+export const ACTION_PRIORITY_IDS = ACTION_PRIORITIES.map((p) => p.id);
+export function actionPriorityLabel(pid) {
+  const p = ACTION_PRIORITIES.find((x) => x.id === pid);
+  return p ? p.label : 'Normal';
+}
+
+export function coerceAction(a) {
+  if (!a || typeof a !== 'object') return a;
+  a.text = typeof a.text === 'string' ? a.text : '';
+  a.itemId = typeof a.itemId === 'string' ? a.itemId : '';        // '' = loose (not tied to an item)
+  a.itemName = typeof a.itemName === 'string' ? a.itemName : '';  // cached item name, for display + orphan fallback
+  a.priority = ACTION_PRIORITY_IDS.includes(a.priority) ? a.priority : 'normal';
+  a.whenPhase = PHASE_IDS.includes(a.whenPhase) ? a.whenPhase : ''; // optional trip phase (≥1 week ahead…)
+  a.whenDate = isYMD(a.whenDate) ? a.whenDate : '';                 // optional calendar date (YYYY-MM-DD)
+  a.done = !!a.done;
+  a.doneAt = typeof a.doneAt === 'string' ? a.doneAt : '';         // ISO timestamp when ticked done
+  if (typeof a.createdAt !== 'string') a.createdAt = nowISO();
+  if (typeof a.updatedAt !== 'string') a.updatedAt = a.createdAt;
+  return a;
+}
+
+// A timing rank used to order the central list: concrete dates first (soonest
+// wins), then trip phases in their natural order, then anything untimed.
+function actionWhenRank(a) {
+  if (a.whenDate) return `0-${a.whenDate}`;
+  if (a.whenPhase) return `1-${String(phaseOrder(a.whenPhase)).padStart(2, '0')}`;
+  return '9';
+}
+// Sort for the central Actions list: open before done, high before normal,
+// sooner before later, then newest-created first.
+export function compareActions(a, b) {
+  if (!!a.done !== !!b.done) return a.done ? 1 : -1;
+  const pa = a.priority === 'high' ? 0 : 1, pb = b.priority === 'high' ? 0 : 1;
+  if (pa !== pb) return pa - pb;
+  const ta = actionWhenRank(a), tb = actionWhenRank(b);
+  if (ta !== tb) return ta < tb ? -1 : 1;
+  return (b.createdAt || '').localeCompare(a.createdAt || '');
+}
+
 // --- Constructors ---
+
+export function newAction(partial = {}) {
+  return coerceAction({
+    id: id(),
+    text: '', itemId: '', itemName: '',
+    priority: 'normal', whenPhase: '', whenDate: '',
+    done: false, doneAt: '',
+    createdAt: nowISO(), updatedAt: nowISO(),
+    ...partial,
+  });
+}
 
 export function newItem(partial = {}) {
   return coerceItem({
