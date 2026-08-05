@@ -518,6 +518,12 @@ em {
   background: color-mix(in srgb, var(--warn) 12%, var(--card));
   border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
 }
+/* To-do reminder — a red tint echoing the red Actions tab it links to. */
+.nudge.todo {
+  background: color-mix(in srgb, var(--danger) 9%, var(--card));
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
+}
+.nudge.todo .nudge-go { color: var(--danger); }
 .nudge-x {
   flex: none;
   border: 0;

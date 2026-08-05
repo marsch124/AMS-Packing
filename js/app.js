@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v61';
+const APP_VERSION = 'v62';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -401,7 +401,8 @@ function activitiesPicker(lists, selected) {
 // Events list (home)
 // ============================================================
 async function renderHome() {
-  const [events, lists] = await Promise.all([db.getEvents(), db.getLists()]);
+  const [events, lists, actions] = await Promise.all([db.getEvents(), db.getLists(), db.getActions()]);
+  ALL_ACTIONS = actions; // keep the module cache warm for item to-do badges
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h('<div class="topbar"><h1>AMS Packing List</h1></div>'));
 
@@ -424,6 +425,19 @@ async function renderHome() {
     wrap.appendChild(h(`<a class="nudge care" href="#/maintenance">
       <span class="nudge-ic">🧰</span>
       <span class="nudge-body"><b>Maintenance due</b> — ${care.due} item${care.due === 1 ? ' needs' : 's need'} looking after<span class="nudge-sub">${esc(parts)}</span></span>
+      <span class="nudge-go">${IC.fwd}</span>
+    </a>`));
+  }
+
+  // To-do reminder: open actions waiting on the Actions tab — a glanceable count
+  // up here with the other nudges, rather than the full list buried down-page.
+  const openActions = actions.filter((a) => !a.done);
+  if (openActions.length) {
+    const high = openActions.filter((a) => a.priority === 'high').length;
+    const detail = `${openActions.length} open${high ? ` · ${high} high-priority` : ''}`;
+    wrap.appendChild(h(`<a class="nudge todo" href="#/actions">
+      <span class="nudge-ic">🗒️</span>
+      <span class="nudge-body"><b>To-dos to tackle</b> — ${detail}<span class="nudge-sub">Tap to open your Actions list</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
   }
@@ -2682,6 +2696,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v62', '2026-08-05 · 14:00 UTC', false, 'Open to-dos surface on the Home screen',
+      'The <b>Home</b> screen now shows a small <b>to-dos reminder</b> up top, alongside the trip ⏰, maintenance 🧰 and backup 💾 nudges — a red-tinted <b>🗒️ “To-dos to tackle”</b> card that counts your <b>open actions</b> (and calls out how many are <b>high-priority</b>), tapping through to the <b>Actions</b> tab. It only appears when something is actually open, so a clear list keeps Home clean. Nothing else on Home moved — the reminder sits with the other nudges, above the <b>Create Event</b> builder.',
+      'You see what still needs <i>doing</i> the moment you open the app, without hunting for the Actions tab — the urgent, high-priority items are called out right where your eye already lands.'),
     v('v61', '2026-08-05 · 13:00 UTC', false, 'Tiny version marker in the tab-bar corner',
       'A very small <b>build-version label</b> (e.g. “v61”) now sits in the <b>far bottom-right corner</b> of the navigation bar, just past the Settings tab — a quiet reference so you can tell at a glance which version is running on any device. It’s deliberately faint and doesn’t get in the way of tapping Settings. The fuller “AMS Packing List · v61” line at the bottom of the Home screen is unchanged.',
       'You can confirm the running version instantly, from any screen, without opening Settings.'),
