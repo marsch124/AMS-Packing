@@ -95,7 +95,10 @@ export const WEATHER_CONDITIONS = [
   { id: 'hot', label: 'Heat' }, { id: 'wind', label: 'Wind' }, { id: 'snow', label: 'Snow' },
 ];
 export const WEATHER_CONDITION_IDS = WEATHER_CONDITIONS.map((w) => w.id);
-export const CONTEXTS = ['Indoor', 'Outdoor', 'Race', 'Training'];
+// Context applies ONLY to WET (Workout, Exercise & Training) activity lists — it
+// describes how a workout is done (indoors, outdoors, or as a race). It never
+// narrows GA / base / transport lists.
+export const CONTEXTS = ['Indoor', 'Outdoor', 'Race'];
 export const CATERING = [
   { id: 'self',   label: 'Self-sufficient (cooking our own)' },
   { id: 'eatout', label: 'Restaurants / eating out' },
@@ -442,11 +445,18 @@ function contextsOk(itemContexts, eventContexts) {
   return vals.some((v) => ev.includes(v));
 }
 
-export function itemMatchesEvent(item, event) {
+// The event's Context (Indoor / Outdoor / Race) only narrows items that belong to
+// a WET list. `list` is the building-block list the item came from; when it isn't
+// a WET list (or isn't given), context is ignored and the item always applies.
+export function contextApplies(list) {
+  return !!list && list.group === 'WET';
+}
+
+export function itemMatchesEvent(item, event, list) {
   return dimOk(item.seasons, event.season)
     && dimOk(item.transports, event.transport)
     && dimOk(item.catering, event.catering)
-    && contextsOk(item.contexts, event.contexts);
+    && (contextApplies(list) ? contextsOk(item.contexts, event.contexts) : true);
 }
 
 // --- Total List generation ---
@@ -524,7 +534,7 @@ export function buildTotalEntries(event, lists) {
     for (const item of list.items) {
       if (!item || !String(item.name || '').trim()) continue;
       if (item.retired) continue; // "Not in use" — kept on record but never packed
-      if (!itemMatchesEvent(item, event)) continue;
+      if (!itemMatchesEvent(item, event, list)) continue;
       if (asArray(item.weather).length) continue; // conditional gear — offered via the forecast, not the base list
       const key = `${normName(item.name)}|${item.container}`;
       if (seen.has(key)) continue; // first source wins; keep it simple & predictable
@@ -1132,7 +1142,7 @@ export function weatherGear(event, lists = []) {
     if (!list) continue;
     for (const it of asArray(list.items)) {
       const tags = asArray(it.weather);
-      if (!tags.length || !it.name || !itemMatchesEvent(it, event)) continue;
+      if (!tags.length || !it.name || !itemMatchesEvent(it, event, list)) continue;
       const key = normName(it.name);
       if (have.has(key) || seen.has(key)) continue;
       seen.add(key);
@@ -1168,7 +1178,7 @@ export function weatherSuggestions(event, lists = []) {
     for (const it of asArray(list.items)) {
       const tags = asArray(it.weather);
       const reason = tags.find((t) => active.has(t));
-      if (!reason || !it.name || !itemMatchesEvent(it, event)) continue;
+      if (!reason || !it.name || !itemMatchesEvent(it, event, list)) continue;
       const key = normName(it.name);
       if (have.has(key) || seen.has(key)) continue;
       seen.add(key);
