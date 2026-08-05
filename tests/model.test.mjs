@@ -365,6 +365,19 @@ test('seedLists: the built-in Diving template ships pre-filled with sections', (
   assert.ok(dive.sections.every((s) => used.has(s.id)), 'every section has items');
 });
 
+test('seedLists: EVERY template ships with a well-formed section list', () => {
+  for (const l of seedLists()) {
+    assert.ok(Array.isArray(l.sections) && l.sections.length > 0, `${l.name} has sections`);
+    assert.ok(l.sections.every((s) => s.id && s.name), `${l.name} sections are well-formed`);
+    const ids = new Set(l.sections.map((s) => s.id));
+    assert.equal(ids.size, l.sections.length, `${l.name} has unique section ids`);
+    // Populated templates: every item lands in a real section (no orphan refs).
+    for (const it of l.items) {
+      assert.ok(it.section && ids.has(it.section), `${l.name} item "${it.name}" has a valid section`);
+    }
+  }
+});
+
 test('seedLists: Travel and RV bases are populated with valid items', () => {
   const byName = Object.fromEntries(seedLists().map((l) => [l.name, l]));
   assert.ok(byName.Travel.items.length > 80, `Travel base is substantial (${byName.Travel.items.length})`);

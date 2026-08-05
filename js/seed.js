@@ -691,9 +691,48 @@ const DIVE = [
   it('Analyse gas & note MOD', { sv: '', cat: REM, sec: DS.doc, rem: true, ph: 'prep' }),
 ];
 
+// Give every template a well-organised section list out of the box. Diving ships
+// with its own bespoke gear sections (set inline above); every other populated
+// template is grouped by a friendly, consistent scheme derived from each item's
+// category, and the empty activity scaffolds get a ready-to-fill skeleton. All of
+// it is fully editable in the app (Sections button + each item's Section picker).
+const SEC_ORDER = ['Clothing', 'Footwear', 'Gear & equipment', 'Tech & devices',
+  'Toiletries & body care', 'Food & drink', 'Documents & money', 'Comfort & misc', 'Reminders'];
+const CAT_SEC = {
+  'Clothing': 'Clothing', 'Adventure clothing': 'Clothing', 'Footwear': 'Footwear',
+  'Sport gear': 'Gear & equipment', 'Electronics': 'Tech & devices', 'Charging': 'Tech & devices',
+  'Toiletries': 'Toiletries & body care', 'Pharmacy / meds': 'Toiletries & body care',
+  'Food & drink': 'Food & drink', 'Documents & money': 'Documents & money',
+  'Comfort & misc': 'Comfort & misc', 'Reminders': 'Reminders',
+};
+// Empty scaffolds: a starting skeleton so they're ready to fill (no items yet).
+const SEC_SKELETONS = {
+  'Freediving': ['Wetsuit & exposure', 'Gear & equipment', 'Safety', 'Tech & devices', 'Documents & certification'],
+  'Strength': ['Clothing', 'Footwear', 'Equipment', 'Tech & devices'],
+  'Yoga / Mobility': ['Clothing', 'Mat & props', 'Tech & devices'],
+  'Breath work': ['Comfort & misc', 'Tech & devices'],
+};
+const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+const mkSecs = (listName, names) => names.map((n) => ({ id: `sec-${slug(listName)}-${slug(n)}`, name: n }));
+function sectionize(lists) {
+  for (const l of lists) {
+    if (l.name === 'Diving') continue;                 // already carries bespoke sections
+    if (SEC_SKELETONS[l.name]) { l.sections = mkSecs(l.name, SEC_SKELETONS[l.name]); continue; }
+    if (!l.items.length) continue;
+    const used = new Set();
+    for (const it of l.items) {
+      const nm = CAT_SEC[it.category] || 'Comfort & misc';
+      it.section = `sec-${slug(l.name)}-${slug(nm)}`;
+      used.add(nm);
+    }
+    l.sections = mkSecs(l.name, SEC_ORDER.filter((n) => used.has(n)));
+  }
+  return lists;
+}
+
 export function seedLists() {
   const L = (name, group, items, extra) => newList({ name, group, builtin: true, items, ...extra });
-  return tagSeed([
+  return sectionize(tagSeed([
     // Common base — always included on every trip, whatever the transport / activities.
     L('Travel', '', TRAVEL, { role: 'base' }),
     // Transport bases — auto-included by the trip's "Way of transport": Car brings a
@@ -714,7 +753,7 @@ export function seedLists() {
     L('Yoga / Mobility', 'WET', []),  // scaffold — to fill
     L('Breath work', 'WET', []),      // scaffold — to fill
     // OE — Other Events: no packing lists for now (kept as an empty group)
-  ]);
+  ]));
 }
 
 // (Start-from templates were removed in v30: the common base is always included,
