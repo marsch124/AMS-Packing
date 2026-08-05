@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v63';
+const APP_VERSION = 'v64';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2837,6 +2837,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v64', '2026-08-05 · 17:00 UTC', false, 'The built-in Diving template comes pre-sectioned',
+      'The starter <b>Diving</b> template (Templates → GA) now arrives <b>filled in and split into sections</b>, so you can see the new Sections feature at work straight away: <b>Drysuit &amp; exposure</b>, <b>Rig / BCD</b>, <b>Regulators</b>, <b>Lights</b>, <b>Mask &amp; fins</b>, <b>Instruments &amp; deco</b>, <b>Accessories</b> and <b>Documents &amp; certification</b>, each pre-loaded with the usual gear (primary + backup regulators, a canister light with backups, drysuit, hood, dry gloves and so on). It’s just a <b>starting point</b> — rename, reorder or delete any section, and add, remove or move items exactly as you like; nothing here is fixed. <b>Note:</b> this arrives as a refresh of the built-in starter templates, so any items you had already added to the <b>built-in</b> Diving list are replaced by this pre-filled version. Your own templates and everything in them are untouched.',
+      'Diving is ready to use out of the box — a complete, sectioned kit you can trim to your own setup, and a live example of how sections make a long list easy to scan.'),
     v('v63', '2026-08-05 · 16:00 UTC', false, 'Sections — group a template’s items, and see them on the trip',
       'You can now split any <b>template</b> into named <b>sections</b> and see those groupings carry all the way through to a trip’s <b>Packing List</b>. On a template, tap the new <b>Sections</b> button to add, rename, reorder or delete sections — for a Diving list that might be <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Then open any item and, under <b>“② In this list”</b>, pick its <b>Section</b> (or <b>＋ New section…</b> to make one on the spot). The template view then shows tidy, counted section blocks in the order you chose, with anything unassigned under <b>Ungrouped</b>. Crucially, a section is remembered <b>per template</b>: the same head torch can sit in <b>Lights</b> in your Diving list and a different section in your Running list, with neither affecting the other. On a <b>trip</b>, a new <b>Section</b> option appears in the <b>Group by</b> row (only when the trip actually has sections); items keep the section from the list they came from, same-named sections from different lists merge under one heading, and everything without a section falls under <b>Everything else</b>. You can also re-file an item’s section right on the trip from its quick editor, and that choice sticks. Deleting a section never deletes items — they simply move to Ungrouped. Sections are saved on-device and travel in your <b>JSON backup</b> and shared trips.',
       'A long template becomes a clear, sectioned overview — and, for the first time, those same groupings show up on the actual packing list for a trip, so related gear (all your regulators, all your lights) stays together right where you pack.'),

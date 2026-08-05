@@ -349,8 +349,20 @@ test('seedLists: every list has a valid group; activities cover GA and WET', () 
 
 test('seedLists: scaffolded empty activities exist under the right groups', () => {
   const byName = Object.fromEntries(seedLists().map((l) => [l.name, l]));
-  for (const n of ['Diving', 'Freediving']) { assert.ok(byName[n], `${n} exists`); assert.equal(byName[n].group, 'GA'); assert.equal(byName[n].items.length, 0); }
+  for (const n of ['Diving', 'Freediving']) { assert.ok(byName[n], `${n} exists`); assert.equal(byName[n].group, 'GA'); }
+  assert.equal(byName.Freediving.items.length, 0);   // still an empty scaffold
   for (const n of ['Strength', 'Yoga / Mobility', 'Breath work']) { assert.ok(byName[n], `${n} exists`); assert.equal(byName[n].group, 'WET'); }
+});
+
+test('seedLists: the built-in Diving template ships pre-filled with sections', () => {
+  const dive = seedLists().find((l) => l.name === 'Diving');
+  assert.ok(dive.items.length > 20, `Diving is populated (${dive.items.length})`);
+  assert.ok(dive.sections.length >= 4, `Diving has sections (${dive.sections.length})`);
+  const secIds = new Set(dive.sections.map((s) => s.id));
+  // Every item points at a real section, and every section is used.
+  assert.ok(dive.items.every((it) => it.section && secIds.has(it.section)), 'every item has a valid section');
+  const used = new Set(dive.items.map((it) => it.section));
+  assert.ok(dive.sections.every((s) => used.has(s.id)), 'every section has items');
 });
 
 test('seedLists: Travel and RV bases are populated with valid items', () => {

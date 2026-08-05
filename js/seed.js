@@ -10,7 +10,7 @@ import { newItem, newList } from './model.js';
 // Compact item builder. Short keys keep the data readable:
 //   sv=Swedish original, cat=category, con=container, ph=phase, ctx=contexts,
 //   seas=seasons, tr=transports, cater=catering, we=weather conditions,
-//   charge, short, rem(inder), sub, note, qty
+//   charge, short, rem(inder), sub, note, qty, sec(tion id — per-template grouping)
 function it(name, o = {}) {
   return newItem({
     name,
@@ -32,6 +32,7 @@ function it(name, o = {}) {
     note: o.note || '',
     liquid: !!o.liquid,
     restricted: !!o.restricted,
+    section: o.sec || '',
   });
 }
 const CL = 'Clothing', ADV = 'Adventure clothing', FW = 'Footwear', SG = 'Sport gear',
@@ -624,6 +625,72 @@ function tagSeed(lists) {
   return lists;
 }
 
+// ---------------------------------------------------------------- Diving
+// A technical/drysuit diving kit, pre-organised into sections so the list reads as
+// a clear overview. Section ids are stable strings referenced by each item's `sec`.
+const DS = {
+  suit: 'dive-suit', rig: 'dive-rig', reg: 'dive-reg', light: 'dive-light',
+  mask: 'dive-mask', instr: 'dive-instr', acc: 'dive-acc', doc: 'dive-doc',
+};
+const DIVE_SECTIONS = [
+  { id: DS.suit,  name: 'Drysuit & exposure' },
+  { id: DS.rig,   name: 'Rig / BCD' },
+  { id: DS.reg,   name: 'Regulators' },
+  { id: DS.light, name: 'Lights' },
+  { id: DS.mask,  name: 'Mask & fins' },
+  { id: DS.instr, name: 'Instruments & deco' },
+  { id: DS.acc,   name: 'Accessories' },
+  { id: DS.doc,   name: 'Documents & certification' },
+];
+const DIVE = [
+  // Drysuit & exposure
+  it('Drysuit', { cat: SG, con: 'Checked luggage', sec: DS.suit }),
+  it('Drysuit undergarment / thermal', { cat: SG, con: 'Checked luggage', sec: DS.suit }),
+  it('Drysuit hood', { cat: SG, sec: DS.suit }),
+  it('Dry gloves + liners', { cat: SG, sec: DS.suit }),
+  it('Drysuit socks', { cat: SG, sec: DS.suit }),
+  // Rig / BCD
+  it('Backplate + wing', { cat: SG, con: 'Checked luggage', sec: DS.rig }),
+  it('Harness + crotch strap', { cat: SG, sec: DS.rig }),
+  it('Tank / cam bands', { cat: SG, sec: DS.rig }),
+  it('DSMB (surface marker buoy)', { cat: SG, sec: DS.rig }),
+  it('Spool / reel', { cat: SG, sec: DS.rig }),
+  it('Weight pockets + weights', { cat: SG, con: 'Checked luggage', sec: DS.rig }),
+  // Regulators
+  it('Primary regulator (1st + 2nd stage)', { cat: SG, sec: DS.reg }),
+  it('Backup regulator / long hose', { cat: SG, sec: DS.reg }),
+  it('Drysuit inflation hose', { cat: SG, sec: DS.reg }),
+  it('Deco / stage regulator', { cat: SG, sec: DS.reg }),
+  it('SPG / pressure gauge', { cat: SG, sec: DS.reg }),
+  // Lights
+  it('Primary canister light', { cat: SG, sec: DS.light, charge: true, restricted: true }),
+  it('Backup light 1', { cat: SG, sec: DS.light, restricted: true }),
+  it('Backup light 2', { cat: SG, sec: DS.light, restricted: true }),
+  it('Tank marker light', { cat: SG, sec: DS.light, restricted: true }),
+  it('Video / spotting light', { cat: SG, sec: DS.light, charge: true, restricted: true }),
+  // Mask & fins
+  it('Mask', { cat: SG, sec: DS.mask }),
+  it('Backup mask', { cat: SG, sec: DS.mask }),
+  it('Fins', { cat: SG, sec: DS.mask }),
+  it('Spring straps', { cat: SG, sec: DS.mask }),
+  // Instruments & deco
+  it('Dive computer', { cat: EL, sec: DS.instr, charge: true, restricted: true }),
+  it('Backup dive computer', { cat: EL, sec: DS.instr, charge: true, restricted: true }),
+  it('Compass', { cat: SG, sec: DS.instr }),
+  it('Wetnotes + pencil', { cat: SG, sec: DS.instr }),
+  it('Cutting tool / line cutter', { cat: SG, sec: DS.instr }),
+  // Accessories
+  it('Save-a-dive kit (o-rings, tools)', { cat: SG, sec: DS.acc }),
+  it('Mask defog', { cat: TO, sec: DS.acc, liquid: true }),
+  it('Boots', { cat: FW, sec: DS.acc }),
+  it('Reel / wet gloves', { cat: SG, sec: DS.acc }),
+  // Documents & certification
+  it('Certification card', { cat: DOC, sec: DS.doc }),
+  it('Dive logbook', { cat: DOC, sec: DS.doc }),
+  it('DAN / dive insurance', { cat: DOC, sec: DS.doc }),
+  it('Analyse gas & note MOD', { sv: '', cat: REM, sec: DS.doc, rem: true, ph: 'prep' }),
+];
+
 export function seedLists() {
   const L = (name, group, items, extra) => newList({ name, group, builtin: true, items, ...extra });
   return tagSeed([
@@ -637,7 +704,7 @@ export function seedLists() {
     // GA — Goal Activity
     L('Golf', 'GA', GOLF),
     L('Hiking', 'GA', HIKE),
-    L('Diving', 'GA', []),        // scaffold — to fill
+    L('Diving', 'GA', DIVE, { sections: DIVE_SECTIONS }),
     L('Freediving', 'GA', []),    // scaffold — to fill
     // WET — Workout, Exercise & Training
     L('Swim', 'WET', SWIM),
