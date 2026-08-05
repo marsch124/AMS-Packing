@@ -1227,3 +1227,16 @@ test('seedLists: ships a Containers catalogue (role container) with capacities',
   assert.ok(cl.items.some((i) => i.capacityL > 0), 'some bags have a capacity');
   assert.ok(cl.items.some((i) => i.maxKg > 0), 'some bags have a max weight');
 });
+
+test('seedLists: every packable item has a weight; reminders have none', () => {
+  let items = 0, weighed = 0, remWithWeight = 0;
+  for (const l of seedLists()) {
+    for (const it of l.items) {
+      if (it.itemType === 'reminder') { if (it.weight > 0) remWithWeight++; continue; }
+      items++;
+      if (it.weight > 0) weighed++;
+    }
+  }
+  assert.equal(weighed, items, `all ${items} packable items are weighed`);
+  assert.equal(remWithWeight, 0, 'reminders carry no weight');
+});
