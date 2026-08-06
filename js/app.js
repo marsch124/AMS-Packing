@@ -7,6 +7,7 @@ import {
   effectiveQty, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
   deriveWeather, weatherSuggestions, weatherGear, WEATHER_CONDITIONS,
+  placesVisited, eventsNeedingCoords, coerceGeo,
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
   maintenanceList, maintenanceSummary, maintenanceByDate, logMaintenance, addDays, daysBetween,
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
@@ -15,11 +16,12 @@ import {
 import * as db from './db.js';
 import * as weather from './weather.js';
 import { buildWorkbook, XLSX_MIME } from './xlsx.js';
+import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v72';
+const APP_VERSION = 'v73';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -617,6 +619,7 @@ const IC = {
   camera: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.2"/></svg>',
   cal: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M8 3.5v3M16 3.5v3"/></svg>',
   search: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>',
+  globe: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></svg>',
 };
 
 // Weather glyphs, keyed by the symbolic icon keys model.js emits.
@@ -793,7 +796,7 @@ function eventCardHTML(e) {
 async function renderEvents() {
   const events = await db.getEvents();
   const wrap = h('<section class="screen"></section>');
-  wrap.appendChild(h('<div class="topbar"><h1>Events</h1><a class="btn primary" href="#/">' + IC.plus + '<span>New</span></a></div>'));
+  wrap.appendChild(h('<div class="topbar"><h1>Events</h1><a class="btn ghost" href="#/map">' + IC.globe + '<span>Map</span></a><a class="btn primary" href="#/">' + IC.plus + '<span>New</span></a></div>'));
   if (!events.length) {
     wrap.appendChild(h('<div class="empty"><p class="empty-t">No events yet</p><p class="empty-s">Head to Home to build your first trip’s combined Packing List.</p></div>'));
     return wrap;
@@ -814,6 +817,129 @@ async function renderEvents() {
     list.appendChild(h(eventCardHTML(e)));
   }
   return wrap;
+}
+
+// ============================================================
+// Places-visited world map (#/map) — one glowing pin per place, drawn from
+// each trip's destination. The map itself is a plain offline SVG (see
+// js/worldmap.js); pins sit in a percentage-positioned overlay so they stay a
+// comfortable tap size at any width and align exactly with the land beneath.
+// ============================================================
+async function renderMap() {
+  const events = await db.getEvents();
+  const places = placesVisited(events);
+  const pending = eventsNeedingCoords(events);
+  const wrap = h('<section class="screen map-screen"></section>');
+  wrap.appendChild(h(backBar('Places visited', '#/events')));
+
+  const tripCount = places.reduce((n, p) => n + p.events.length, 0);
+
+  // Nothing to plot yet — explain, in plain terms, how a pin gets on the map.
+  if (!places.length && !pending.length) {
+    wrap.appendChild(h(`<div class="empty">
+      <p class="empty-t">No places on the map yet</p>
+      <p class="empty-s">Give a trip a <b>destination</b> (open a trip → the settings gear → “Destination”). Once a place is looked up — for the weather, or with the button here — it appears as a pin.</p>
+    </div>`));
+    return wrap;
+  }
+
+  // Headline count, and — if any trips have a destination we haven't located —
+  // a one-tap "look them all up" button (online once, then remembered offline).
+  const summary = h(`<div class="map-summary">
+    <span class="map-count"><b>${places.length}</b> ${places.length === 1 ? 'place' : 'places'} · <b>${tripCount}</b> ${tripCount === 1 ? 'trip' : 'trips'}</span>
+  </div>`);
+  wrap.appendChild(summary);
+
+  if (pending.length) {
+    const findBar = h(`<div class="map-find">
+      <button class="btn primary" id="findPlaces">${IC.pin}<span>Find ${pending.length} ${pending.length === 1 ? 'place' : 'places'} on the map</span></button>
+      <p class="map-find-note">${pending.length} ${pending.length === 1 ? 'trip has a destination' : 'trips have a destination'} we haven’t located yet. This looks ${pending.length === 1 ? 'it' : 'them'} up online, then remembers the spot so the map works offline.</p>
+    </div>`);
+    findBar.querySelector('#findPlaces').addEventListener('click', () => findMapPlaces(pending, findBar.querySelector('#findPlaces')));
+    wrap.appendChild(findBar);
+  }
+
+  // The map + its pin overlay. Pins are real buttons for good tap targets.
+  const mapWrap = h(`<div class="worldmap-wrap">
+    <svg class="worldmap" viewBox="0 0 ${MAP_W} ${MAP_H}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <path class="worldmap-land" d="${WORLD_PATH}"/>
+    </svg>
+    <div class="pins"></div>
+  </div>`);
+  const pinsBox = mapWrap.querySelector('.pins');
+  places.forEach((pl, idx) => {
+    const { x, y } = project(pl.lat, pl.lon);
+    const n = pl.events.length;
+    const label = pl.place || pl.events[0]?.destination || 'Unknown place';
+    const pin = h(`<button class="pin" type="button" data-idx="${idx}" style="left:${(x / MAP_W * 100).toFixed(3)}%;top:${(y / MAP_H * 100).toFixed(3)}%" aria-label="${esc(label)} — ${n} ${n === 1 ? 'trip' : 'trips'}" title="${esc(label)}">
+      <span class="pin-dot"></span>${n > 1 ? `<span class="pin-badge">${n}</span>` : ''}
+    </button>`);
+    pinsBox.appendChild(pin);
+  });
+  wrap.appendChild(mapWrap);
+  wrap.appendChild(h('<p class="map-hint">Tap a pin to jump to that place below.</p>'));
+
+  // One card per place, newest visit first, each trip linking to its event.
+  const list = h('<div class="place-list"></div>');
+  places.forEach((pl, idx) => {
+    const n = pl.events.length;
+    const label = pl.place || pl.events[0]?.destination || 'Unknown place';
+    const trips = pl.events.map((e) => {
+      const when = e.startDate ? prettyDate(e.startDate) : 'No date set';
+      return `<li><a href="#/event/${e.id}"><span class="place-trip-name">${esc(e.name || 'Untitled event')}</span><span class="place-trip-date">${esc(when)}</span></a></li>`;
+    }).join('');
+    const card = h(`<article class="place-card" id="place-${idx}" tabindex="-1">
+      <div class="place-head"><span class="place-pin">${IC.pin}</span><h3 class="place-name">${esc(label)}</h3><span class="place-visits">${n} ${n === 1 ? 'visit' : 'visits'}</span></div>
+      <ul class="place-trips">${trips}</ul>
+    </article>`);
+    list.appendChild(card);
+  });
+  wrap.appendChild(list);
+
+  // Tapping a pin highlights and scrolls to its place card.
+  pinsBox.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.pin');
+    if (!btn) return;
+    const idx = btn.getAttribute('data-idx');
+    const card = list.querySelector(`#place-${idx}`);
+    if (!card) return;
+    list.querySelectorAll('.place-card.lit').forEach((c) => c.classList.remove('lit'));
+    pinsBox.querySelectorAll('.pin.active').forEach((p) => p.classList.remove('active'));
+    btn.classList.add('active');
+    card.classList.add('lit');
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  return wrap;
+}
+
+// Geocode every trip that has a destination but no coordinates, cache the result
+// on each event (as a lightweight `geo` fix), then redraw the map. Needs the
+// internet just for this lookup; the pins are permanent afterwards.
+async function findMapPlaces(pending, btn) {
+  btn.disabled = true;
+  const label = btn.querySelector('span');
+  const original = label ? label.textContent : '';
+  if (label) label.textContent = `Looking up ${pending.length}…`;
+  const failed = [];
+  for (const ev of pending) {
+    try {
+      const g = await weather.geocode(ev.destination);
+      ev.geo = coerceGeo({ lat: g.lat, lon: g.lon, place: g.place });
+      await db.saveEvent(ev);
+    } catch (err) {
+      console.error('AMS Packing List: geocode failed for', ev.destination, err);
+      failed.push(ev.destination);
+    }
+  }
+  if (failed.length) {
+    alert(failed.length === pending.length
+      ? 'Could not look up those places — check your internet connection and try again.'
+      : `Located the rest, but couldn’t find: ${failed.join(', ')}. Check the spelling on those trips.`);
+  }
+  if (label) label.textContent = original;
+  btn.disabled = false;
+  render();   // redraw the map with the new pins
 }
 
 // ============================================================
@@ -3077,6 +3203,9 @@ function howtoCard() {
         <h3>All items · table (the spreadsheet)</h3>
         <p>For fast bulk edits, the <b>Care</b> tab → <b>▦ All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
 
+        <h3>Places visited (the world map)</h3>
+        <p>The <b>Events</b> tab → <b>🌍 Map</b> button opens a <b>world map of everywhere you’ve been</b>. Every trip that has a <b>destination</b> set becomes a pin; <b>repeat visits to the same place merge into one pin</b> with a small count, and pins are ordered most-recent-first in the list beneath. <b>Tap a pin</b> to highlight and scroll to that place in the list, where each visit links to its trip. A place is pinned automatically once its <b>weather</b> has been looked up; for trips whose destination hasn’t been located yet, the <b>“Find places on the map”</b> button geocodes them all at once (this needs the internet) and caches each spot so the map then works fully <b>offline</b>. The map is drawn inside the app from open geographic data — no outside map service, and nothing about your trips leaves the device.</p>
+
         <h3>The timeline (phases)</h3>
         <p>Items are packed in stages, in this order: <b>Preparations</b> (book/cancel/charge, done ahead) → <b>≥1 week ahead</b> (things you don't use at home) → <b>Day before</b> (stage / move to the RV) → <b>Morning of</b> → <b>At the front door</b> (last check as you leave) → <b>Wear / carry</b> on the day → <b>After / recovery</b> (shower, change, recovery).</p>
 
@@ -3084,7 +3213,7 @@ function howtoCard() {
         <p>Five tabs along the bottom:</p>
         <ul>
           <li><b>Home</b> — the builder for starting a new trip, plus a compact preview of your few most recent events.</li>
-          <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here.</li>
+          <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here. The <b>🌍 Map</b> button up top opens the <b>Places visited</b> world map (see below).</li>
           <li><b>Templates</b> — your reusable templates (the building blocks).</li>
           <li><b>Care</b> — everything that needs looking after, as an urgency-ordered list or a month calendar (see <b>Care, storage &amp; maintenance</b> below).</li>
           <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip import, this guide and the version history.</li>
@@ -3203,6 +3332,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v73', '2026-08-06 · 17:00 UTC', false, 'Places visited — a world map of your trips',
+      'A brand-new <b>world map</b> that pins <b>everywhere you’ve been</b>. Open the <b>Events</b> tab and tap the new <b>🌍 Map</b> button up top. Every trip that has a <b>destination</b> becomes a glowing pin on a clean, hand-drawn map — and <b>repeat visits to the same place merge into one pin</b> (with a little number showing how many trips), so a city you keep coming back to shows once, not ten times. <b>Tap a pin</b> to jump to that place in the list below, where each visit links straight to its trip. If a place has already had its <b>weather</b> looked up, it’s pinned automatically; for any trip whose destination hasn’t been located yet, a one-tap <b>“Find places on the map”</b> button looks them all up at once (that part needs the internet) and then <b>remembers the spot forever</b>, so the map keeps working offline. The whole map is drawn <b>inside the app</b> — no outside map service, no tracking, nothing leaves your phone — and it recolours to match the app’s light and dark themes.',
+      'See your travels at a glance — a single at-a-glance picture of everywhere your trips have taken you, built straight from the destinations you already type in.'),
     v('v72', '2026-08-06 · 15:00 UTC', false, 'All items · table — your sort & column order',
       'The <b>All items · table</b> now bends to how <b>you</b> like to work. A tidier <b>toolbar</b> sits above the grid: <b>Sort</b> the whole table by <b>Name, Weight, Storage, Container</b> or <b>how many lists</b> an item is in, and tap the <b>▲/▼</b> button to flip between ascending and descending. Next to it, a <b>Columns</b> button opens a little panel where you can <b>reorder the “① the item itself” columns</b> (weight, storage, flags, container, colour…) with ▲▼ — put the ones you care about first. Both your <b>sort choice</b> and your <b>column order</b> are <b>remembered on this device</b>, so the table opens just how you left it. We also <b>polished the header</b> — the ①②③ group titles now line up and stand out more — and <b>removed the little up/down spinner arrows</b> from the <b>Weight</b> cells for a cleaner look (just type the number).',
       'Make the spreadsheet fit your habits — sort by what matters, arrange the columns in your own order, and have it stick every time you come back.'),
@@ -3998,6 +4130,7 @@ async function renderRoute() {
   if (hash === '#/' || hash === '') return renderHome();
   if (hash === '#/new') { location.replace('#/'); return renderHome(); }
   if (hash === '#/events') return renderEvents();
+  if (hash === '#/map') return renderMap();
   if (hash === '#/lists') return renderLists();
   if (hash === '#/maintenance') return renderMaintenance();
   if (hash === '#/containers') return renderContainers();
@@ -4043,7 +4176,7 @@ async function render() {
 
 function setActiveTab() {
   const hash = location.hash || '#/';
-  const base = hash.startsWith('#/events') || hash.startsWith('#/event/') ? '#/events'
+  const base = hash.startsWith('#/events') || hash.startsWith('#/event/') || hash === '#/map' ? '#/events'
     : hash.startsWith('#/list') || hash === '#/refine' ? '#/lists'
     : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') ? '#/maintenance'
     : hash.startsWith('#/actions') ? '#/actions'
@@ -4055,7 +4188,7 @@ function setActiveTab() {
 // Matches the active-tab mapping so the colour and the lit tab always agree.
 function currentSection() {
   const hash = location.hash || '#/';
-  if (hash.startsWith('#/events') || hash.startsWith('#/event/')) return 'events';
+  if (hash.startsWith('#/events') || hash.startsWith('#/event/') || hash === '#/map') return 'events';
   if (hash.startsWith('#/list') || hash === '#/refine') return 'templates';
   if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items')) return 'care';
   if (hash.startsWith('#/actions')) return 'actions';
