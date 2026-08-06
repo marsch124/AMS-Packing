@@ -19,7 +19,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v71';
+const APP_VERSION = 'v72';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -227,6 +227,101 @@ async function renderContainers() {
   const c = await getContainerList();
   return renderList(c.id);
 }
+// The ① "the item itself" columns of the All-items table, defined once so the
+// user can reorder them. Each has a stable `key` (used for header, cell rendering
+// and persistence) and a display `label`.
+const GRID_ITEM_COLS = [
+  { key: 'weight', label: 'Weight' },
+  { key: 'storage', label: 'Storage' },
+  { key: 'liquid', label: '💧' },
+  { key: 'charging', label: '⚡' },
+  { key: 'restricted', label: '⚠️' },
+  { key: 'container', label: 'Container' },
+  { key: 'color', label: 'Color' },
+  { key: 'size', label: 'Size' },
+  { key: 'manufacturer', label: 'Maker' },
+  { key: 'model', label: 'Model' },
+];
+// The sort choices offered in the table's toolbar. `val` extracts the comparable
+// value from a row; `num` marks numeric fields (compared arithmetically).
+const GRID_SORTS = [
+  { key: 'name', label: 'Name', val: (r) => (r.item.name || '').toLowerCase() },
+  { key: 'weight', label: 'Weight', val: (r) => r.item.weight || 0, num: true },
+  { key: 'storage', label: 'Storage', val: (r) => (r.item.storage || '').toLowerCase() },
+  { key: 'container', label: 'Container', val: (r) => (r.item.container || '').toLowerCase() },
+  { key: 'templates', label: 'In # lists', val: (r) => r.mems.length, num: true },
+];
+const GRID_SORT_KEY = 'ams.grid.sort';
+const GRID_COLS_KEY = 'ams.grid.cols';
+
+// Load the saved sort preference (field + direction), defaulting to A–Z by name.
+function loadGridSort() {
+  try { const s = JSON.parse(localStorage.getItem(GRID_SORT_KEY) || 'null');
+    if (s && GRID_SORTS.some((x) => x.key === s.by)) return { by: s.by, dir: s.dir === 'desc' ? 'desc' : 'asc' };
+  } catch { /* ignore */ }
+  return { by: 'name', dir: 'asc' };
+}
+function saveGridSort(s) { try { localStorage.setItem(GRID_SORT_KEY, JSON.stringify(s)); } catch { /* ignore */ } }
+
+// Load the saved column order. Unknown keys are dropped and any newly-added
+// columns are appended, so the stored order stays valid across app updates.
+function loadGridCols() {
+  const all = GRID_ITEM_COLS.map((c) => c.key);
+  try { const saved = JSON.parse(localStorage.getItem(GRID_COLS_KEY) || 'null');
+    if (Array.isArray(saved)) {
+      const known = saved.filter((k) => all.includes(k));
+      return [...known, ...all.filter((k) => !known.includes(k))];
+    }
+  } catch { /* ignore */ }
+  return all;
+}
+function saveGridCols(order) { try { localStorage.setItem(GRID_COLS_KEY, JSON.stringify(order)); } catch { /* ignore */ } }
+
+// A small modal to reorder the ① item columns with ▲▼ (mirrors manageSections).
+// Resolves to the new order array on save, or null if cancelled.
+function manageGridColumns(order) {
+  return new Promise((resolve) => {
+    let cols = order.slice();
+    const overlay = h('<div class="overlay"></div>');
+    const body = h('<div class="modal cols-modal"></div>');
+    overlay.appendChild(body);
+    document.body.appendChild(overlay);
+    let settled = false;
+    const finish = (res) => { if (settled) return; settled = true; overlay.remove(); document.removeEventListener('keydown', onKey); resolve(res); };
+    const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+    const labelOf = (k) => (GRID_ITEM_COLS.find((c) => c.key === k) || {}).label || k;
+    const draw = () => {
+      const rows = cols.map((k, i) => `<div class="col-row" data-i="${i}">
+        <span class="col-name">${labelOf(k)}</span>
+        <button class="iconbtn sm" data-m="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">▲</button>
+        <button class="iconbtn sm" data-m="down" ${i === cols.length - 1 ? 'disabled' : ''} aria-label="Move down">▼</button>
+      </div>`).join('');
+      body.innerHTML = `<h2>Column order</h2>
+        <p class="modal-sub">Reorder the “① the item itself” columns. Your choice is remembered on this device.</p>
+        <div class="col-rows">${rows}</div>
+        <div class="modal-actions">
+          <button class="btn primary lg" data-m="save">Save order</button>
+          <button class="btn ghost lg" data-m="reset">Reset</button>
+          <button class="btn ghost lg" data-m="cancel">Cancel</button>
+        </div>`;
+    };
+    draw();
+    body.addEventListener('click', (e) => {
+      const m = e.target.closest('[data-m]')?.dataset.m;
+      if (!m) return;
+      if (m === 'cancel') { finish(null); return; }
+      if (m === 'save') { finish(cols.slice()); return; }
+      if (m === 'reset') { cols = GRID_ITEM_COLS.map((c) => c.key); draw(); return; }
+      const row = e.target.closest('.col-row'); if (!row) return;
+      const i = Number(row.dataset.i);
+      if (m === 'up' && i > 0) { [cols[i - 1], cols[i]] = [cols[i], cols[i - 1]]; draw(); }
+      else if (m === 'down' && i < cols.length - 1) { [cols[i + 1], cols[i]] = [cols[i], cols[i + 1]]; draw(); }
+    });
+  });
+}
+
 // The global "All items" TABLE (#/items) — every item as a row, with editable
 // columns grouped like the item editor: ① the item itself (intrinsic — edits apply
 // everywhere), ② in this list (qty/section — editable only when the item is in one
@@ -234,45 +329,67 @@ async function renderContainers() {
 async function renderItemsGrid() {
   const wrap = h('<section class="screen screen-grid"></section>');
   wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">All items · table</h1></div>`));
-  wrap.appendChild(h('<p class="muted pad">Edit lots of items at once. Fields under <b>the item itself</b> (weight, storage, flags, colour…) update the item <b>everywhere</b> it’s used. Tap a template box to file the item in or out. <b>Qty/Section</b> are editable when an item is in a single template. Swipe sideways for more columns.</p>'));
+  wrap.appendChild(h('<p class="muted pad">Edit lots of items at once. Fields under <b>the item itself</b> (weight, storage, flags, colour…) update the item <b>everywhere</b> it’s used. Tap a template box to file the item in or out. <b>Qty/Section</b> are editable when an item is in a single template. Use the toolbar to <b>sort</b> the table and reorder columns with <b>Columns</b>; swipe sideways for more columns.</p>'));
 
   let lists = await db.getLists();
   let rowsById = new Map();
-  const searchWrap = h(`<label class="ai-searchbox">${IC.search}<input type="search" class="grid-search" placeholder="Search items…" autocomplete="off"></label>`);
-  wrap.appendChild(searchWrap);
+  let sort = loadGridSort();
+  let colOrder = loadGridCols();
+
+  // Toolbar: search on the left, sort controls and a "Columns" button on the right.
+  const toolbar = h(`<div class="grid-toolbar">
+    <label class="ai-searchbox">${IC.search}<input type="search" class="grid-search" placeholder="Search items…" autocomplete="off"></label>
+    <div class="grid-controls">
+      <label class="grid-sortby">Sort
+        <select class="grid-sortsel">${GRID_SORTS.map((s) => `<option value="${s.key}"${s.key === sort.by ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select>
+      </label>
+      <button type="button" class="iconbtn sm grid-sortdir" aria-label="Toggle sort direction"></button>
+      <button type="button" class="btn ghost sm grid-colsbtn">${IC.sheet}<span>Columns</span></button>
+    </div>
+  </div>`);
+  wrap.appendChild(toolbar);
   const scroll = h('<div class="grid-scroll"></div>');
   wrap.appendChild(scroll);
   let query = '';
+  const dirBtn = $('.grid-sortdir', toolbar);
+  const paintDir = () => { dirBtn.textContent = sort.dir === 'desc' ? '▼' : '▲'; dirBtn.title = sort.dir === 'desc' ? 'Descending' : 'Ascending'; };
+  paintDir();
 
-  const FLAGS = [['liquid', '💧'], ['charging', '⚡'], ['restricted', '⚠️']];
-  const TEXTCOLS = [['color', 'Color'], ['size', 'Size'], ['manufacturer', 'Maker'], ['model', 'Model']];
+  // Render a single ① "item itself" cell by column key. Container stays per-list:
+  // it's an editable dropdown for single-template items, plain text otherwise.
+  const cellFor = (key, row, single) => {
+    const it = row.item;
+    if (['liquid', 'charging', 'restricted'].includes(key)) return `<td class="g-check"><input type="checkbox" data-f="${key}"${it[key] ? ' checked' : ''}></td>`;
+    if (key === 'weight') return `<td><input class="g-num" type="number" min="0" inputmode="numeric" data-f="weight" value="${it.weight || ''}"></td>`;
+    if (key === 'storage') return `<td><input class="g-txt" list="grid-storages" data-f="storage" value="${esc(it.storage || '')}" autocomplete="off"></td>`;
+    if (key === 'container') {
+      if (single) return `<td><select class="g-sel" data-f="container" data-listid="${esc(single.listId)}">${containerOpts(single.container).map((c) => `<option value="${esc(c)}"${c === single.container ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select></td>`;
+      return `<td><span class="g-multi">${esc(it.container || '')}</span></td>`;
+    }
+    return `<td><input class="g-txt" data-f="${key}" value="${esc(it[key] || '')}" autocomplete="off"></td>`; // color / size / maker / model
+  };
 
   const rowHTML = (row, templates) => {
     const it = row.item;
     const memIds = new Set(row.mems.map((m) => m.listId));
     const single = row.mems.length === 1 ? row.mems[0] : null;
     const openLid = row.mems[0].listId;
-    const flags = FLAGS.map(([f]) => `<td class="g-check"><input type="checkbox" data-f="${f}"${it[f] ? ' checked' : ''}></td>`).join('');
-    const texts = TEXTCOLS.map(([f]) => `<td><input class="g-txt" data-f="${f}" value="${esc(it[f] || '')}" autocomplete="off"></td>`).join('');
+    const itemCells = colOrder.map((k) => cellFor(k, row, single)).join('');
     // ② per-template columns — editable only for single-template items.
-    let containerCell; let qtyCell; let sectionCell;
+    let qtyCell; let sectionCell;
     if (single) {
-      containerCell = `<td><select class="g-sel" data-f="container" data-listid="${esc(single.listId)}">${containerOpts(single.container).map((c) => `<option value="${esc(c)}"${c === single.container ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select></td>`;
       qtyCell = `<td><input class="g-num" type="number" min="0" inputmode="numeric" data-f="qty" data-listid="${esc(single.listId)}" value="${esc(single.qty || '')}"></td>`;
       const sl = lists.find((x) => x.id === single.listId);
       const secOpts = [{ value: '', label: '—' }].concat((sl && sl.sections || []).map((s) => ({ value: s.id, label: s.name })));
       sectionCell = `<td><select class="g-sel" data-f="section" data-listid="${esc(single.listId)}">${secOpts.map((o) => `<option value="${esc(o.value)}"${o.value === (single.section || '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></td>`;
     } else {
-      containerCell = `<td><span class="g-multi">${esc(it.container || '')}</span></td>`;
       qtyCell = `<td><span class="g-multi" title="Set per list — open the item">${row.mems.length} lists</span></td>`;
       sectionCell = '<td><span class="g-multi">·</span></td>';
     }
     const matrix = templates.map((t) => `<td class="g-check"><input type="checkbox" data-tmpl="${esc(t.id)}"${memIds.has(t.id) ? ' checked' : ''}></td>`).join('');
     return `<tr data-id="${esc(row.id)}">
       <th class="cell-name" scope="row"><a href="#/list/${esc(openLid)}/item/${esc(row.id)}">${esc(it.name || '(unnamed)')}</a>${it.retired ? ' <span title="Not in use">🚫</span>' : ''}</th>
-      <td><input class="g-num" type="number" min="0" inputmode="numeric" data-f="weight" value="${it.weight || ''}"></td>
-      <td><input class="g-txt" list="grid-storages" data-f="storage" value="${esc(it.storage || '')}" autocomplete="off"></td>
-      ${flags}${containerCell}${texts}${qtyCell}${sectionCell}${matrix}
+      ${itemCells}${qtyCell}${sectionCell}${matrix}
     </tr>`;
   };
 
@@ -289,13 +406,21 @@ async function renderItemsGrid() {
         rowsById.get(id).mems.push({ listId: l.id, listName: l.name, role: l.role, qty: it.qty, section: it.section, container: it.container });
       }
     }
-    let rows = [...rowsById.values()].sort((a, b) => (a.item.name || '').localeCompare(b.item.name || '', undefined, { sensitivity: 'base' }));
+    // Sort by the chosen field; ties fall back to name so the order is stable.
+    const sd = GRID_SORTS.find((s) => s.key === sort.by) || GRID_SORTS[0];
+    let rows = [...rowsById.values()].sort((a, b) => {
+      const av = sd.val(a); const bv = sd.val(b);
+      let c = sd.num ? (av - bv) : String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' });
+      if (c === 0 && sd.key !== 'name') c = (a.item.name || '').localeCompare((b.item.name || ''), undefined, { sensitivity: 'base' });
+      return sort.dir === 'desc' ? -c : c;
+    });
     const q = query.trim().toLowerCase();
     if (q) rows = rows.filter((r) => (r.item.name || '').toLowerCase().includes(q));
+    const colLabel = (k) => (GRID_ITEM_COLS.find((c) => c.key === k) || {}).label || k;
     const head = `<thead>
       <tr class="grp"><th class="cell-name" rowspan="2">Item <em>${rows.length}</em></th>
-        <th colspan="10">① The item itself</th><th colspan="2">② In this list</th><th colspan="${templates.length}">③ In these templates</th></tr>
-      <tr class="col"><th>Weight</th><th>Storage</th><th>💧</th><th>⚡</th><th>⚠️</th><th>Container</th><th>Color</th><th>Size</th><th>Maker</th><th>Model</th>
+        <th colspan="${colOrder.length}">① The item itself</th><th colspan="2">② In this list</th><th colspan="${templates.length}">③ In these templates</th></tr>
+      <tr class="col">${colOrder.map((k) => `<th>${esc(colLabel(k))}</th>`).join('')}
         <th>Qty</th><th>Section</th>${templates.map((t) => `<th class="tmpl-col"><span>${esc(t.name)}</span></th>`).join('')}</tr>
     </thead>`;
     const body = `<tbody>${rows.map((r) => rowHTML(r, templates)).join('') || '<tr><td class="g-empty" colspan="99">No items match your search.</td></tr>'}</tbody>`;
@@ -349,8 +474,17 @@ async function renderItemsGrid() {
     el.classList.add('g-saved'); setTimeout(() => el.classList.remove('g-saved'), 600);
   });
 
+  // Rebuild while keeping the sideways/vertical scroll position steady.
+  const rebuild = () => { const sx = scroll.scrollLeft, sy = scroll.scrollTop; build(); scroll.scrollLeft = sx; scroll.scrollTop = sy; };
+
   build();
-  searchWrap.querySelector('input').addEventListener('input', (e) => { query = e.target.value; build(); });
+  $('.grid-search', toolbar).addEventListener('input', (e) => { query = e.target.value; build(); });
+  $('.grid-sortsel', toolbar).addEventListener('change', (e) => { sort.by = e.target.value; saveGridSort(sort); rebuild(); });
+  dirBtn.addEventListener('click', () => { sort.dir = sort.dir === 'desc' ? 'asc' : 'desc'; saveGridSort(sort); paintDir(); rebuild(); });
+  $('.grid-colsbtn', toolbar).addEventListener('click', async () => {
+    const next = await manageGridColumns(colOrder);
+    if (next) { colOrder = next; saveGridCols(colOrder); rebuild(); }
+  });
   return wrap;
 }
 
@@ -3069,6 +3203,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v72', '2026-08-06 · 15:00 UTC', false, 'All items · table — your sort & column order',
+      'The <b>All items · table</b> now bends to how <b>you</b> like to work. A tidier <b>toolbar</b> sits above the grid: <b>Sort</b> the whole table by <b>Name, Weight, Storage, Container</b> or <b>how many lists</b> an item is in, and tap the <b>▲/▼</b> button to flip between ascending and descending. Next to it, a <b>Columns</b> button opens a little panel where you can <b>reorder the “① the item itself” columns</b> (weight, storage, flags, container, colour…) with ▲▼ — put the ones you care about first. Both your <b>sort choice</b> and your <b>column order</b> are <b>remembered on this device</b>, so the table opens just how you left it. We also <b>polished the header</b> — the ①②③ group titles now line up and stand out more — and <b>removed the little up/down spinner arrows</b> from the <b>Weight</b> cells for a cleaner look (just type the number).',
+      'Make the spreadsheet fit your habits — sort by what matters, arrange the columns in your own order, and have it stick every time you come back.'),
     v('v71', '2026-08-06 · 13:00 UTC', false, 'All items · table — edit everything in one spreadsheet',
       'A new <b>spreadsheet view</b> of every item, reached from the <b>Care</b> tab → <b>▦ All items · table</b>. Each row is an item; the columns are grouped just like an item’s editor: <b>① the item itself</b> (weight, storage, 💧/⚡/⚠️ flags, container, colour, size, maker, model), <b>② in this list</b> (qty, section), and <b>③ a tick-box per template</b> showing which lists the item is in. <b>Edit right in the grid:</b> type a weight or storage place, tick a flag, and it updates the item <b>everywhere it’s used</b>; tick or untick a template box to <b>file the item in or out</b> of that list on the spot (unticking an item’s last list parks it safely in <b>Loose items</b> rather than deleting it). The <b>qty</b> and <b>section</b> columns are per-list, so they’re editable when an item lives in a single template and show “<b>N lists</b>” (tap the name to open it) when it’s shared. There’s a <b>search box</b> to filter to a few rows, the <b>item name stays pinned</b> on the left, and you <b>swipe sideways</b> for the rest of the columns — so it works on the phone and really shines on an iPad or Mac. Nothing new to learn: it’s the same data as the per-item editor, just all at once for fast bulk tidying.',
       'See and fix your whole kit at a glance — weights, storage places, flags and which templates each thing belongs to — editing many items far faster than opening them one by one.'),

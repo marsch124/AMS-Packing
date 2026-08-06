@@ -3529,8 +3529,19 @@ table.grid {
   background: var(--card);
   font-weight: 800;
   text-align: left;
-  padding: 5px 8px;
+  vertical-align: top;
+  padding: 9px 10px 7px;
   border-bottom: 2px solid var(--brand);
+  font-size: .95rem;
+  letter-spacing: .01em;
+  color: var(--brand);
+}
+.grid thead .grp em {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--muted);
+  margin-left: 5px;
+  font-size: .82rem;
 }
 .grid thead .col th {
   background: var(--card);
@@ -3572,6 +3583,10 @@ table.grid {
   outline: none;
 }
 .grid .g-num { width: 54px; text-align: right; }
+/* Weight column: drop the number-input spinner arrows for a cleaner cell. */
+.grid .g-num[data-f="weight"] { -moz-appearance: textfield; appearance: textfield; }
+.grid .g-num[data-f="weight"]::-webkit-outer-spin-button,
+.grid .g-num[data-f="weight"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .grid .g-txt { width: 92px; }
 .grid input[data-f="storage"] { width: 120px; }
 .grid .g-sel { max-width: 132px; }
@@ -3579,4 +3594,50 @@ table.grid {
 .grid .g-multi { color: var(--muted); font-size: .72rem; }
 .grid .g-saved { background: color-mix(in srgb, var(--brand) 22%, transparent); transition: background .3s; }
 .grid .g-empty { padding: 20px; color: var(--muted); }
-.screen-grid .grid-search { margin: 0 2px 8px; }
+/* Toolbar above the table: search + sort field + direction + Columns button. */
+.grid-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 2px 8px;
+}
+.grid-toolbar .ai-searchbox { flex: 1 1 180px; margin: 0; }
+.grid-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.grid-sortby { display: inline-flex; align-items: center; gap: 5px; font-size: .8rem; color: var(--muted); }
+.grid-sortby select {
+  font: inherit;
+  font-size: .8rem;
+  padding: 5px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+}
+.grid-sortdir {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: .85rem;
+  line-height: 1;
+}
+.grid-colsbtn { white-space: nowrap; }
+
+/* Column-order modal. */
+.cols-modal .col-rows {
+  display: grid;
+  gap: 8px;
+  max-height: 52vh;
+  overflow-y: auto;
+  margin: 10px 0 4px;
+}
+.cols-modal .col-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+}
+.cols-modal .col-name { flex: 1; font-weight: 600; min-width: 0; }
+.cols-modal .iconbtn.sm[disabled] { opacity: .35; pointer-events: none; }
