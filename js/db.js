@@ -29,7 +29,7 @@ const EVENTS = 'events';
 const ACTIONS = 'actions';          // standalone to-do store (tied-to-item or loose)
 const LISTS = 'lists';              // legacy v1 store — read once to migrate, then ignored
 // Bump when the built-in seed data changes, to refresh the built-in templates on next load.
-const SEED_VERSION = 12;            // v12: weights on every item; v11: seeded Containers catalogue; v10: Diving pre-filled with sections
+const SEED_VERSION = 13;            // v13: storage place on every item; v12: weights on every item; v11: seeded Containers catalogue
 const SEED_KEY = 'ams-seed-version';
 
 function open() {

@@ -1253,3 +1253,19 @@ test('groupByStorage: groups by storage place, alphabetical, "No place set" last
   assert.equal(groups[1].entries.length, 2);            // both Garage items together
   assert.equal(groupBy('stored', entries)[0].label, 'Bedroom wardrobe'); // via the dispatcher
 });
+
+test('seedLists: every packable item has a storage place; none in "Garage"', () => {
+  let items = 0, stored = 0, garage = 0, remWith = 0;
+  for (const l of seedLists()) {
+    if (l.role === 'container') continue;
+    for (const it of l.items) {
+      if (it.itemType === 'reminder') { if (it.storage) remWith++; continue; }
+      items++;
+      if (it.storage) stored++;
+      if (/garage/i.test(it.storage)) garage++;
+    }
+  }
+  assert.equal(stored, items, `all ${items} packable items have a storage place`);
+  assert.equal(garage, 0, 'nothing is filed under Garage');
+  assert.equal(remWith, 0, 'reminders carry no storage');
+});

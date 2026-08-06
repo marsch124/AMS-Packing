@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v68';
+const APP_VERSION = 'v69';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2930,6 +2930,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v69', '2026-08-05 · 22:15 UTC', false, 'Every item now has a “stored” place — the Stored view works out of the box',
+      'Following on from the new <b>Stored</b> grouping, every item in the built-in templates now comes with a sensible <b>“Where it’s stored”</b> place already filled in, so you can group a trip by <b>Stored</b> and immediately pack place-by-place. The rough scheme: everyday <b>clothes</b> in the <b>Bedroom wardrobe</b> (smaller items — socks, underwear, tees — in the <b>Chest of drawers</b>), <b>toiletries &amp; meds</b> in the <b>Bathroom cabinet</b>, <b>shoes</b> and grab-on-the-way-out things (sunglasses, wallet, passport) in the <b>Hall closet</b>, <b>food</b> in the <b>Kitchen cupboard</b>, and <b>sport/adventure gear</b> in the <b>Basement / cellar</b> — with <b>seasonal bulk</b> (skis, crampons, spare pillows) up in the <b>Loft / attic</b>. As you asked, <b>nothing is filed under “Garage”</b> — those things live in the attic or basement. Your bags in <b>Containers</b> got the same treatment. It’s all a <b>starting point</b> — open any item’s <b>Storage &amp; maintenance</b> panel to set its real spot. <b>Note:</b> this refreshes the built-in starter templates, so a storage place you’d set yourself on a built-in item is replaced by this default (just re-enter it); your own templates are untouched.',
+      'Group any trip by <b>Stored</b> and it just works — walk to the cupboard, the attic or the basement and grab everything from that one place in a single sweep.'),
     v('v68', '2026-08-05 · 21:30 UTC', false, 'Collapsible groups + a “Stored” view + a clearer “Show all”',
       'Three improvements to the trip Packing List, from your suggestions. <b>(1) Fold any group shut.</b> In the grouped list, <b>tap a group heading</b> to collapse it (tap again to reopen) — perfect for hiding a bag or a room you’ve already packed so you can focus on what’s left. Each heading now also shows a small <b>packed / total</b> count, so you can see a group’s progress at a glance even when it’s folded. <b>(2) A new “Stored” grouping.</b> The <b>Group by</b> row gains a <b>Stored</b> option that groups items by <b>where they live at home</b> (each item’s “Where it’s stored” place) — so you can walk to the garage, or the hall closet, and grab everything from that one spot in a single trip. It appears once at least one item on the trip has a storage place set (set it in an item’s editor, under <b>Storage &amp; maintenance</b>); anything without a place gathers under <b>No place set</b>. <b>(3) A clearer “Show all”.</b> The dashed <b>Show all</b> button in the <b>Sort out</b> row now has a bolder outline so it’s easier to spot.',
       'Pack room-by-room or bag-by-bag: group by where things are stored, then fold away each group as you clear it — with a packed/total count keeping score.'),
