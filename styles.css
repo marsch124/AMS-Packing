@@ -3653,10 +3653,26 @@ table.grid {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
   margin: 2px 2px 12px;
 }
 .map-count { font-size: 1.02rem; color: var(--muted); }
 .map-count b { color: var(--ink); font-weight: 700; }
+.map-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 12%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--brand) 26%, var(--line));
+  color: var(--muted);
+  font-size: .82rem;
+  white-space: nowrap;
+}
+.map-top b { color: var(--ink); font-weight: 700; }
+.map-top .ic { width: 15px; height: 15px; color: var(--brand); }
 
 .map-find {
   background: var(--card);
@@ -3689,6 +3705,20 @@ table.grid {
   stroke-width: .3;
   stroke-linejoin: round;
 }
+
+/* The date-ordered "journey" line — subtle, dashed, gently flowing. */
+.worldmap-route {
+  fill: none;
+  stroke: var(--brand);
+  stroke-width: .6;
+  stroke-opacity: .5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1.6 2;
+  animation: route-flow 3s linear infinite;
+}
+@keyframes route-flow { to { stroke-dashoffset: -7.2; } }
+@media (prefers-reduced-motion: reduce) { .worldmap-route { animation: none; } }
 
 .pins { position: absolute; inset: 0; }
 .pin {

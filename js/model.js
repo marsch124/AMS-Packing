@@ -1335,6 +1335,30 @@ export function placesVisited(events) {
   return [...byKey.values()];
 }
 
+// The trips that have BOTH coordinates and a start date, ordered oldest→newest,
+// as a simple list of stops for the map's "journey" line. A place visited twice
+// appears twice (the line can return to it); undated trips are pinned but left
+// off the line, since we can't place them in time.
+export function tripPath(events) {
+  return (events || [])
+    .map((e) => ({ e, c: eventCoords(e) }))
+    .filter((x) => x.c && x.e.startDate)
+    .sort((a, b) => (a.e.startDate < b.e.startDate ? -1 : a.e.startDate > b.e.startDate ? 1 : 0))
+    .map((x) => ({ lat: x.c.lat, lon: x.c.lon, name: x.e.name || '', date: x.e.startDate, place: x.c.place || '' }));
+}
+
+// The place with the most visits, for the little "most visited" summary. Only
+// meaningful once somewhere has been visited more than once; ties resolve to the
+// most-recently-visited (placesVisited is already newest-first), so null means
+// "nowhere stands out yet".
+export function mostVisited(places) {
+  let best = null;
+  for (const p of places || []) {
+    if (!best || p.events.length > best.events.length) best = p;
+  }
+  return best && best.events.length >= 2 ? best : null;
+}
+
 // ============================================================================
 // RELATIONAL CORE ("Endeavour 2") — the Item catalog + Memberships.
 // ============================================================================
