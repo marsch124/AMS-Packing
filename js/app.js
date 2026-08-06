@@ -18,7 +18,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v67';
+const APP_VERSION = 'v68';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -709,23 +709,32 @@ async function renderEventForm(existing) {
 // Event Total List (the heart)
 // ============================================================
 const VIEW_KEY = 'ams-view';
-const VIEW_MODES = ['when', 'container', 'category', 'section'];
+const VIEW_MODES = ['when', 'container', 'category', 'section', 'stored'];
 function totalView() { try { const v = localStorage.getItem(VIEW_KEY); return VIEW_MODES.includes(v) ? v : 'when'; } catch { return 'when'; } }
 // Does this trip have any sectioned items? (The Section group-by only appears then.)
 function tripHasSections(ev) { return (ev.entries || []).some((e) => (e.section || '').trim()); }
-// The effective group-by for a trip: fall back off 'section' when nothing is sectioned.
-function viewFor(ev) { const v = totalView(); return (v === 'section' && !tripHasSections(ev)) ? 'when' : v; }
+// Does this trip have any items with a storage place? (Gates the Stored group-by.)
+function tripHasStorage(ev) { return (ev.entries || []).some((e) => (e.storage || '').trim()); }
+// The effective group-by for a trip: fall back off Section/Stored when there's
+// nothing to group by that way, so the toggle can't leave the list looking empty.
+function viewFor(ev) {
+  const v = totalView();
+  if (v === 'section' && !tripHasSections(ev)) return 'when';
+  if (v === 'stored' && !tripHasStorage(ev)) return 'when';
+  return v;
+}
 function setTotalView(v) { try { localStorage.setItem(VIEW_KEY, v); } catch {} }
 let expandedEntry = null; // id of the entry whose inline editor is open
 let flagFilter = new Set(); // active "sort out" filters on the Total List: 'liquid' and/or 'charge'
 let flagFilterFor = null;   // the event id the filter belongs to (cleared when you switch trips)
 let weightSort = false;     // "Heaviest first" ordering toggle on the Total List
+const collapsedGroups = new Set(); // group headings folded closed on the Total List (keyed `mode|label`)
 
 async function renderEvent(eventId) {
   const ev = await db.getEvent(eventId);
   if (!ev) { location.assign('#/'); return h('<section></section>'); }
   ALL_LISTS = await db.getLists(); // so an entry can be traced back to its template item
-  if (flagFilterFor !== eventId) { flagFilter = new Set(); weightSort = false; flagFilterFor = eventId; } // fresh per trip
+  if (flagFilterFor !== eventId) { flagFilter = new Set(); weightSort = false; collapsedGroups.clear(); flagFilterFor = eventId; } // fresh per trip
   const p = progress(ev.entries);
   const meta = (ev.mode === 'quick'
     ? ['⏱️ Quick', ev.season, ...(ev.contexts || [])]
@@ -777,7 +786,7 @@ async function renderEvent(eventId) {
   const toolbar = h(`<div class="toolbar">
     <span class="toolbar-lbl">Group by</span>
     <div class="segmented small">
-      ${segBtn('when', 'When')}${segBtn('container', 'Where')}${segBtn('category', 'Category')}${tripHasSections(ev) ? segBtn('section', 'Section') : ''}
+      ${segBtn('when', 'When')}${segBtn('container', 'Where')}${segBtn('category', 'Category')}${tripHasSections(ev) ? segBtn('section', 'Section') : ''}${tripHasStorage(ev) ? segBtn('stored', 'Stored') : ''}
     </div>
     <div class="spacer"></div>
     <button class="btn ghost" data-act="add">${IC.plus}<span>Item</span></button>
@@ -1021,13 +1030,34 @@ function renderTotalBody(body, ev) {
     : (entries) => entriesByPhase(entries).map((g) => ({ label: g.phase.label, entries: g.entries }));
 
   for (const g of groupBy(mode, entries)) {
-    const sec = h(`<div class="group"><div class="group-h"><span class="ph">${esc(g.label)}</span>${g.hint ? `<span class="ph-hint">${esc(g.hint)}</span>` : ''}</div></div>`);
+    const key = `${mode}|${g.label}`;
+    const collapsed = collapsedGroups.has(key);
+    const done = g.entries.filter((e) => e.checked).length;
+    const sec = h(`<div class="group${collapsed ? ' collapsed' : ''}">
+      <div class="group-h clickable" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}">
+        <span class="group-caret" aria-hidden="true">▾</span>
+        <span class="ph">${esc(g.label)}</span>
+        ${g.hint ? `<span class="ph-hint">${esc(g.hint)}</span>` : ''}
+        <span class="group-count">${done}/${g.entries.length}</span>
+      </div>
+      <div class="group-body"></div>
+    </div>`);
+    const gb = $('.group-body', sec);
     const subs = subOf(g.entries);
     const showSub = subs.length > 1; // only show sub-headers when they actually split the group
     for (const s of subs) {
-      if (showSub) sec.appendChild(h(`<div class="sub">${esc(s.label)}</div>`));
-      for (const entry of s.entries) sec.appendChild(entryRow(ev, entry, body));
+      if (showSub) gb.appendChild(h(`<div class="sub">${esc(s.label)}</div>`));
+      for (const entry of s.entries) gb.appendChild(entryRow(ev, entry, body));
     }
+    const head = $('.group-h', sec);
+    const toggle = () => {
+      const nowC = !collapsedGroups.has(key);
+      if (nowC) collapsedGroups.add(key); else collapsedGroups.delete(key);
+      sec.classList.toggle('collapsed', nowC);
+      head.setAttribute('aria-expanded', String(!nowC));
+    };
+    head.addEventListener('click', toggle);
+    head.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
     body.appendChild(sec);
   }
 }
@@ -1062,7 +1092,7 @@ function entryRow(ev, entry, body, showWeight = false) {
   const mode = viewFor(ev);
   // Show the dimensions NOT used as the current grouping, so the row stays informative.
   const subBits = [];
-  if (entry.storage) subBits.push(`📍 ${esc(entry.storage)}`);
+  if (mode !== 'stored' && entry.storage) subBits.push(`📍 ${esc(entry.storage)}`);
   if (mode !== 'section' && entry.section) subBits.push(`🗂 ${esc(entry.section)}`);
   if (mode !== 'container' && entry.container) subBits.push(esc(entry.container));
   if (mode !== 'category' && entry.category) subBits.push(esc(entry.category));
@@ -2828,7 +2858,7 @@ function howtoCard() {
 
         <h3>Reading &amp; organising the list</h3>
         <ul>
-          <li><b>Group by</b> When / Where / Category (and <b>Section</b>, once a trip has sectioned items) — same list, several lenses.</li>
+          <li><b>Group by</b> When / Where / Category — same list, several lenses — plus <b>Section</b> (once a trip has sectioned items) and <b>Stored</b> (once items have a storage place), which groups by <em>where each thing lives at home</em> so you can empty one cupboard at a time. <b>Tap any group heading to fold it shut</b> (and again to reopen) — handy for hiding a bag you've finished packing; each heading shows a <b>packed/total</b> count.</li>
           <li><b>Sort out</b> — quick filters above the list isolate all <b>💧 Liquids</b> (for the wash bag / 100 ml rule) or all <b>⚡ Charge</b> items (to round up cables and chargers). Tap a chip to show only those; tap <b>Show all</b> to bring the full list back. Ticking and editing work the same in the filtered view. Mark an item as a liquid or charge item with the 💧 / ⚡ toggles in its editor.</li>
           <li><b>🪨 Heaviest</b> — reorders the list heaviest-first with each item’s weight shown, so when a bag is over its limit you can see at a glance what to leave behind. It uses the real load (weight × quantity, including per-night scaling); items without a weight sit at the bottom. Combine it with a Liquids/Charge filter to rank just those. Add a weight to an item in its editor to make it count.</li>
           <li><b>Tap an item</b> to open a quick editor for this trip’s bits (Qty, Category, Container, When, weight, flags, note). For the item’s deeper settings — conditions, which templates it’s in, storage &amp; maintenance — tap <b>Edit the full item</b> to jump straight into the full item editor, then use Back to return to your trip. If the item was only added to this one trip, the same button offers to <b>add it to a template first</b> (you pick which) so it’s saved for reuse — then opens its full editor.</li>
@@ -2900,6 +2930,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v68', '2026-08-05 · 21:30 UTC', false, 'Collapsible groups + a “Stored” view + a clearer “Show all”',
+      'Three improvements to the trip Packing List, from your suggestions. <b>(1) Fold any group shut.</b> In the grouped list, <b>tap a group heading</b> to collapse it (tap again to reopen) — perfect for hiding a bag or a room you’ve already packed so you can focus on what’s left. Each heading now also shows a small <b>packed / total</b> count, so you can see a group’s progress at a glance even when it’s folded. <b>(2) A new “Stored” grouping.</b> The <b>Group by</b> row gains a <b>Stored</b> option that groups items by <b>where they live at home</b> (each item’s “Where it’s stored” place) — so you can walk to the garage, or the hall closet, and grab everything from that one spot in a single trip. It appears once at least one item on the trip has a storage place set (set it in an item’s editor, under <b>Storage &amp; maintenance</b>); anything without a place gathers under <b>No place set</b>. <b>(3) A clearer “Show all”.</b> The dashed <b>Show all</b> button in the <b>Sort out</b> row now has a bolder outline so it’s easier to spot.',
+      'Pack room-by-room or bag-by-bag: group by where things are stored, then fold away each group as you clear it — with a packed/total count keeping score.'),
     v('v67', '2026-08-05 · 20:30 UTC', false, 'Every item now has a weight',
       'Every packable item in the built-in templates now carries a <b>sensible weight estimate</b> (in grams), so the <b>Bags &amp; weight</b> panel and the <b>Heaviest-first</b> view work properly from the start — no more “add a weight to see totals”. The figures are honest guesses based on each item’s type (a t-shirt ~150 g, running shoes ~300 g, a drysuit ~3.5 kg, a phone ~200 g, and so on); <b>to-dos/reminders</b> carry no weight, as they’re not packed. They’re all <b>fully editable</b> — open any item and set its real weight to make your bag totals exact. Combined with the new <b>Containers</b> (each bag’s own max weight), your trips now show a realistic <b>total load</b> and a reliable <b>over-limit</b> warning per bag straight away. <b>Note:</b> this arrives as a refresh of the built-in starter templates, so any weight you’d set yourself on a built-in item is replaced by the estimate — just re-enter it. Your own templates are untouched.',
       'Bag totals and the over-weight warnings are useful immediately — the whole trip has real weights out of the box, ready for you to fine-tune.'),

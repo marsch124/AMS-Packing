@@ -896,9 +896,9 @@ legend {
 }
 
 .fchip.clear {
-  border-style: dashed;
+  border: 2px dashed var(--muted);
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .ev-summary {
@@ -923,6 +923,37 @@ legend {
   padding: 2px 4px 6px;
   border-bottom: 2px solid var(--brand);
   margin-bottom: 4px;
+}
+
+.group-h.clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-caret {
+  flex: none;
+  color: var(--brand);
+  font-size: .8rem;
+  line-height: 1;
+  transition: transform .15s ease;
+  align-self: center;
+}
+
+.group.collapsed .group-caret {
+  transform: rotate(-90deg);
+}
+
+.group.collapsed .group-body {
+  display: none;
+}
+
+.group-h .group-count {
+  margin-left: auto;
+  flex: none;
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .group-h .ph {

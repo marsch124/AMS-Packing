@@ -666,11 +666,31 @@ export function groupBySection(entries) {
   return out;
 }
 
-// Generic dispatcher used by the UI's group-by toggle: 'category' | 'container' | 'section' | 'when'.
+// Group entries by WHERE the item is stored at home (its `storage` free-text),
+// alphabetically, with anything without a place set gathered in a trailing group.
+// Lets you round up "everything from the garage" when packing.
+export function groupByStorage(entries) {
+  const map = new Map();
+  const none = [];
+  for (const e of asArray(entries)) {
+    const s = (e && e.storage || '').trim();
+    if (!s) { none.push(e); continue; }
+    if (!map.has(s)) map.set(s, []);
+    map.get(s).push(e);
+  }
+  const out = [...map.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([label, list]) => ({ label, entries: list }));
+  if (none.length) out.push({ label: 'No place set', entries: none });
+  return out;
+}
+
+// Generic dispatcher used by the UI's group-by toggle: 'category' | 'container' | 'section' | 'stored' | 'when'.
 export function groupBy(mode, entries) {
   if (mode === 'category') return groupByCategory(entries).map((g) => ({ label: g.category, entries: g.entries }));
   if (mode === 'container') return groupByContainer(entries).map((g) => ({ label: g.container || 'Unpacked', entries: g.entries }));
   if (mode === 'section') return groupBySection(entries);
+  if (mode === 'stored') return groupByStorage(entries);
   return entriesByPhase(entries).map((g) => ({ label: g.phase.label, hint: g.phase.hint, entries: g.entries }));
 }
 
