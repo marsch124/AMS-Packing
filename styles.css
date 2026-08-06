@@ -3641,3 +3641,127 @@ table.grid {
 }
 .cols-modal .col-name { flex: 1; font-weight: 600; min-width: 0; }
 .cols-modal .iconbtn.sm[disabled] { opacity: .35; pointer-events: none; }
+
+/* ============================================================
+   Places-visited world map (#/map)
+   The map is one offline SVG (js/worldmap.js); pins live in a
+   percentage-positioned overlay so they align with the land and stay a
+   comfortable tap size at any width. Ocean/land tints are mixed from the
+   section --brand + --card, so the whole thing recolours in light & dark.
+   ============================================================ */
+.map-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 2px 2px 12px;
+}
+.map-count { font-size: 1.02rem; color: var(--muted); }
+.map-count b { color: var(--ink); font-weight: 700; }
+
+.map-find {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px;
+  margin-bottom: 14px;
+}
+.map-find .btn { width: 100%; justify-content: center; }
+.map-find-note { margin: 10px 2px 0; color: var(--muted); font-size: .86rem; line-height: 1.4; }
+
+.worldmap-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 1;               /* matches the 360×180 viewBox */
+  border: 1px solid color-mix(in srgb, var(--brand) 28%, var(--line));
+  border-radius: var(--radius);
+  overflow: hidden;
+  background:
+    radial-gradient(120% 120% at 50% 0%,
+      color-mix(in srgb, var(--brand) 13%, var(--card)),
+      color-mix(in srgb, var(--brand) 6%, var(--card)));
+  box-shadow: var(--shadow);
+}
+.worldmap { display: block; width: 100%; height: 100%; }
+.worldmap-land {
+  fill: color-mix(in srgb, var(--brand) 26%, var(--card));
+  stroke: color-mix(in srgb, var(--brand) 42%, var(--card));
+  stroke-width: .3;
+  stroke-linejoin: round;
+}
+
+.pins { position: absolute; inset: 0; }
+.pin {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 26px; height: 26px;         /* tap target; the visible dot is smaller */
+  margin: 0; padding: 0; border: 0;
+  background: none; cursor: pointer;
+  display: grid; place-items: center;
+  -webkit-tap-highlight-color: transparent;
+  z-index: 1;
+}
+/* Bring an interacted pin above its neighbours where they crowd together. */
+.pin:hover, .pin:focus-visible, .pin.active { z-index: 3; }
+.pin-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--brand);
+  border: 2px solid var(--card);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--brand) 55%, transparent),
+    0 0 10px 2px color-mix(in srgb, var(--brand) 60%, transparent);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.pin:hover .pin-dot,
+.pin:focus-visible .pin-dot { transform: scale(1.18); }
+.pin.active .pin-dot {
+  transform: scale(1.35);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--brand) 70%, transparent),
+    0 0 14px 4px color-mix(in srgb, var(--brand) 75%, transparent);
+}
+.pin-badge {
+  position: absolute;
+  top: -2px; right: -2px;
+  min-width: 15px; height: 15px;
+  padding: 0 3px;
+  border-radius: 8px;
+  background: var(--brand-2);
+  color: #fff;
+  font-size: .62rem; font-weight: 700; line-height: 15px;
+  text-align: center;
+  border: 1.5px solid var(--card);
+}
+
+.map-hint { margin: 10px 2px 16px; color: var(--muted); font-size: .82rem; text-align: center; }
+
+.place-list { display: grid; gap: 10px; }
+.place-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  outline: none;
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+.place-card.lit {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 30%, transparent), var(--shadow);
+}
+.place-head { display: flex; align-items: center; gap: 8px; }
+.place-pin { color: var(--brand); display: inline-flex; }
+.place-pin .ic { width: 18px; height: 18px; }
+.place-name { flex: 1; margin: 0; font-size: 1.02rem; font-weight: 700; min-width: 0; }
+.place-visits { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+.place-trips { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 2px; }
+.place-trips li a {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 7px 8px; margin: 0 -8px;
+  border-radius: 9px;
+  text-decoration: none; color: var(--ink);
+}
+.place-trips li a:hover { background: color-mix(in srgb, var(--brand) 9%, var(--card)); }
+.place-trip-name { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.place-trip-date { color: var(--muted); font-size: .82rem; white-space: nowrap; }

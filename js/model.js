@@ -317,7 +317,19 @@ export function coerceEvent(e) {
   if (typeof e.endDate !== 'string') e.endDate = '';   // return date; `nights` derives from start->end
   if (typeof e.destination !== 'string') e.destination = '';  // free text -> geocoded for weather
   e.weather = coerceWeather(e.weather);  // cached Open-Meteo snapshot, or null
+  e.geo = coerceGeo(e.geo);              // cached place coordinates for the world map, or null
   return e;
+}
+
+// A tiny, standalone place fix — { lat, lon, place } — cached on an event so the
+// world map can pin it offline. Set when we look a destination up (via the same
+// geocoder the weather uses); kept even if no forecast is ever fetched.
+export function coerceGeo(g) {
+  if (!g || typeof g !== 'object') return null;
+  const lat = Number(g.lat), lon = Number(g.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon, place: typeof g.place === 'string' ? g.place : '' };
 }
 
 // --- Actions (to-dos) -------------------------------------------------------
@@ -1267,6 +1279,60 @@ export function weatherSuggestions(event, lists = []) {
     }
   }
   return { conditions: d.conditions, items, summary: weatherSummary(d) };
+}
+
+// ============================================================================
+// PLACES VISITED (world map)
+// ============================================================================
+// Every event may name a `destination`. Once that place is looked up (by the
+// weather forecast, or on demand for the map) its coordinates are cached — on
+// the weather snapshot and/or the lightweight `geo` fix. These helpers pull the
+// coordinates back out and roll repeat visits to the same place into ONE pin.
+
+// The best-known coordinates for an event, or null. A fetched forecast is the
+// most authoritative source (it carries a tidy "City, CC" label); the cached
+// `geo` fix is the fallback for events that never had a forecast.
+export function eventCoords(event) {
+  if (!event || typeof event !== 'object') return null;
+  const w = event.weather;
+  if (w && Number.isFinite(Number(w.lat)) && Number.isFinite(Number(w.lon))) {
+    return { lat: Number(w.lat), lon: Number(w.lon), place: w.place || event.destination || '' };
+  }
+  const g = coerceGeo(event.geo);
+  if (g) return { lat: g.lat, lon: g.lon, place: g.place || event.destination || '' };
+  return null;
+}
+
+// Events that name a destination but have no coordinates yet — the map's
+// "Find these places" button geocodes exactly these.
+export function eventsNeedingCoords(events) {
+  return (events || []).filter((e) => e && e.destination && e.destination.trim() && !eventCoords(e));
+}
+
+// The pin key that merges repeat visits: a normalised place label when we have
+// one (so "Stockholm, SE" visited thrice is one pin), else coordinates rounded
+// to ~0.1° (~11 km) so two forecasts of the same spot still coincide.
+function placeKey(coords) {
+  const label = normName(coords.place || '');
+  if (label) return `n:${label}`;
+  return `c:${coords.lat.toFixed(1)},${coords.lon.toFixed(1)}`;
+}
+
+// Roll a list of events into one pin per place: { key, place, lat, lon, events }.
+// `events` within a pin are newest-first; the pin's coordinates/label come from
+// its most recent visit. Pins are returned most-recently-visited first.
+export function placesVisited(events) {
+  const byKey = new Map();
+  for (const e of sortEventsForList(events || [])) {   // newest-first overall
+    const coords = eventCoords(e);
+    if (!coords) continue;
+    const key = placeKey(coords);
+    if (!byKey.has(key)) {
+      byKey.set(key, { key, place: coords.place || '', lat: coords.lat, lon: coords.lon, events: [] });
+    }
+    byKey.get(key).events.push(e);
+  }
+  return [...byKey.values()];
 }
 
 // ============================================================================

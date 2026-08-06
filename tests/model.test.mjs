@@ -16,6 +16,7 @@ import {
   normalizeSections, newSection, sectionName, groupItemsBySection, groupBySection,
   containerNames, containerLimits, groupByStorage,
   catalogRows, dupeKey, duplicateGroups, duplicateIds,
+  coerceGeo, eventCoords, eventsNeedingCoords, placesVisited,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1314,4 +1315,72 @@ test('duplicateGroups / duplicateIds: surface look-alike items', () => {
   const passport = rows.find((r) => r.name === 'Passport');
   assert.equal(ids.has(passport.id), false);
   assert.ok(ids.size >= 4, 'both look-alike pairs are flagged');
+});
+
+// ---- Places visited (world map) -------------------------------------------
+
+test('coerceGeo: keeps valid coordinates, rejects junk', () => {
+  assert.deepEqual(coerceGeo({ lat: 59.33, lon: 18.06, place: 'Stockholm, SE' }),
+    { lat: 59.33, lon: 18.06, place: 'Stockholm, SE' });
+  assert.deepEqual(coerceGeo({ lat: '51.5', lon: '-0.12' }), { lat: 51.5, lon: -0.12, place: '' });
+  assert.equal(coerceGeo(null), null);
+  assert.equal(coerceGeo({ lat: 10 }), null);              // missing lon
+  assert.equal(coerceGeo({ lat: 999, lon: 0 }), null);     // out of range
+  assert.equal(coerceGeo({ lat: 'x', lon: 'y' }), null);   // not numbers
+});
+
+test('eventCoords: reads weather snapshot, then the geo fix, else null', () => {
+  const bare = newEvent({ name: 'Nowhere' });
+  assert.equal(eventCoords(bare), null);
+
+  const withGeo = newEvent({ name: 'Geo only', destination: 'Oslo' });
+  withGeo.geo = { lat: 59.91, lon: 10.75, place: 'Oslo, NO' };
+  assert.deepEqual(eventCoords(withGeo), { lat: 59.91, lon: 10.75, place: 'Oslo, NO' });
+
+  // A fetched forecast wins over the geo fix, and carries its tidy label.
+  const withWeather = newEvent({ name: 'Weathered', destination: 'oslo' });
+  withWeather.geo = { lat: 1, lon: 1, place: 'stale' };
+  withWeather.weather = { lat: 59.91, lon: 10.75, place: 'Oslo, NO', daily: [] };
+  assert.deepEqual(eventCoords(withWeather), { lat: 59.91, lon: 10.75, place: 'Oslo, NO' });
+});
+
+test('eventsNeedingCoords: only trips with a destination and no coordinates', () => {
+  const located = newEvent({ name: 'Has coords', destination: 'Rome' });
+  located.geo = { lat: 41.9, lon: 12.5, place: 'Rome, IT' };
+  const needs = newEvent({ name: 'Needs lookup', destination: 'Lisbon' });
+  const noDest = newEvent({ name: 'No destination' });
+  const list = eventsNeedingCoords([located, needs, noDest]);
+  assert.deepEqual(list.map((e) => e.name), ['Needs lookup']);
+});
+
+test('placesVisited: merges repeat visits to the same place into one pin', () => {
+  const mk = (name, startDate, place, lat, lon) => {
+    const e = newEvent({ name, destination: place, startDate });
+    e.geo = { lat, lon, place };
+    return e;
+  };
+  const events = [
+    mk('Stockholm spring', '2025-04-10', 'Stockholm, SE', 59.33, 18.06),
+    mk('Stockholm winter', '2026-01-05', 'Stockholm, SE', 59.33, 18.06),
+    mk('London trip', '2025-09-01', 'London, GB', 51.5, -0.12),
+    newEvent({ name: 'Undestined' }),   // no coords -> not on the map
+  ];
+  const pins = placesVisited(events);
+  assert.equal(pins.length, 2, 'two distinct places');
+  const sthlm = pins.find((p) => p.place === 'Stockholm, SE');
+  assert.equal(sthlm.events.length, 2, 'both Stockholm trips under one pin');
+  // Newest visit leads within the pin.
+  assert.equal(sthlm.events[0].name, 'Stockholm winter');
+  const london = pins.find((p) => p.place === 'London, GB');
+  assert.equal(london.events.length, 1);
+});
+
+test('placesVisited: same spot with no label still merges by coordinates', () => {
+  const a = newEvent({ name: 'A', destination: 'spot' });
+  a.geo = { lat: 12.34, lon: 56.78, place: '' };
+  const b = newEvent({ name: 'B', destination: 'spot' });
+  b.geo = { lat: 12.341, lon: 56.779, place: '' };   // ~same, rounds together
+  const pins = placesVisited([a, b]);
+  assert.equal(pins.length, 1);
+  assert.equal(pins[0].events.length, 2);
 });
