@@ -19,7 +19,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v70';
+const APP_VERSION = 'v71';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -227,6 +227,133 @@ async function renderContainers() {
   const c = await getContainerList();
   return renderList(c.id);
 }
+// The global "All items" TABLE (#/items) — every item as a row, with editable
+// columns grouped like the item editor: ① the item itself (intrinsic — edits apply
+// everywhere), ② in this list (qty/section — editable only when the item is in one
+// template), and ③ a tick-matrix of template membership. Reached from the Care tab.
+async function renderItemsGrid() {
+  const wrap = h('<section class="screen screen-grid"></section>');
+  wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">All items · table</h1></div>`));
+  wrap.appendChild(h('<p class="muted pad">Edit lots of items at once. Fields under <b>the item itself</b> (weight, storage, flags, colour…) update the item <b>everywhere</b> it’s used. Tap a template box to file the item in or out. <b>Qty/Section</b> are editable when an item is in a single template. Swipe sideways for more columns.</p>'));
+
+  let lists = await db.getLists();
+  let rowsById = new Map();
+  const searchWrap = h(`<label class="ai-searchbox">${IC.search}<input type="search" class="grid-search" placeholder="Search items…" autocomplete="off"></label>`);
+  wrap.appendChild(searchWrap);
+  const scroll = h('<div class="grid-scroll"></div>');
+  wrap.appendChild(scroll);
+  let query = '';
+
+  const FLAGS = [['liquid', '💧'], ['charging', '⚡'], ['restricted', '⚠️']];
+  const TEXTCOLS = [['color', 'Color'], ['size', 'Size'], ['manufacturer', 'Maker'], ['model', 'Model']];
+
+  const rowHTML = (row, templates) => {
+    const it = row.item;
+    const memIds = new Set(row.mems.map((m) => m.listId));
+    const single = row.mems.length === 1 ? row.mems[0] : null;
+    const openLid = row.mems[0].listId;
+    const flags = FLAGS.map(([f]) => `<td class="g-check"><input type="checkbox" data-f="${f}"${it[f] ? ' checked' : ''}></td>`).join('');
+    const texts = TEXTCOLS.map(([f]) => `<td><input class="g-txt" data-f="${f}" value="${esc(it[f] || '')}" autocomplete="off"></td>`).join('');
+    // ② per-template columns — editable only for single-template items.
+    let containerCell; let qtyCell; let sectionCell;
+    if (single) {
+      containerCell = `<td><select class="g-sel" data-f="container" data-listid="${esc(single.listId)}">${containerOpts(single.container).map((c) => `<option value="${esc(c)}"${c === single.container ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select></td>`;
+      qtyCell = `<td><input class="g-num" type="number" min="0" inputmode="numeric" data-f="qty" data-listid="${esc(single.listId)}" value="${esc(single.qty || '')}"></td>`;
+      const sl = lists.find((x) => x.id === single.listId);
+      const secOpts = [{ value: '', label: '—' }].concat((sl && sl.sections || []).map((s) => ({ value: s.id, label: s.name })));
+      sectionCell = `<td><select class="g-sel" data-f="section" data-listid="${esc(single.listId)}">${secOpts.map((o) => `<option value="${esc(o.value)}"${o.value === (single.section || '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></td>`;
+    } else {
+      containerCell = `<td><span class="g-multi">${esc(it.container || '')}</span></td>`;
+      qtyCell = `<td><span class="g-multi" title="Set per list — open the item">${row.mems.length} lists</span></td>`;
+      sectionCell = '<td><span class="g-multi">·</span></td>';
+    }
+    const matrix = templates.map((t) => `<td class="g-check"><input type="checkbox" data-tmpl="${esc(t.id)}"${memIds.has(t.id) ? ' checked' : ''}></td>`).join('');
+    return `<tr data-id="${esc(row.id)}">
+      <th class="cell-name" scope="row"><a href="#/list/${esc(openLid)}/item/${esc(row.id)}">${esc(it.name || '(unnamed)')}</a>${it.retired ? ' <span title="Not in use">🚫</span>' : ''}</th>
+      <td><input class="g-num" type="number" min="0" inputmode="numeric" data-f="weight" value="${it.weight || ''}"></td>
+      <td><input class="g-txt" list="grid-storages" data-f="storage" value="${esc(it.storage || '')}" autocomplete="off"></td>
+      ${flags}${containerCell}${texts}${qtyCell}${sectionCell}${matrix}
+    </tr>`;
+  };
+
+  const build = () => {
+    ALL_LISTS = lists;
+    STORAGES = collectStorages(lists);
+    const templates = lists.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    rowsById = new Map();
+    for (const l of lists) {
+      if (l.role === CONTAINER_ROLE) continue; // containers have their own screen
+      for (const it of (l.items || [])) {
+        const id = it._itemId; if (!id) continue;
+        if (!rowsById.has(id)) rowsById.set(id, { id, item: it, mems: [] });
+        rowsById.get(id).mems.push({ listId: l.id, listName: l.name, role: l.role, qty: it.qty, section: it.section, container: it.container });
+      }
+    }
+    let rows = [...rowsById.values()].sort((a, b) => (a.item.name || '').localeCompare(b.item.name || '', undefined, { sensitivity: 'base' }));
+    const q = query.trim().toLowerCase();
+    if (q) rows = rows.filter((r) => (r.item.name || '').toLowerCase().includes(q));
+    const head = `<thead>
+      <tr class="grp"><th class="cell-name" rowspan="2">Item <em>${rows.length}</em></th>
+        <th colspan="10">① The item itself</th><th colspan="2">② In this list</th><th colspan="${templates.length}">③ In these templates</th></tr>
+      <tr class="col"><th>Weight</th><th>Storage</th><th>💧</th><th>⚡</th><th>⚠️</th><th>Container</th><th>Color</th><th>Size</th><th>Maker</th><th>Model</th>
+        <th>Qty</th><th>Section</th>${templates.map((t) => `<th class="tmpl-col"><span>${esc(t.name)}</span></th>`).join('')}</tr>
+    </thead>`;
+    const body = `<tbody>${rows.map((r) => rowHTML(r, templates)).join('') || '<tr><td class="g-empty" colspan="99">No items match your search.</td></tr>'}</tbody>`;
+    const datalist = `<datalist id="grid-storages">${STORAGES.map((s) => `<option value="${esc(s)}"></option>`).join('')}</datalist>`;
+    scroll.innerHTML = `<table class="grid">${head}${body}</table>${datalist}`;
+  };
+
+  const findItem = (lid, id) => { const l = lists.find((x) => x.id === lid); return { l, it: l && l.items.find((z) => z._itemId === id) }; };
+  const ensureLoose = async () => {
+    let loose = lists.find((x) => x.role === 'loose');
+    if (!loose) { loose = newList({ name: 'Loose items', role: 'loose', builtin: true }); await db.saveList(loose); lists = await db.getLists(); loose = lists.find((x) => x.role === 'loose'); }
+    return loose;
+  };
+
+  scroll.addEventListener('change', async (e) => {
+    const el = e.target;
+    const tr = el.closest('tr'); if (!tr) return;
+    const id = tr.dataset.id; const row = rowsById.get(id); if (!row) return;
+
+    if (el.dataset.tmpl) { // ③ membership matrix
+      const lid = el.dataset.tmpl;
+      const l = lists.find((x) => x.id === lid); if (!l) return;
+      if (el.checked) {
+        if (!l.items.some((z) => z._itemId === id)) l.items.unshift(copyItemForTemplate(row.item, row.item.name));
+      } else {
+        // Never orphan the item: if this was its only home, park it in Loose first.
+        const others = row.mems.filter((m) => m.listId !== lid);
+        if (!others.length) { const loose = await ensureLoose(); if (loose && !loose.items.some((z) => z._itemId === id)) { loose.items.unshift(copyItemForTemplate(row.item, row.item.name)); await db.saveList(loose); } }
+        l.items = l.items.filter((z) => z._itemId !== id);
+      }
+      if (await saveGuard(db.saveList(l))) {
+        lists = await db.getLists();
+        // Auto-file: once in a real template, don't linger in Loose.
+        const loose = lists.find((x) => x.role === 'loose');
+        const inReal = lists.some((x) => x.role !== 'loose' && x.role !== CONTAINER_ROLE && x.items.some((z) => z._itemId === id));
+        if (loose && inReal && loose.items.some((z) => z._itemId === id)) { loose.items = loose.items.filter((z) => z._itemId !== id); await db.saveList(loose); lists = await db.getLists(); }
+        const sx = scroll.scrollLeft, sy = scroll.scrollTop; build(); scroll.scrollLeft = sx; scroll.scrollTop = sy;
+        ALL_LISTS = lists;
+      }
+      return;
+    }
+
+    const f = el.dataset.f; if (!f) return;
+    const { l, it } = findItem(el.dataset.listid || row.mems[0].listId, id);
+    if (!it) return;
+    if (['liquid', 'charging', 'restricted'].includes(f)) it[f] = el.checked;
+    else if (f === 'weight') it.weight = Math.max(0, parseInt(el.value, 10) || 0);
+    else if (f === 'qty' || f === 'container' || f === 'section') it[f] = f === 'qty' ? (el.value || '').trim() : el.value;
+    else it[f] = (el.value || '').trim(); // storage / color / size / manufacturer / model
+    await saveGuard(db.saveList(l));
+    el.classList.add('g-saved'); setTimeout(() => el.classList.remove('g-saved'), 600);
+  });
+
+  build();
+  searchWrap.querySelector('input').addEventListener('input', (e) => { query = e.target.value; build(); });
+  return wrap;
+}
+
 // Options for a "Container" (where a thing is packed) dropdown: the default names
 // merged with the user's real container records, keeping the current value even if
 // it's a one-off not in either set (so editing never silently drops it).
@@ -2454,6 +2581,11 @@ async function renderMaintenance() {
     <span class="care-link-body"><b>Containers</b><span class="care-link-sub">Your bags, duffels &amp; backpacks — photos, capacity, storage &amp; care${containerCount ? ` · ${containerCount}` : ''}</span></span>
     <span class="care-link-go">${IC.fwd}</span>
   </a>`));
+  wrap.appendChild(h(`<a class="care-link" href="#/items">
+    <span class="care-link-ic">▦</span>
+    <span class="care-link-body"><b>All items · table</b><span class="care-link-sub">Every item as a spreadsheet — edit weight, storage, flags &amp; template membership in bulk</span></span>
+    <span class="care-link-go">${IC.fwd}</span>
+  </a>`));
   ALL_LISTS = lists; // so isUnfiled() in the All-items rows reflects the current data
   const listById = new Map(lists.map((l) => [l.id, l]));
   const rows = maintenanceList(lists);
@@ -2808,6 +2940,9 @@ function howtoCard() {
         <h3>Containers — your bags as objects</h3>
         <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>🎒 Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
 
+        <h3>All items · table (the spreadsheet)</h3>
+        <p>For fast bulk edits, the <b>Care</b> tab → <b>▦ All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
+
         <h3>The timeline (phases)</h3>
         <p>Items are packed in stages, in this order: <b>Preparations</b> (book/cancel/charge, done ahead) → <b>≥1 week ahead</b> (things you don't use at home) → <b>Day before</b> (stage / move to the RV) → <b>Morning of</b> → <b>At the front door</b> (last check as you leave) → <b>Wear / carry</b> on the day → <b>After / recovery</b> (shower, change, recovery).</p>
 
@@ -2934,6 +3069,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v71', '2026-08-06 · 13:00 UTC', false, 'All items · table — edit everything in one spreadsheet',
+      'A new <b>spreadsheet view</b> of every item, reached from the <b>Care</b> tab → <b>▦ All items · table</b>. Each row is an item; the columns are grouped just like an item’s editor: <b>① the item itself</b> (weight, storage, 💧/⚡/⚠️ flags, container, colour, size, maker, model), <b>② in this list</b> (qty, section), and <b>③ a tick-box per template</b> showing which lists the item is in. <b>Edit right in the grid:</b> type a weight or storage place, tick a flag, and it updates the item <b>everywhere it’s used</b>; tick or untick a template box to <b>file the item in or out</b> of that list on the spot (unticking an item’s last list parks it safely in <b>Loose items</b> rather than deleting it). The <b>qty</b> and <b>section</b> columns are per-list, so they’re editable when an item lives in a single template and show “<b>N lists</b>” (tap the name to open it) when it’s shared. There’s a <b>search box</b> to filter to a few rows, the <b>item name stays pinned</b> on the left, and you <b>swipe sideways</b> for the rest of the columns — so it works on the phone and really shines on an iPad or Mac. Nothing new to learn: it’s the same data as the per-item editor, just all at once for fast bulk tidying.',
+      'See and fix your whole kit at a glance — weights, storage places, flags and which templates each thing belongs to — editing many items far faster than opening them one by one.'),
     v('v70', '2026-08-06 · 12:00 UTC', false, 'Maintenance mode — a whole-database overview, with duplicate spotting',
       'A new <b>Maintenance mode</b> in <b>Settings</b> (tap <b>🗂️ Maintenance mode — database overview</b> at the top) gives you a single, <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the fastest way to keep everything current in one place. Each row shows the <b>item</b> (with its category and any Swedish wording), <b>which templates it’s in</b> (tap a template name to jump straight there), its <b>flags</b> at a glance — <b>⚡ charging</b> (with the plug type), <b>💧 liquid</b>, <b>⚠️ restricted</b>, <b>🌙 per-night</b>, <b>⭐ short list</b>, <b>🧰 has care</b>, <b>📷 photo</b>, <b>🚫 not in use</b> — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. A <b>search box</b> filters by item, template or storage; the same <b>category chips</b> from the Care tab narrow it further; and you can <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. <b>The bonus:</b> the app now <b>hunts for probable duplicates</b> — items with the same or very similar names (it treats “Sunglasses” and “Sun glasses” as a pair) — and surfaces them in a <b>⚠️ Possible duplicates</b> panel at the top, with each highlighted <span style="color:var(--warn)">in amber</span> in the table too. Nothing is ever merged automatically — it just <b>flags</b> look-alikes so you can open each, then rename one or remove the copy you don’t need. There’s also an <b>Export (Excel)</b> button that saves the whole overview as a spreadsheet (one row per item, every flag as a column) for reviewing away from the phone.',
       'One screen to keep your whole item database honest — see every item, its flags, weight, storage and templates at a glance, jump straight to anything that needs a tweak, and catch accidental duplicates before they multiply.'),
@@ -3726,6 +3864,7 @@ async function renderRoute() {
   if (hash === '#/lists') return renderLists();
   if (hash === '#/maintenance') return renderMaintenance();
   if (hash === '#/containers') return renderContainers();
+  if (hash === '#/items') return renderItemsGrid();
   if (hash === '#/actions') return renderActions();
   if (hash === '#/refine') return renderRefine();
   if (hash === '#/settings') return renderSettings();
@@ -3769,7 +3908,7 @@ function setActiveTab() {
   const hash = location.hash || '#/';
   const base = hash.startsWith('#/events') || hash.startsWith('#/event/') ? '#/events'
     : hash.startsWith('#/list') || hash === '#/refine' ? '#/lists'
-    : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') ? '#/maintenance'
+    : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') ? '#/maintenance'
     : hash.startsWith('#/actions') ? '#/actions'
     : hash.startsWith('#/settings') || hash.startsWith('#/overview') ? '#/settings' : '#/';
   $$('.tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === base));
@@ -3781,7 +3920,7 @@ function currentSection() {
   const hash = location.hash || '#/';
   if (hash.startsWith('#/events') || hash.startsWith('#/event/')) return 'events';
   if (hash.startsWith('#/list') || hash === '#/refine') return 'templates';
-  if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers')) return 'care';
+  if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items')) return 'care';
   if (hash.startsWith('#/actions')) return 'actions';
   if (hash.startsWith('#/settings') || hash.startsWith('#/overview')) return 'settings';
   return 'home';
