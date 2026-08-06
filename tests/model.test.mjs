@@ -16,7 +16,7 @@ import {
   normalizeSections, newSection, sectionName, groupItemsBySection, groupBySection,
   containerNames, containerLimits, groupByStorage,
   catalogRows, dupeKey, duplicateGroups, duplicateIds,
-  coerceGeo, eventCoords, eventsNeedingCoords, placesVisited,
+  coerceGeo, eventCoords, eventsNeedingCoords, placesVisited, tripPath, mostVisited,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1383,4 +1383,41 @@ test('placesVisited: same spot with no label still merges by coordinates', () =>
   const pins = placesVisited([a, b]);
   assert.equal(pins.length, 1);
   assert.equal(pins[0].events.length, 2);
+});
+
+test('tripPath: dated trips with coordinates, oldest first; undated left off', () => {
+  const mk = (name, startDate, lat, lon) => {
+    const e = newEvent({ name, destination: name, startDate });
+    if (lat != null) e.geo = { lat, lon, place: name };
+    return e;
+  };
+  const events = [
+    mk('London', '2025-09-01', 51.5, -0.12),
+    mk('Tokyo', '2024-11-02', 35.68, 139.7),
+    mk('Undated', '', 10, 10),            // no date -> not on the line
+    mk('NoCoords', '2025-01-01', null),   // no coords -> not on the line
+    mk('Oslo', '2026-01-05', 59.9, 10.75),
+  ];
+  const path = tripPath(events);
+  assert.deepEqual(path.map((s) => s.name), ['Tokyo', 'London', 'Oslo']);
+  assert.equal(path[0].lat, 35.68);
+});
+
+test('mostVisited: the top place, but only when somewhere beats a single visit', () => {
+  const mk = (name, startDate, place) => {
+    const e = newEvent({ name, destination: place, startDate });
+    e.geo = { lat: 1, lon: 1, place };
+    return e;
+  };
+  // Everywhere once -> nothing stands out.
+  assert.equal(mostVisited(placesVisited([
+    mk('a', '2025-01-01', 'Alpha, X'), mk('b', '2025-02-01', 'Beta, X'),
+  ])), null);
+  // Beta visited twice -> it's the winner.
+  const top = mostVisited(placesVisited([
+    mk('a', '2025-01-01', 'Alpha, X'),
+    mk('b1', '2025-02-01', 'Beta, X'), mk('b2', '2025-03-01', 'Beta, X'),
+  ]));
+  assert.equal(top.place, 'Beta, X');
+  assert.equal(top.events.length, 2);
 });

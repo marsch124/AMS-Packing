@@ -7,7 +7,7 @@ import {
   effectiveQty, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
   deriveWeather, weatherSuggestions, weatherGear, WEATHER_CONDITIONS,
-  placesVisited, eventsNeedingCoords, coerceGeo,
+  placesVisited, eventsNeedingCoords, coerceGeo, tripPath, mostVisited,
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
   maintenanceList, maintenanceSummary, maintenanceByDate, logMaintenance, addDays, daysBetween,
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v73';
+const APP_VERSION = 'v74';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -620,6 +620,7 @@ const IC = {
   cal: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M8 3.5v3M16 3.5v3"/></svg>',
   search: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>',
   globe: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></svg>',
+  star: '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.77 6.8 19.5l.99-5.79-4.21-4.1 5.82-.85Z"/></svg>',
 };
 
 // Weather glyphs, keyed by the symbolic icon keys model.js emits.
@@ -843,10 +844,14 @@ async function renderMap() {
     return wrap;
   }
 
-  // Headline count, and — if any trips have a destination we haven't located —
-  // a one-tap "look them all up" button (online once, then remembered offline).
+  // Headline count, plus a little "most visited" badge once somewhere stands out.
+  const top = mostVisited(places);
+  const topHtml = top
+    ? `<span class="map-top">${IC.star}<b>${esc(top.place || top.events[0]?.destination || 'Somewhere')}</b> · ${top.events.length} trips</span>`
+    : '';
   const summary = h(`<div class="map-summary">
     <span class="map-count"><b>${places.length}</b> ${places.length === 1 ? 'place' : 'places'} · <b>${tripCount}</b> ${tripCount === 1 ? 'trip' : 'trips'}</span>
+    ${topHtml}
   </div>`);
   wrap.appendChild(summary);
 
@@ -859,10 +864,17 @@ async function renderMap() {
     wrap.appendChild(findBar);
   }
 
+  // A subtle line joining the trips in date order (oldest→newest) — drawn inside
+  // the map (so it tracks the land) and beneath the pin overlay.
+  const stops = tripPath(events);
+  const routePts = stops.map((s) => { const { x, y } = project(s.lat, s.lon); return `${x.toFixed(2)},${y.toFixed(2)}`; }).join(' ');
+  const routeSvg = stops.length >= 2 ? `<polyline class="worldmap-route" points="${routePts}"/>` : '';
+
   // The map + its pin overlay. Pins are real buttons for good tap targets.
   const mapWrap = h(`<div class="worldmap-wrap">
     <svg class="worldmap" viewBox="0 0 ${MAP_W} ${MAP_H}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
       <path class="worldmap-land" d="${WORLD_PATH}"/>
+      ${routeSvg}
     </svg>
     <div class="pins"></div>
   </div>`);
@@ -3205,6 +3217,7 @@ function howtoCard() {
 
         <h3>Places visited (the world map)</h3>
         <p>The <b>Events</b> tab → <b>🌍 Map</b> button opens a <b>world map of everywhere you’ve been</b>. Every trip that has a <b>destination</b> set becomes a pin; <b>repeat visits to the same place merge into one pin</b> with a small count, and pins are ordered most-recent-first in the list beneath. <b>Tap a pin</b> to highlight and scroll to that place in the list, where each visit links to its trip. A place is pinned automatically once its <b>weather</b> has been looked up; for trips whose destination hasn’t been located yet, the <b>“Find places on the map”</b> button geocodes them all at once (this needs the internet) and caches each spot so the map then works fully <b>offline</b>. The map is drawn inside the app from open geographic data — no outside map service, and nothing about your trips leaves the device.</p>
+        <p>Two finishing touches: your trips are joined by a <b>subtle dotted line in date order</b> (oldest → newest) so you can trace your travels over time — undated trips keep their pin but sit off the line — and a small <b>★ “most visited” badge</b> at the top names the place you’ve been most, appearing once anywhere has more than one visit.</p>
 
         <h3>The timeline (phases)</h3>
         <p>Items are packed in stages, in this order: <b>Preparations</b> (book/cancel/charge, done ahead) → <b>≥1 week ahead</b> (things you don't use at home) → <b>Day before</b> (stage / move to the RV) → <b>Morning of</b> → <b>At the front door</b> (last check as you leave) → <b>Wear / carry</b> on the day → <b>After / recovery</b> (shower, change, recovery).</p>
@@ -3332,6 +3345,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v74', '2026-08-06 · 18:00 UTC', false, 'World map — a journey line and a “most visited” badge',
+      'Two small touches for the new <b>Places visited</b> map. <b>(1) A journey line.</b> Your trips are now joined by a <b>subtle dotted line in date order</b> (oldest to newest), gently flowing across the map — so you can trace the path your travels have taken over time. Trips <b>without a date</b> still get their pin but sit off the line, since there’s no way to place them in the sequence. <b>(2) A “most visited” badge.</b> Up next to the place/trip count sits a little <b>★ badge naming the place you’ve been most</b> (e.g. “★ Stockholm, SE · 3 trips”). It appears only once somewhere has been visited <b>more than once</b> — until then, nothing stands out to highlight. Both are drawn inside the app, so the map stays fully offline.',
+      'See your travels as a story, not just dots — follow the line to relive the order you went, and spot your favourite haunt at a glance.'),
     v('v73', '2026-08-06 · 17:00 UTC', false, 'Places visited — a world map of your trips',
       'A brand-new <b>world map</b> that pins <b>everywhere you’ve been</b>. Open the <b>Events</b> tab and tap the new <b>🌍 Map</b> button up top. Every trip that has a <b>destination</b> becomes a glowing pin on a clean, hand-drawn map — and <b>repeat visits to the same place merge into one pin</b> (with a little number showing how many trips), so a city you keep coming back to shows once, not ten times. <b>Tap a pin</b> to jump to that place in the list below, where each visit links straight to its trip. If a place has already had its <b>weather</b> looked up, it’s pinned automatically; for any trip whose destination hasn’t been located yet, a one-tap <b>“Find places on the map”</b> button looks them all up at once (that part needs the internet) and then <b>remembers the spot forever</b>, so the map keeps working offline. The whole map is drawn <b>inside the app</b> — no outside map service, no tracking, nothing leaves your phone — and it recolours to match the app’s light and dark themes.',
       'See your travels at a glance — a single at-a-glance picture of everywhere your trips have taken you, built straight from the destinations you already type in.'),
