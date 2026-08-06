@@ -14,7 +14,7 @@ import {
   coerceMembership, newMembership, resolveMembership, resolveTemplate, resolveTemplateItems, buildCatalog,
   applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   normalizeSections, newSection, sectionName, groupItemsBySection, groupBySection,
-  containerNames, containerLimits,
+  containerNames, containerLimits, groupByStorage,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1239,4 +1239,17 @@ test('seedLists: every packable item has a weight; reminders have none', () => {
   }
   assert.equal(weighed, items, `all ${items} packable items are weighed`);
   assert.equal(remWithWeight, 0, 'reminders carry no weight');
+});
+
+test('groupByStorage: groups by storage place, alphabetical, "No place set" last', () => {
+  const entries = [
+    newItem({ name: 'Tent', storage: 'Garage' }),
+    newItem({ name: 'Socks' }),                         // no place
+    newItem({ name: 'Charger', storage: 'Bedroom wardrobe' }),
+    newItem({ name: 'Pump', storage: 'Garage' }),
+  ];
+  const groups = groupByStorage(entries);
+  assert.deepEqual(groups.map((g) => g.label), ['Bedroom wardrobe', 'Garage', 'No place set']);
+  assert.equal(groups[1].entries.length, 2);            // both Garage items together
+  assert.equal(groupBy('stored', entries)[0].label, 'Bedroom wardrobe'); // via the dispatcher
 });
