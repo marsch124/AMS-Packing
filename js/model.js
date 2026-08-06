@@ -1584,6 +1584,76 @@ export function buildCatalog(lists) {
   return { items, memberships, templates };
 }
 
+// ============================================================================
+// DATABASE OVERVIEW ("maintenance mode") — one line per real item, across all
+// templates, with duplicate surfacing. Pure so it can be unit-tested; the UI
+// renders it as a scannable table for keeping the whole catalog current.
+// ============================================================================
+
+// One row per unique catalog item, gathered from the RESOLVED lists. Because a
+// catalog item keeps the SAME id wherever it is resolved, deduping by id collapses
+// the copies a single item shows as across its templates into one line, and gathers
+// every template it belongs to (list id, name and role). Rows are name-sorted.
+export function catalogRows(lists) {
+  const byId = new Map();
+  for (const l of asArray(lists)) {
+    for (const it of asArray(l.items)) {
+      if (!it || !String(it.name || '').trim()) continue;
+      const key = it.id || `name:${normName(it.name)}`;
+      if (!byId.has(key)) byId.set(key, { id: key, name: it.name, item: it, templates: [] });
+      const row = byId.get(key);
+      if (!row.templates.some((t) => t.id === l.id)) {
+        row.templates.push({ id: l.id, name: l.name || '', role: l.role || '' });
+      }
+    }
+  }
+  const rows = [...byId.values()];
+  rows.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+  return rows;
+}
+
+// A loose, forgiving key for spotting probable duplicates: normalised name with
+// punctuation dropped, words naively singularised (a trailing -s, but not -ss),
+// and spaces removed — so "Sunglasses", "Sun glasses" and "sunglass" all collapse
+// to one key. Deliberately generous: this only SURFACES pairs for a human to judge,
+// it never merges anything on its own.
+export function dupeKey(name) {
+  const base = normName(name).replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (!base) return '';
+  return base.split(' ')
+    .map((w) => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w))
+    .join('');
+}
+
+// Groups of overview rows that look like duplicates of each other (2+ distinct
+// catalog items sharing a dupeKey). `exact` marks a group whose members share an
+// identical normalised name (a true stored duplicate) as opposed to a near-match.
+// Groups are name-sorted for a stable display order.
+export function duplicateGroups(rows) {
+  const map = new Map();
+  for (const r of asArray(rows)) {
+    const k = dupeKey(r.name);
+    if (!k) continue;
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(r);
+  }
+  const out = [];
+  for (const [key, group] of map) {
+    if (group.length < 2) continue;
+    const names = new Set(group.map((r) => normName(r.name)));
+    out.push({ key, exact: names.size === 1, rows: group });
+  }
+  out.sort((a, b) => (a.rows[0].name || '').localeCompare(b.rows[0].name || '', undefined, { sensitivity: 'base' }));
+  return out;
+}
+
+// The set of row ids caught in any duplicate group — lets the table highlight them.
+export function duplicateIds(rows) {
+  const ids = new Set();
+  for (const g of duplicateGroups(rows)) for (const r of g.rows) ids.add(r.id);
+  return ids;
+}
+
 // Rows for a flat spreadsheet export: one row per Total-List entry, in
 // timeline -> container order.
 export function totalListRows(event, lists) {

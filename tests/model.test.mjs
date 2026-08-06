@@ -15,6 +15,7 @@ import {
   applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   normalizeSections, newSection, sectionName, groupItemsBySection, groupBySection,
   containerNames, containerLimits, groupByStorage,
+  catalogRows, dupeKey, duplicateGroups, duplicateIds,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1268,4 +1269,49 @@ test('seedLists: every packable item has a storage place; none in "Garage"', () 
   assert.equal(stored, items, `all ${items} packable items have a storage place`);
   assert.equal(garage, 0, 'nothing is filed under Garage');
   assert.equal(remWith, 0, 'reminders carry no storage');
+});
+
+test('catalogRows: one line per catalog item, gathering all its templates', () => {
+  // The same catalog item (shared id) resolved into two templates collapses to one row.
+  const boots = newItem({ name: 'Boots' });
+  const hiking = newList({ name: 'Hiking', items: [boots, newItem({ name: 'Poles' })] });
+  const travel = newList({ name: 'Travel', items: [{ ...boots }] }); // same id, different template
+  const rows = catalogRows([hiking, travel]);
+  assert.equal(rows.length, 2, 'Boots + Poles = 2 unique items');
+  const bootRow = rows.find((r) => r.name === 'Boots');
+  assert.deepEqual(bootRow.templates.map((t) => t.name).sort(), ['Hiking', 'Travel']);
+  const poleRow = rows.find((r) => r.name === 'Poles');
+  assert.deepEqual(poleRow.templates.map((t) => t.name), ['Hiking']);
+  // Blank-named items are ignored.
+  assert.equal(catalogRows([newList({ items: [newItem({ name: '' })] })]).length, 0);
+});
+
+test('dupeKey: collapses spacing and plurals for probable duplicates', () => {
+  assert.equal(dupeKey('Sunglasses'), dupeKey('Sun glasses'));
+  assert.equal(dupeKey('Running shoes'), dupeKey('Running shoe'));
+  assert.equal(dupeKey('Ear plugs'), dupeKey('Earplugs'));
+  assert.notEqual(dupeKey('Cap'), dupeKey('Cape'));   // short words are not over-stripped
+  assert.notEqual(dupeKey('Socks'), dupeKey('Shorts'));
+  assert.equal(dupeKey('   '), '');                    // blank -> empty key
+});
+
+test('duplicateGroups / duplicateIds: surface look-alike items', () => {
+  const rows = catalogRows([newList({ name: 'A', items: [
+    newItem({ name: 'Sunglasses' }),
+    newItem({ name: 'Sun glasses' }),
+    newItem({ name: 'Passport' }),
+    newItem({ name: 'Head torch' }),
+    newItem({ name: 'Head torch' }),  // exact duplicate name, distinct catalog item
+  ] })]);
+  const groups = duplicateGroups(rows);
+  const byKey = new Map(groups.map((g) => [g.rows.map((r) => r.name).sort().join('|'), g]));
+  assert.ok(byKey.has('Sun glasses|Sunglasses'), 'near-duplicate pair grouped');
+  assert.equal(byKey.get('Sun glasses|Sunglasses').exact, false);
+  const exactGroup = groups.find((g) => g.exact);
+  assert.ok(exactGroup && exactGroup.rows.every((r) => r.name === 'Head torch'), 'exact-name duplicates flagged exact');
+  // Passport has no partner -> not in any group, and not flagged.
+  const ids = duplicateIds(rows);
+  const passport = rows.find((r) => r.name === 'Passport');
+  assert.equal(ids.has(passport.id), false);
+  assert.ok(ids.size >= 4, 'both look-alike pairs are flagged');
 });

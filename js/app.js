@@ -10,6 +10,7 @@ import {
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
   maintenanceList, maintenanceSummary, maintenanceByDate, logMaintenance, addDays, daysBetween,
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
+  catalogRows, duplicateGroups, duplicateIds,
 } from './model.js';
 import * as db from './db.js';
 import * as weather from './weather.js';
@@ -18,7 +19,7 @@ import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v69';
+const APP_VERSION = 'v70';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2817,7 +2818,7 @@ function howtoCard() {
           <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here.</li>
           <li><b>Templates</b> — your reusable templates (the building blocks).</li>
           <li><b>Care</b> — everything that needs looking after, as an urgency-ordered list or a month calendar (see <b>Care, storage &amp; maintenance</b> below).</li>
-          <li><b>Settings</b> — backup/restore, trip import, this guide and the version history.</li>
+          <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip import, this guide and the version history.</li>
         </ul>
 
         <h3>Colour tells you where you are</h3>
@@ -2914,6 +2915,9 @@ function howtoCard() {
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
         <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Export backup (JSON)</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. The app remembers your last backup and gives a gentle <b>💾</b> reminder on the Home screen when it’s been a while. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
 
+        <h3>Maintenance mode — the whole-database overview</h3>
+        <p>At the top of <b>Settings</b>, <b>🗂️ Maintenance mode — database overview</b> opens a single <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the quickest way to keep everything current without hopping between templates. Each row shows the <b>item</b> (with its category and any Swedish wording), <b>which templates it belongs to</b> (tap a template name to jump there), its <b>flags</b> — <b>⚡</b> charging (and the plug type), <b>💧</b> liquid, <b>⚠️</b> restricted, <b>🌙</b> per-night, <b>⭐</b> short list, <b>🧰</b> care, <b>📷</b> photo, <b>🚫</b> not in use — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. <b>Search</b> by item, template or storage; use the same <b>category chips</b> from the Care tab to narrow; and <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. The page also <b>finds probable duplicates</b> — same or very similar names (e.g. “Sunglasses” and “Sun glasses”) — listing them in a <b>⚠️ Possible duplicates</b> panel and highlighting them in the table; it never merges anything for you, so you can open each and rename or remove as you see fit. <b>Export (Excel)</b> saves the whole overview as a spreadsheet for review on a computer.</p>
+
       </div>
     </details>
   </div>`);
@@ -2930,6 +2934,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v70', '2026-08-06 · 12:00 UTC', false, 'Maintenance mode — a whole-database overview, with duplicate spotting',
+      'A new <b>Maintenance mode</b> in <b>Settings</b> (tap <b>🗂️ Maintenance mode — database overview</b> at the top) gives you a single, <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the fastest way to keep everything current in one place. Each row shows the <b>item</b> (with its category and any Swedish wording), <b>which templates it’s in</b> (tap a template name to jump straight there), its <b>flags</b> at a glance — <b>⚡ charging</b> (with the plug type), <b>💧 liquid</b>, <b>⚠️ restricted</b>, <b>🌙 per-night</b>, <b>⭐ short list</b>, <b>🧰 has care</b>, <b>📷 photo</b>, <b>🚫 not in use</b> — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. A <b>search box</b> filters by item, template or storage; the same <b>category chips</b> from the Care tab narrow it further; and you can <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. <b>The bonus:</b> the app now <b>hunts for probable duplicates</b> — items with the same or very similar names (it treats “Sunglasses” and “Sun glasses” as a pair) — and surfaces them in a <b>⚠️ Possible duplicates</b> panel at the top, with each highlighted <span style="color:var(--warn)">in amber</span> in the table too. Nothing is ever merged automatically — it just <b>flags</b> look-alikes so you can open each, then rename one or remove the copy you don’t need. There’s also an <b>Export (Excel)</b> button that saves the whole overview as a spreadsheet (one row per item, every flag as a column) for reviewing away from the phone.',
+      'One screen to keep your whole item database honest — see every item, its flags, weight, storage and templates at a glance, jump straight to anything that needs a tweak, and catch accidental duplicates before they multiply.'),
     v('v69', '2026-08-05 · 22:15 UTC', false, 'Every item now has a “stored” place — the Stored view works out of the box',
       'Following on from the new <b>Stored</b> grouping, every item in the built-in templates now comes with a sensible <b>“Where it’s stored”</b> place already filled in, so you can group a trip by <b>Stored</b> and immediately pack place-by-place. The rough scheme: everyday <b>clothes</b> in the <b>Bedroom wardrobe</b> (smaller items — socks, underwear, tees — in the <b>Chest of drawers</b>), <b>toiletries &amp; meds</b> in the <b>Bathroom cabinet</b>, <b>shoes</b> and grab-on-the-way-out things (sunglasses, wallet, passport) in the <b>Hall closet</b>, <b>food</b> in the <b>Kitchen cupboard</b>, and <b>sport/adventure gear</b> in the <b>Basement / cellar</b> — with <b>seasonal bulk</b> (skis, crampons, spare pillows) up in the <b>Loft / attic</b>. As you asked, <b>nothing is filed under “Garage”</b> — those things live in the attic or basement. Your bags in <b>Containers</b> got the same treatment. It’s all a <b>starting point</b> — open any item’s <b>Storage &amp; maintenance</b> panel to set its real spot. <b>Note:</b> this refreshes the built-in starter templates, so a storage place you’d set yourself on a built-in item is replaced by this default (just re-enter it); your own templates are untouched.',
       'Group any trip by <b>Stored</b> and it just works — walk to the cupboard, the attic or the basement and grab everything from that one place in a single sweep.'),
@@ -3281,6 +3288,12 @@ async function renderSettings() {
     ? '🔒 <b>Storage protected</b> — the browser has been asked not to auto-delete your data.'
     : '⚠️ <b>Storage not yet protected</b> — <b>install</b> the app (iPhone: Share → Add to Home Screen; Mac: File → Add to Dock) so your data isn’t auto-deleted, and take regular backups.';
 
+  wrap.appendChild(h(`<a class="care-link" href="#/overview">
+    <span class="care-link-ic">🗂️</span>
+    <span class="care-link-body"><b>Maintenance mode — database overview</b><span class="care-link-sub">Every item on one line, the templates it’s in, its flags &amp; storage — with look-alikes flagged, so you can keep the whole catalog tidy</span></span>
+    <span class="care-link-go">${IC.fwd}</span>
+  </a>`));
+
   const card = h(`<div class="card block">
     <h2>Your data</h2>
     <p class="muted">Everything is stored <b>on this device only</b> — nothing is uploaded. Because it lives in the browser, a saved backup file is your real safety net.</p>
@@ -3405,6 +3418,227 @@ async function renderSettings() {
   return wrap;
 }
 
+// ---------- Maintenance mode: the whole-database overview ----------
+// A dense, one-line-per-item table across every template, for keeping the catalog
+// current in one place: what each item is, which templates it's in, its flags,
+// weight and storage — with probable duplicates surfaced and highlighted.
+let overviewSearch = '';
+const overviewFilter = new Set();       // reuses the shared item category chips (liquid/charge/…)
+let overviewSort = 'name';              // 'name' | 'weight' | 'templates' | 'category'
+let overviewDupesOnly = false;
+
+function fmtWeight(g) {
+  const n = Number(g) || 0;
+  if (n <= 0) return '';
+  return n >= 1000 ? `${(Math.round(n / 100) / 10)} kg` : `${Math.round(n)} g`;
+}
+
+// The small flag badges shown for one item in the overview (and reused nowhere else).
+function ovFlagBadges(it) {
+  const b = [];
+  if (it.itemType === 'reminder') b.push('<span class="ov-fl" title="A reminder / to-do, not a packed thing">🗒️</span>');
+  if (it.charging) { const s = chargeTypeShort(it.chargeType); b.push(`<span class="ov-fl" title="Needs charging${s ? ' · ' + esc(s) : ''}">⚡${s ? `<em>${esc(s)}</em>` : ''}</span>`); }
+  if (it.liquid) b.push('<span class="ov-fl" title="Liquid / gel — 100 ml hand-luggage rule">💧</span>');
+  if (it.restricted) b.push('<span class="ov-fl" title="Battery / restricted — carry-on rules">⚠️</span>');
+  if (it.perNight) b.push('<span class="ov-fl" title="Quantity scales with the number of nights">🌙</span>');
+  if (it.shortList) b.push('<span class="ov-fl" title="On the minimal short list">⭐</span>');
+  if (hasCare(it)) b.push('<span class="ov-fl" title="Has care / maintenance info">🧰</span>');
+  if ((it.photos || []).length) b.push(`<span class="ov-fl" title="${(it.photos || []).length} photo(s)">📷</span>`);
+  if (it.retired) b.push('<span class="ov-fl" title="Not in use — kept on record but never packed">🚫</span>');
+  return b.join('');
+}
+
+// Where a row jumps to when tapped: its item editor, opened through the first
+// real template it belongs to (else its loose / container home).
+function ovEditHref(row) {
+  const real = row.templates.find((t) => t.role !== 'loose' && t.role !== CONTAINER_ROLE);
+  const t = real || row.templates[0];
+  return t ? `#/list/${encodeURIComponent(t.id)}/item/${encodeURIComponent(row.item.id)}` : '#/lists';
+}
+
+// Chips naming the templates an item is in (real templates as links; the loose /
+// container homes shown as a plain tag, since they aren't tickable templates).
+function ovTemplateChips(row) {
+  if (!row.templates.length) return '<span class="ov-tpl none">⚠️ No template</span>';
+  return row.templates.map((t) => {
+    if (t.role === 'loose') return '<span class="ov-tpl none">⚠️ No template</span>';
+    if (t.role === CONTAINER_ROLE) return `<span class="ov-tpl bag">🎒 ${esc(t.name)}</span>`;
+    return `<a class="ov-tpl" href="#/list/${esc(t.id)}">${esc(t.name)}</a>`;
+  }).join('');
+}
+
+async function renderOverview() {
+  const wrap = h('<section class="screen ov-screen"></section>');
+  wrap.appendChild(h(backBar('Maintenance mode', '#/settings')));
+
+  const lists = await db.getLists();
+  ALL_LISTS = lists;                       // so isUnfiled() in the filter chips is accurate
+  const rows = catalogRows(lists);
+  const dupeGroups = duplicateGroups(rows);
+  const dupIds = duplicateIds(rows);
+  const realTemplates = lists.filter((l) => !l.role).length;
+
+  wrap.appendChild(h(`<p class="ov-intro">One line per item across your whole catalogue — the templates it’s in, its flags, weight and where it’s stored. Tap any row to open that item; tap a template name to jump to the template. Use it to keep everything tidy and spot anything that’s drifted.</p>`));
+
+  // Headline stats.
+  const stat = (n, label) => `<span class="ov-stat"><b>${n}</b> ${label}</span>`;
+  wrap.appendChild(h(`<div class="ov-stats">
+    ${stat(rows.length, rows.length === 1 ? 'item' : 'items')}
+    ${stat(realTemplates, realTemplates === 1 ? 'template' : 'templates')}
+    ${dupeGroups.length ? `<span class="ov-stat warn"><b>${dupeGroups.length}</b> possible duplicate${dupeGroups.length === 1 ? '' : 's'}</span>` : stat(0, 'duplicates found')}
+    <button class="btn ghost sm" type="button" data-ov="xlsx">${IC.sheet}<span>Export (Excel)</span></button>
+  </div>`));
+
+  // Duplicate finder — the bonus: surface look-alikes for a human to merge/rename.
+  if (dupeGroups.length) {
+    const groupHtml = dupeGroups.map((g) => {
+      const items = g.rows.map((r) => {
+        const where = r.templates.length
+          ? r.templates.map((t) => t.role === 'loose' ? 'No template' : t.name).filter(Boolean).join(', ')
+          : 'No template';
+        return `<a class="ov-dupitem" href="${ovEditHref(r)}"><span class="ov-dupname">${esc(r.name)}</span><span class="ov-dupwhere">${esc(where)}</span>${IC.fwd}</a>`;
+      }).join('');
+      return `<div class="ov-dupgroup">
+        <div class="ov-duphead">${g.exact ? '🔴 Same name' : '🟠 Look-alike'} <em>${g.rows.length}</em></div>
+        ${items}
+      </div>`;
+    }).join('');
+    wrap.appendChild(h(`<details class="card block ov-dupes" open>
+      <summary><span class="ov-dupes-h">⚠️ Possible duplicates (${dupeGroups.length})</span><span class="ov-dupes-sub">Tap each to compare — then rename one, or remove the copy you don’t need</span></summary>
+      <p class="ov-dupes-note">These items look alike (same or very similar names). They’re only <b>flagged</b>, never merged automatically — open each and decide. Rows below are highlighted in <span class="ov-dupmark">amber</span>.</p>
+      ${groupHtml}
+    </details>`));
+  }
+
+  // Toolbar: search, sort, duplicates-only, category chips.
+  const sortSeg = (val, label) => `<label class="seg${overviewSort === val ? ' on' : ''}"><input type="radio" name="ovsort" value="${val}"${overviewSort === val ? ' checked' : ''}>${label}</label>`;
+  const toolbar = h(`<div class="ov-toolbar">
+    <label class="ai-searchbox">${IC.search}<input type="search" class="ov-search" placeholder="Search items, templates, storage…" value="${esc(overviewSearch)}" autocomplete="off"></label>
+    <div class="ov-controls">
+      <div class="segmented small ov-sortseg">${sortSeg('name', 'A–Z')}${sortSeg('weight', 'Heaviest')}${sortSeg('templates', 'Most used')}${sortSeg('category', 'Category')}</div>
+      ${dupeGroups.length ? `<label class="ov-dupetoggle"><input type="checkbox" class="ov-dupeonly"${overviewDupesOnly ? ' checked' : ''}> Duplicates only</label>` : ''}
+    </div>
+    <div class="ov-filterbar"></div>
+  </div>`);
+  wrap.appendChild(toolbar);
+
+  const filterEl = $('.ov-filterbar', toolbar);
+  const searchEl = $('.ov-search', toolbar);
+  const countEl = h('<div class="ov-count"></div>');
+  wrap.appendChild(countEl);
+
+  const scroll = h('<div class="ov-scroll"></div>');
+  const table = h(`<div class="ov-table">
+    <div class="ov-head">
+      <span>Item</span><span>In templates</span><span>Flags</span><span class="ov-num">Weight</span><span>Stored</span>
+    </div>
+    <div class="ov-body"></div>
+  </div>`);
+  scroll.appendChild(table);
+  wrap.appendChild(scroll);
+  const body = $('.ov-body', table);
+
+  const drawChips = () => { filterEl.innerHTML = itemFilterChipsHTML(rows.map((r) => r.item), overviewFilter, false); };
+
+  const drawRows = () => {
+    const q = overviewSearch.trim().toLowerCase();
+    const cmp = {
+      name: (a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }),
+      weight: (a, b) => (Number(b.item.weight) || 0) - (Number(a.item.weight) || 0) || (a.name || '').localeCompare(b.name || ''),
+      templates: (a, b) => b.templates.length - a.templates.length || (a.name || '').localeCompare(b.name || ''),
+      category: (a, b) => (a.item.category || '').localeCompare(b.item.category || '') || (a.name || '').localeCompare(b.name || ''),
+    }[overviewSort] || undefined;
+    const shown = rows.filter((r) => {
+      if (overviewDupesOnly && !dupIds.has(r.id)) return false;
+      if (!itemMatchesFilter(r.item, overviewFilter)) return false;
+      if (!q) return true;
+      return (r.name || '').toLowerCase().includes(q)
+        || (r.item.storage || '').toLowerCase().includes(q)
+        || (r.item.category || '').toLowerCase().includes(q)
+        || r.templates.some((t) => (t.name || '').toLowerCase().includes(q));
+    }).slice().sort(cmp);
+
+    const filtered = q || overviewFilter.size || overviewDupesOnly;
+    countEl.textContent = filtered ? `${shown.length} of ${rows.length} items` : `${rows.length} items`;
+    body.innerHTML = '';
+    if (!shown.length) { body.appendChild(h('<div class="empty"><p class="empty-s">No items match.</p></div>')); return; }
+    for (const r of shown) {
+      const it = r.item;
+      const dup = dupIds.has(r.id);
+      const cat = it.category ? `<span class="ov-cat">${esc(it.category)}</span>` : '';
+      const swed = it.swedish ? `<span class="ov-swed">${esc(it.swedish)}</span>` : '';
+      const rowEl = h(`<div class="ov-row${dup ? ' dupe' : ''}${it.retired ? ' retired' : ''}" data-href="${ovEditHref(r)}">
+        <span class="ov-cell ov-item">
+          <span class="ov-name">${dup ? '<span class="ov-dupmark" title="Possible duplicate">⚠️</span> ' : ''}${esc(it.name || '(unnamed)')}</span>
+          <span class="ov-meta">${cat}${swed}</span>
+        </span>
+        <span class="ov-cell ov-tpls">${ovTemplateChips(r)}</span>
+        <span class="ov-cell ov-flags">${ovFlagBadges(it) || '<span class="ov-dash">—</span>'}</span>
+        <span class="ov-cell ov-num ov-weight">${fmtWeight(it.weight) || '<span class="ov-dash">—</span>'}</span>
+        <span class="ov-cell ov-stored">${it.storage ? `📍 ${esc(it.storage)}` : '<span class="ov-dash">—</span>'}</span>
+      </div>`);
+      body.appendChild(rowEl);
+    }
+  };
+  drawChips();
+  drawRows();
+
+  searchEl.addEventListener('input', () => { overviewSearch = searchEl.value; drawRows(); });
+  toolbar.addEventListener('change', (e) => {
+    if (e.target.name === 'ovsort') {
+      overviewSort = e.target.value;
+      $$('.ov-sortseg .seg', toolbar).forEach((s) => s.classList.toggle('on', s.querySelector('input').checked));
+      drawRows();
+    } else if (e.target.classList.contains('ov-dupeonly')) {
+      overviewDupesOnly = e.target.checked;
+      drawRows();
+    }
+  });
+  filterEl.addEventListener('click', (e) => {
+    const key = e.target.closest('[data-cat]')?.dataset.cat;
+    if (!key) return;
+    if (key === '__clear') overviewFilter.clear();
+    else if (overviewFilter.has(key)) overviewFilter.delete(key); else overviewFilter.add(key);
+    drawChips();
+    drawRows();
+  });
+  // Row tap → open the item editor, unless a template link inside was tapped.
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('a')) return;
+    const row = e.target.closest('.ov-row');
+    if (row && row.dataset.href) location.assign(row.dataset.href);
+  });
+  wrap.querySelector('[data-ov="xlsx"]').addEventListener('click', () => exportOverviewXlsx(rows, dupIds));
+
+  return wrap;
+}
+
+// A one-row-per-item spreadsheet of the whole catalogue — the maintenance overview
+// as an Excel file, so the database can be reviewed or tidied away from the phone.
+function exportOverviewXlsx(rows, dupIds) {
+  if (!rows.length) { alert('No items to export yet.'); return; }
+  const columns = [
+    { header: 'Item', width: 28 }, { header: 'Swedish', width: 18 }, { header: 'Category', width: 18 },
+    { header: 'Templates', width: 30 }, { header: 'Weight (g)', width: 11 }, { header: 'Stored', width: 20 },
+    { header: 'Charging', width: 10 }, { header: 'Liquid', width: 8 }, { header: 'Restricted', width: 11 },
+    { header: 'Per-night', width: 10 }, { header: 'Short list', width: 10 }, { header: 'Care', width: 8 },
+    { header: 'Photos', width: 8 }, { header: 'Not in use', width: 11 }, { header: 'Possible duplicate', width: 16 },
+  ];
+  const yn = (v) => (v ? 'yes' : '');
+  const dataRows = rows.map((r) => {
+    const it = r.item;
+    const tpls = r.templates.map((t) => t.role === 'loose' ? 'No template' : t.name).filter(Boolean).join(', ');
+    return [
+      it.name || '', it.swedish || '', it.category || '', tpls, Number(it.weight) || 0, it.storage || '',
+      it.charging ? (chargeTypeShort(it.chargeType) || 'yes') : '', yn(it.liquid), yn(it.restricted),
+      yn(it.perNight), yn(it.shortList), yn(hasCare(it)), (it.photos || []).length || '', yn(it.retired),
+      dupIds.has(r.id) ? 'yes' : '',
+    ];
+  });
+  const wb = buildWorkbook([{ name: 'All items', columns, rows: dataRows }]);
+  downloadBlob(new Blob([wb], { type: XLSX_MIME }), `ams-packing-database-${todayISO()}.xlsx`);
+}
+
 // Import a trip carried in a deep link (#/t/<base64url>). Decodes, saves it as a
 // new event, and jumps to it; shows a friendly error if the link is malformed.
 async function renderImportTrip(data) {
@@ -3495,6 +3729,7 @@ async function renderRoute() {
   if (hash === '#/actions') return renderActions();
   if (hash === '#/refine') return renderRefine();
   if (hash === '#/settings') return renderSettings();
+  if (hash === '#/overview') return renderOverview();
   const tripLink = m(/^#\/t\/(.+)$/);
   if (tripLink) return renderImportTrip(tripLink);
   const eventEdit = m(/^#\/event\/([^/]+)\/edit$/);
@@ -3536,7 +3771,7 @@ function setActiveTab() {
     : hash.startsWith('#/list') || hash === '#/refine' ? '#/lists'
     : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') ? '#/maintenance'
     : hash.startsWith('#/actions') ? '#/actions'
-    : hash.startsWith('#/settings') ? '#/settings' : '#/';
+    : hash.startsWith('#/settings') || hash.startsWith('#/overview') ? '#/settings' : '#/';
   $$('.tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === base));
 }
 
@@ -3548,7 +3783,7 @@ function currentSection() {
   if (hash.startsWith('#/list') || hash === '#/refine') return 'templates';
   if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers')) return 'care';
   if (hash.startsWith('#/actions')) return 'actions';
-  if (hash.startsWith('#/settings')) return 'settings';
+  if (hash.startsWith('#/settings') || hash.startsWith('#/overview')) return 'settings';
   return 'home';
 }
 function applyMode() {
