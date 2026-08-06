@@ -3502,3 +3502,81 @@ details.care[open] .care-h::before {
 .ov-weight { font-variant-numeric: tabular-nums; font-size: .84rem; color: var(--ink); }
 .ov-stored { font-size: .82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 .ov-dash { color: var(--line); }
+
+/* --- All-items table / grid (#/items) --- */
+.screen-grid .pad { margin-top: 0; }
+.grid-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 0 2px;
+}
+table.grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: .8rem;
+  white-space: nowrap;
+}
+.grid th, .grid td {
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  padding: 2px 5px;
+  text-align: center;
+  vertical-align: middle;
+}
+.grid thead .grp th {
+  background: var(--card);
+  font-weight: 800;
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 2px solid var(--brand);
+}
+.grid thead .col th {
+  background: var(--card);
+  font-weight: 700;
+  color: var(--muted);
+  font-size: .72rem;
+  position: sticky;
+  top: 0;
+}
+.grid .cell-name {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--card);
+  text-align: left;
+  font-weight: 600;
+  min-width: 136px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.grid thead .cell-name { z-index: 3; }
+.grid tbody .cell-name a { color: inherit; text-decoration: none; }
+.grid tbody tr:nth-child(even) td,
+.grid tbody tr:nth-child(even) .cell-name { background: color-mix(in srgb, var(--muted) 6%, var(--card)); }
+.grid .tmpl-col { font-weight: 600; color: var(--ink); }
+.grid input, .grid select {
+  font: inherit;
+  font-size: .78rem;
+  padding: 2px 3px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+}
+.grid input:focus, .grid select:focus {
+  border-color: var(--brand);
+  background: var(--bg);
+  outline: none;
+}
+.grid .g-num { width: 54px; text-align: right; }
+.grid .g-txt { width: 92px; }
+.grid input[data-f="storage"] { width: 120px; }
+.grid .g-sel { max-width: 132px; }
+.grid .g-check input { width: 18px; height: 18px; accent-color: var(--brand); }
+.grid .g-multi { color: var(--muted); font-size: .72rem; }
+.grid .g-saved { background: color-mix(in srgb, var(--brand) 22%, transparent); transition: background .3s; }
+.grid .g-empty { padding: 20px; color: var(--muted); }
+.screen-grid .grid-search { margin: 0 2px 8px; }
