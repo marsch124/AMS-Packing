@@ -683,6 +683,44 @@ const WEIGHT_RULES = [
   ['glasses', 30], ['tissue', 50], ['umbrella', 350], ['case', 60],
 ];
 
+// Where each item lives at home, by category — so the "Stored" grouping works out
+// of the box and you can pack place-by-place. No "Garage": bulky gear lives in the
+// attic or basement instead. All editable per item (its Storage & maintenance panel).
+const STORAGE_BY_CAT = {
+  'Clothing': 'Bedroom wardrobe', 'Adventure clothing': 'Bedroom wardrobe', 'Footwear': 'Hall closet',
+  'Toiletries': 'Bathroom cabinet', 'Pharmacy / meds': 'Bathroom cabinet',
+  'Electronics': 'Chest of drawers', 'Charging': 'Chest of drawers',
+  'Food & drink': 'Kitchen cupboard', 'Documents & money': 'Chest of drawers',
+  'Sport gear': 'Basement / cellar', 'Comfort & misc': 'Storage box', 'Reminders': '',
+};
+// Name-keyword overrides (specific → generic, first match wins) for items whose
+// natural home differs from their category default.
+const STORAGE_RULES = [
+  // Seasonal / bulky gear → the attic.
+  ['ski goggles', 'Loft / attic'], ['skis', 'Loft / attic'], ['skates', 'Loft / attic'], ['snowshoes', 'Loft / attic'],
+  ['crampons', 'Loft / attic'], ['climbing spikes', 'Loft / attic'], ['avalanche', 'Loft / attic'], ['heat pads', 'Loft / attic'],
+  ['neck pillow', 'Loft / attic'], ['pillow', 'Loft / attic'], ['beach blanket', 'Loft / attic'], ['silk', 'Loft / attic'], ['sleeping-bag', 'Loft / attic'],
+  // Small everyday clothing → the drawers.
+  ['socks', 'Chest of drawers'], ['underwear', 'Chest of drawers'], ['boxers', 'Chest of drawers'], ['bra', 'Chest of drawers'],
+  ['t-shirt', 'Chest of drawers'], ['vests & t-shirts', 'Chest of drawers'],
+  // Grab-on-the-way-out things → the hall.
+  ['sunglasses', 'Hall closet'], ['wallet', 'Hall closet'], ['passport', 'Hall closet'], ['keys', 'Hall closet'],
+  ['kitchen towel', 'Kitchen cupboard'],
+];
+function storeSeed(lists) {
+  for (const l of lists) {
+    if (l.role === CONTAINER_ROLE) continue;   // containers carry their own storage
+    for (const it of l.items) {
+      if (it.itemType === 'reminder' || it.storage) continue; // to-dos have none; keep explicit
+      const n = it.name.toLowerCase();
+      let place = '';
+      for (const [k, p] of STORAGE_RULES) { if (n.includes(k)) { place = p; break; } }
+      it.storage = place || STORAGE_BY_CAT[it.category] || 'Storage box';
+    }
+  }
+  return lists;
+}
+
 // Tag items with sensible defaults for weight / flags (#3) by name, so the feature
 // has real data out of the box. Everything stays editable per item.
 function tagSeed(lists) {
@@ -798,11 +836,11 @@ const CONTAINERS_SEED = [
   cont('Duffel bag', { L: 60, empty: 1300, at: 'Loft / attic' }),
   cont('Swim bag', { L: 20, empty: 400, at: 'Bedroom wardrobe' }),
   cont('Triathlon bag', { L: 40, empty: 1000, at: 'Bedroom wardrobe' }),
-  cont('Golf bag', { L: 35, empty: 3000, at: 'Garage' }),
+  cont('Golf bag', { L: 35, empty: 3000, at: 'Basement / cellar' }),
   cont('Toiletry bag', { L: 5, empty: 300, at: 'Bathroom cabinet' }),
   cont('Tech pouch', { L: 3, empty: 250, at: 'Hall closet' }),
   cont('Electronics bag', { L: 5, empty: 500, brand: 'Targus', at: 'Hall closet' }),
-  cont('Cool box', { L: 25, empty: 2500, at: 'Garage' }),
+  cont('Cool box', { L: 25, empty: 2500, at: 'Basement / cellar' }),
   cont('Handbag', { L: 8, empty: 500, at: 'Bedroom wardrobe' }),
   cont('RV storage box', { L: 50, empty: 1500, at: 'RV / camper' }),
 ];
@@ -849,7 +887,7 @@ function sectionize(lists) {
 
 export function seedLists() {
   const L = (name, group, items, extra) => newList({ name, group, builtin: true, items, ...extra });
-  return sectionize(tagSeed([
+  return sectionize(storeSeed(tagSeed([
     // Common base — always included on every trip, whatever the transport / activities.
     L('Travel', '', TRAVEL, { role: 'base' }),
     // Transport bases — auto-included by the trip's "Way of transport": Car brings a
@@ -872,7 +910,7 @@ export function seedLists() {
     // OE — Other Events: no packing lists for now (kept as an empty group)
     // Containers — the bags themselves (role 'container'; kept out of trips & pickers).
     L(CONTAINER_LIST_NAME, '', CONTAINERS_SEED, { role: CONTAINER_ROLE }),
-  ]));
+  ])));
 }
 
 // (Start-from templates were removed in v30: the common base is always included,
