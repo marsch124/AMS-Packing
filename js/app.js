@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v75';
+const APP_VERSION = 'v76';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -3295,6 +3295,7 @@ function howtoCard() {
 
         <h3>All items · table (the spreadsheet)</h3>
         <p>For fast bulk edits, the <b>Care</b> tab → <b>▦ All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
+        <p>A toolbar above the grid bends the table to how you work: <b>Sort</b> the whole thing by <b>Name</b>, <b>Weight</b>, <b>Storage</b>, <b>Container</b> or <b>how many lists</b> an item is in, with a <b>▲/▼</b> button to flip the direction; and a <b>Columns</b> button opens a panel to <b>reorder the “item itself” columns</b> into the order you like. Both your <b>sort choice</b> and your <b>column order</b> are remembered on this device, so the table opens just how you left it.</p>
 
         <h3>Places visited (the world map)</h3>
         <p>The <b>Events</b> tab → <b>🌍 Map</b> button opens a <b>world map of everywhere you’ve been</b>. Every trip that has a <b>destination</b> set becomes a pin; <b>repeat visits to the same place merge into one pin</b> with a small count, and pins are ordered most-recent-first in the list beneath. <b>Tap a pin</b> to highlight and scroll to that place in the list, where each visit links to its trip. A place is pinned automatically once its <b>weather</b> has been looked up; for trips whose destination hasn’t been located yet, the <b>“Find places on the map”</b> button geocodes them all at once (this needs the internet) and caches each spot so the map then works fully <b>offline</b>. The map is drawn inside the app from open geographic data — no outside map service, and nothing about your trips leaves the device.</p>
@@ -3304,12 +3305,13 @@ function howtoCard() {
         <p>Items are packed in stages, in this order: <b>Preparations</b> (book/cancel/charge, done ahead) → <b>≥1 week ahead</b> (things you don't use at home) → <b>Day before</b> (stage / move to the RV) → <b>Morning of</b> → <b>At the front door</b> (last check as you leave) → <b>Wear / carry</b> on the day → <b>After / recovery</b> (shower, change, recovery).</p>
 
         <h3>Getting around</h3>
-        <p>Five tabs along the bottom:</p>
+        <p>Six tabs along the bottom:</p>
         <ul>
           <li><b>Home</b> — the builder for starting a new trip, plus a compact preview of your few most recent events.</li>
           <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here. The <b>🌍 Map</b> button up top opens the <b>Places visited</b> world map (see below).</li>
           <li><b>Templates</b> — your reusable templates (the building blocks).</li>
           <li><b>Care</b> — everything that needs looking after, as an urgency-ordered list or a month calendar (see <b>Care, storage &amp; maintenance</b> below).</li>
+          <li><b>Actions</b> — your to-do list (the red tab): everything you need to <em>do</em>, not just pack, whether it belongs to a specific item or stands on its own (see <b>Actions — your to-do list</b> below).</li>
           <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip import, this guide and the version history.</li>
         </ul>
 
@@ -3379,8 +3381,16 @@ function howtoCard() {
         <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>🧰 reminder</b> also shows on the <b>Home</b> screen.</p>
         <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>⚠️ No template</b> (loose items), <b>💧 Liquids</b>, <b>⚡ Charging</b>, <b>⚠️ Restricted</b>, <b>🧰 Has care</b>, <b>📷 Photo</b> and <b>🚫 Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
 
+        <h3>Actions — your to-do list</h3>
+        <p>The <b>Actions</b> tab (the red one in the bottom bar) is a proper <b>to-do list</b> for the things you need to <em>do</em>, not pack. Actions come in two kinds:</p>
+        <ul>
+          <li><b>Tied to an item</b> — open any item’s editor (in the <b>Templates</b> tab) and use its <b>Actions · to-dos</b> panel to jot things to do for it: “replace foam tips”, “re-wax the zip”, “charge before the trip”. Because each item lives once in the catalogue, its actions follow it everywhere, and the item’s row shows a small <b>☑ count</b> of its open to-dos.</li>
+          <li><b>General (loose)</b> — on the Actions tab tap <b>New</b> to add a to-do that isn’t about any one item (you can still tie it to an item later from that item’s editor).</li>
+        </ul>
+        <p>Every action can carry a <b>priority</b> (High / Normal), a <b>when</b> (a trip phase like “≥1 week ahead”, or a specific <b>date</b>), and a tick to mark it <b>done</b>. The Actions tab gathers them all in one place — open ones first (High before Normal, soonest first) — with completed ones tucked into a collapsible <b>Done</b> group. Ticking an item’s action done is <b>permanent on that item</b>; it doesn’t reset each trip. Actions live on-device and travel in your <b>JSON backup</b>, and whenever anything is open a <b>🗒️ “To-dos to tackle”</b> card appears on the <b>Home</b> screen.</p>
+
         <h3>Countdown &amp; “pack now” nudges</h3>
-        <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). These are on-open reminders — the app can't push background notifications.</p>
+        <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b>🧰</b> maintenance nudge when gear is overdue or due soon, a <b>🗒️ “To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), and a <b>💾</b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
 
         <h3>Packing Mode</h3>
         <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed 🎒” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List.</p>
@@ -3426,9 +3436,12 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
-    v('v75', '2026-08-10 · 20:00 UTC', false, 'Trip setup — a pretty recap of every choice on the event screen',
+    v('v76', '2026-08-10 · 20:00 UTC', false, 'Trip setup — a pretty recap of every choice on the event screen',
       'Open any event and you now see a tidy <b>✨ Trip setup</b> card at the top, laying out <b>everything you chose when you created it</b>. Each single choice — <b>List type</b> (Full trip / Quick activity), <b>Dates</b> (with the night count), <b>Destination</b>, <b>Way of transport</b>, <b>Time of year</b> and <b>Catering</b> — gets its own little tile with an icon, so it reads at a glance. Below those, your <b>WET options</b> (Indoor / Outdoor / Race) and every <b>activity you ticked</b> appear as neat pills, <b>grouped under GA / WET / OE</b> just like the picker. The card is <b>collapsible</b> (tap the header) so it never crowds the packing list, and it recolours for light and dark themes. Trip-only choices (transport, catering) are hidden on Quick-activity events, since they don’t apply. Behind the scenes the small summary chips that used to sit up top moved into this card, leaving just the countdown and weather chips for a cleaner header.',
       'Remember at a glance why a list looks the way it does — every setting behind the trip is now shown clearly in one good-looking place, instead of only living in the settings form.'),
+    v('v75', '2026-08-07 · 08:04 UTC', false, 'How-it-works guide caught up with the Actions tab',
+      'A documentation refresh so the in-app <b>How it works</b> guide covers everything the app now does. Three gaps were closed. <b>(1)</b> The whole <b>Actions</b> tab — the to-do list (item-tied and general to-dos, priority, a phase-or-date “when”, the Done group, and the ☑ open-to-do count on item rows) — now has its own chapter; the “Getting around” list is corrected from <b>five tabs to six</b> and names the red <b>Actions</b> tab. <b>(2)</b> The Home-screen reminder cards are now spelled out together — the trip <b>⏰</b>, maintenance <b>🧰</b>, the new <b>🗒️ “To-dos to tackle”</b> card, and the backup <b>💾</b> nudge. <b>(3)</b> The <b>All items · table</b> chapter now describes the toolbar’s custom <b>sort</b> and <b>reorderable columns</b> (both remembered on the device). Nothing about how the app works changed — only the guide.',
+      'The built-in guide is complete again — the Actions to-do list and the latest table controls are documented, so nothing the app does is left unexplained.'),
     v('v74', '2026-08-06 · 18:00 UTC', false, 'World map — a journey line and a “most visited” badge',
       'Two small touches for the new <b>Places visited</b> map. <b>(1) A journey line.</b> Your trips are now joined by a <b>subtle dotted line in date order</b> (oldest to newest), gently flowing across the map — so you can trace the path your travels have taken over time. Trips <b>without a date</b> still get their pin but sit off the line, since there’s no way to place them in the sequence. <b>(2) A “most visited” badge.</b> Up next to the place/trip count sits a little <b>★ badge naming the place you’ve been most</b> (e.g. “★ Stockholm, SE · 3 trips”). It appears only once somewhere has been visited <b>more than once</b> — until then, nothing stands out to highlight. Both are drawn inside the app, so the map stays fully offline.',
       'See your travels as a story, not just dots — follow the line to relive the order you went, and spot your favourite haunt at a glance.'),
