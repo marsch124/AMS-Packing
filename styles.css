@@ -905,6 +905,133 @@ legend {
   margin: 4px 0 6px;
 }
 
+/* Trip setup recap — a pretty read-only view of the choices made at creation. */
+.setup {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  margin: 0 0 14px;
+  overflow: hidden;
+}
+
+.setup > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 15px;
+  font-weight: 700;
+  color: var(--ink);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.setup > summary::-webkit-details-marker { display: none; }
+
+.setup-title {
+  flex: 1;
+  font-size: 1rem;
+}
+
+.setup-chev {
+  color: var(--muted);
+  display: inline-flex;
+  transition: transform .18s ease;
+}
+
+.setup-chev .ic { width: 20px; height: 20px; }
+.setup[open] .setup-chev { transform: rotate(90deg); }
+
+.setup-body {
+  padding: 2px 15px 15px;
+}
+
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(155px, 1fr));
+  gap: 10px;
+}
+
+.setup-tile {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--brand) 6%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--brand) 15%, var(--line));
+  border-radius: 12px;
+}
+
+.setup-ic {
+  font-size: 1.25rem;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--brand) 12%, var(--card));
+  border-radius: 11px;
+  flex: none;
+}
+
+.setup-txt {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setup-lbl {
+  font-size: .66rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.setup-val {
+  font-size: .92rem;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.setup-block {
+  margin-top: 14px;
+}
+
+.setup-block > .setup-lbl {
+  display: block;
+  margin-bottom: 7px;
+}
+
+.setup-grp-lbl {
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--muted);
+  margin: 10px 0 5px;
+}
+
+.setup-grp-lbl:first-of-type { margin-top: 0; }
+
+.setup-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.setup-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--chip);
+  color: var(--chip-ink);
+  font-size: .82rem;
+  font-weight: 600;
+  padding: 4px 11px;
+  border-radius: 999px;
+}
+
 /* total list */
 .total,
 .items {

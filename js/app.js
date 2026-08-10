@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v74';
+const APP_VERSION = 'v75';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -585,6 +585,22 @@ function prettyDate(ymd) {
   if (Number.isNaN(t)) return ymd || '';
   return new Date(t).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
+// A compact date range: shared month/year is written once ("12 – 19 Sept 2026",
+// "28 Dec 2026 – 3 Jan 2027"). Falls back gracefully when one end is missing.
+function prettyRange(a, b) {
+  if (!a) return prettyDate(b);
+  if (!b || a === b) return prettyDate(a);
+  const da = new Date(Date.parse(`${a}T00:00:00Z`));
+  const db = new Date(Date.parse(`${b}T00:00:00Z`));
+  if (Number.isNaN(da) || Number.isNaN(db)) return `${prettyDate(a)} → ${prettyDate(b)}`;
+  const opt = (o) => da.toLocaleDateString(undefined, { ...o, timeZone: 'UTC' });
+  const sameYear = da.getUTCFullYear() === db.getUTCFullYear();
+  const sameMonth = sameYear && da.getUTCMonth() === db.getUTCMonth();
+  const left = sameMonth ? opt({ day: 'numeric' })
+    : sameYear ? opt({ day: 'numeric', month: 'short' })
+      : prettyDate(a);
+  return `${left} – ${prettyDate(b)}`;
+}
 
 // Await a save; surface failures instead of failing silently.
 async function saveGuard(promise) {
@@ -1136,9 +1152,6 @@ async function renderEvent(eventId) {
   ALL_LISTS = await db.getLists(); // so an entry can be traced back to its template item
   if (flagFilterFor !== eventId) { flagFilter = new Set(); weightSort = false; collapsedGroups.clear(); flagFilterFor = eventId; } // fresh per trip
   const p = progress(ev.entries);
-  const meta = (ev.mode === 'quick'
-    ? ['⏱️ Quick', ev.season, ...(ev.contexts || [])]
-    : [ev.transport, ev.season, cateringShort(ev.catering), ...(ev.contexts || [])]).filter(Boolean);
 
   const wrap = h('<section class="screen"></section>');
   const topbar = h(`<div class="topbar">
@@ -1160,11 +1173,13 @@ async function renderEvent(eventId) {
   const dw = deriveWeather(ev);
   const tempChip = dw ? `<span class="chip count">${wIcon(dw.days[0].icon)} ${esc(dw.rangeLabel)}</span>` : '';
   wrap.appendChild(h(`<div class="ev-summary">
-    <div class="chips">${countChip}${tempChip}${meta.map(chip).join('')}</div>
+    <div class="chips">${countChip}${tempChip}</div>
     <div class="bar big"><span style="width:${p.pct}%"></span></div>
     <div class="ev-prog">${p.done}/${p.total} packed · ${p.pct}%</div>
     ${p.total ? `<a class="btn primary lg pack-cta" href="#/event/${ev.id}/pack">${IC.bag}<span>${p.done >= p.total ? 'All packed ✓' : p.done ? 'Continue packing' : 'Start packing'}</span></a>` : ''}
   </div>`));
+
+  wrap.appendChild(tripSetupCard(ev));
 
   const nudge = tripNudge(ev);
   if (nudge && nudge.dueCount > 0) {
@@ -1262,6 +1277,72 @@ async function renderEvent(eventId) {
   });
 
   return wrap;
+}
+
+// A pretty, read-only recap of every choice made when the event was created —
+// list type, dates, destination, transport, season, catering, WET contexts and
+// the activities that were ticked. Collapsible so it never crowds the list.
+const TRANSPORT_EMOJI = { Car: '🚗', Plane: '✈️', RV: '🚐' };
+const SEASON_EMOJI = { Summer: '☀️', Winter: '❄️' };
+const CATERING_EMOJI = { self: '🍳', eatout: '🍽️', mixed: '🥡' };
+const CONTEXT_EMOJI = { Indoor: '🏠', Outdoor: '🌲', Race: '🏁' };
+const GROUP_EMOJI = { GA: '🎯', WET: '🏋️', OE: '🎈' };
+function tripSetupCard(ev) {
+  const quick = ev.mode === 'quick';
+
+  // Single-value settings become tiles in a responsive grid.
+  const tiles = [];
+  const tile = (ic, lbl, val) => tiles.push(
+    `<div class="setup-tile"><span class="setup-ic">${ic}</span>`
+    + `<div class="setup-txt"><span class="setup-lbl">${esc(lbl)}</span>`
+    + `<span class="setup-val">${val}</span></div></div>`);
+
+  tile(quick ? '⏱️' : '🧳', 'List type', quick ? 'Quick activity' : 'Full trip');
+
+  const endVal = ev.endDate || endFromNights(ev.startDate, ev.nights);
+  if (ev.startDate || endVal) {
+    const n = nightsBetween(ev.startDate, endVal);
+    const sub = n == null ? '' : n === 0 ? ' · day trip' : ` · ${n} night${n === 1 ? '' : 's'}`;
+    tile('🗓', 'Dates', `${esc(prettyRange(ev.startDate, endVal))}${sub}`);
+  }
+  if (ev.destination) tile('📍', 'Destination', esc(ev.destination));
+  if (!quick && ev.transport) tile(TRANSPORT_EMOJI[ev.transport] || '🧭', 'Transport', esc(ev.transport));
+  if (ev.season) tile(SEASON_EMOJI[ev.season] || '📅', 'Time of year', esc(ev.season));
+  if (!quick && ev.catering) tile(CATERING_EMOJI[ev.catering] || '🍴', 'Catering', esc(cateringLabel(ev.catering)));
+
+  // Multi-value settings (WET contexts, ticked activities) become tag rows below.
+  const blocks = [];
+  const contexts = ev.contexts || [];
+  if (contexts.length) {
+    const tags = contexts.map((c) => `<span class="setup-tag">${CONTEXT_EMOJI[c] || '•'} ${esc(c)}</span>`).join('');
+    blocks.push(`<div class="setup-block"><span class="setup-lbl">WET options</span><div class="setup-tags">${tags}</div></div>`);
+  }
+
+  const byId = new Map((ALL_LISTS || []).map((l) => [l.id, l]));
+  const chosen = (ev.activities || []).map((id) => byId.get(id)).filter(Boolean);
+  if (chosen.length) {
+    let inner = '';
+    for (const g of GROUPS) {
+      const arr = chosen.filter((l) => l.group === g.id);
+      if (!arr.length) continue;
+      inner += `<div class="setup-grp-lbl">${esc(g.id)} · ${esc(g.label)}</div>`
+        + `<div class="setup-tags">${arr.map((l) => `<span class="setup-tag">${GROUP_EMOJI[g.id] || '•'} ${esc(l.name)}</span>`).join('')}</div>`;
+    }
+    const ung = chosen.filter((l) => !GROUP_IDS.includes(l.group));
+    if (ung.length) {
+      inner += '<div class="setup-grp-lbl">Other lists</div>'
+        + `<div class="setup-tags">${ung.map((l) => `<span class="setup-tag">📦 ${esc(l.name)}</span>`).join('')}</div>`;
+    }
+    blocks.push(`<div class="setup-block"><span class="setup-lbl">${quick ? 'Activities packed for' : 'Extra activities'}</span>${inner}</div>`);
+  }
+
+  return h(`<details class="setup" open>
+    <summary><span class="setup-title">✨ Trip setup</span><span class="setup-chev">${IC.fwd}</span></summary>
+    <div class="setup-body">
+      <div class="setup-grid">${tiles.join('')}</div>
+      ${blocks.join('')}
+    </div>
+  </details>`);
 }
 
 // A collapsible "Bags & weight" panel: per-bag weight vs airline limit, plus liquids/battery counts.
@@ -3345,6 +3426,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v75', '2026-08-10 · 20:00 UTC', false, 'Trip setup — a pretty recap of every choice on the event screen',
+      'Open any event and you now see a tidy <b>✨ Trip setup</b> card at the top, laying out <b>everything you chose when you created it</b>. Each single choice — <b>List type</b> (Full trip / Quick activity), <b>Dates</b> (with the night count), <b>Destination</b>, <b>Way of transport</b>, <b>Time of year</b> and <b>Catering</b> — gets its own little tile with an icon, so it reads at a glance. Below those, your <b>WET options</b> (Indoor / Outdoor / Race) and every <b>activity you ticked</b> appear as neat pills, <b>grouped under GA / WET / OE</b> just like the picker. The card is <b>collapsible</b> (tap the header) so it never crowds the packing list, and it recolours for light and dark themes. Trip-only choices (transport, catering) are hidden on Quick-activity events, since they don’t apply. Behind the scenes the small summary chips that used to sit up top moved into this card, leaving just the countdown and weather chips for a cleaner header.',
+      'Remember at a glance why a list looks the way it does — every setting behind the trip is now shown clearly in one good-looking place, instead of only living in the settings form.'),
     v('v74', '2026-08-06 · 18:00 UTC', false, 'World map — a journey line and a “most visited” badge',
       'Two small touches for the new <b>Places visited</b> map. <b>(1) A journey line.</b> Your trips are now joined by a <b>subtle dotted line in date order</b> (oldest to newest), gently flowing across the map — so you can trace the path your travels have taken over time. Trips <b>without a date</b> still get their pin but sit off the line, since there’s no way to place them in the sequence. <b>(2) A “most visited” badge.</b> Up next to the place/trip count sits a little <b>★ badge naming the place you’ve been most</b> (e.g. “★ Stockholm, SE · 3 trips”). It appears only once somewhere has been visited <b>more than once</b> — until then, nothing stands out to highlight. Both are drawn inside the app, so the map stays fully offline.',
       'See your travels as a story, not just dots — follow the line to relive the order you went, and spot your favourite haunt at a glance.'),
