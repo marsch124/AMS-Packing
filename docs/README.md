@@ -185,6 +185,8 @@ they become useful):
 - `guides/how-to-publish-from-antigravity.md` — the click-by-click publishing guide.
 - `decisions/packing-list-data-model.md` — where we'll capture the "professional
   item-list / packing-list structure" work (the second big endeavour).
+- `decisions/icloud-sync-plan.md` — the scoped plan for syncing trips across devices via
+  iCloud (currently paused, waiting for Martin to resume from his computer).
 
 ---
 
