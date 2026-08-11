@@ -317,6 +317,7 @@ export function coerceEvent(e) {
   if (typeof e.endDate !== 'string') e.endDate = '';   // return date; `nights` derives from start->end
   if (typeof e.destination !== 'string') e.destination = '';  // free text -> geocoded for weather
   e.weather = coerceWeather(e.weather);  // cached Open-Meteo snapshot, or null
+  e.weatherOn = asArray(e.weatherOn).filter((w) => WEATHER_CONDITION_IDS.includes(w)); // conditions "forced on" for this trip: pack that tagged gear regardless of forecast/season
   e.geo = coerceGeo(e.geo);              // cached place coordinates for the world map, or null
   return e;
 }
@@ -456,6 +457,7 @@ export function newEvent(partial = {}) {
     transport: 'Car',
     season: 'Summer',
     contexts: [],
+    weatherOn: [],        // weather conditions "forced on" for this trip (Rain/Cold/…) — pulls in that tagged gear as a precaution, regardless of forecast
     catering: 'mixed',
     startDate: '',
     endDate: '',          // return date; trip length in nights derives from start->end
@@ -577,7 +579,11 @@ export function buildTotalEntries(event, lists) {
       if (!item || !String(item.name || '').trim()) continue;
       if (item.retired) continue; // "Not in use" — kept on record but never packed
       if (!itemMatchesEvent(item, event, list)) continue;
-      if (asArray(item.weather).length) continue; // conditional gear — offered via the forecast, not the base list
+      // Weather-conditional gear is normally held back (offered via the forecast).
+      // But a trip can "force on" conditions (event.weatherOn) to pack that gear as a
+      // precaution regardless of the forecast — e.g. cold-weather kit on a summer trip.
+      const wtags = asArray(item.weather);
+      if (wtags.length && !wtags.some((w) => asArray(event.weatherOn).includes(w))) continue;
       const key = `${normName(item.name)}|${item.container}`;
       if (seen.has(key)) continue; // first source wins; keep it simple & predictable
       const entry = entryFromItem(item, list);

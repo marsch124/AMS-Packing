@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v78';
+const APP_VERSION = 'v79';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1133,6 +1133,8 @@ function eventForm(ev, lists, isEdit) {
     <fieldset data-trip-only><legend>Way of transport</legend>${radioRow('transport', TRANSPORTS, ev.transport)}
       ${baseHint || transportHint ? `<p class="grp-hint">${baseHint}${transportHint}</p>` : ''}</fieldset>
     <fieldset><legend>Time of year</legend>${radioRow('season', SEASONS, ev.season)}</fieldset>
+    <fieldset><legend>Force-pack weather gear</legend>${checkRow('weatherOn', WEATHER_CONDITIONS.map((w) => ({ value: w.id, label: w.label })), ev.weatherOn)}
+      <p class="grp-hint">Tick a condition to <b>force in</b> every item tagged for it — packed as a precaution <b>whatever the forecast or season</b>. Handy for cold-weather kit on a summer trip, or a rain layer just in case. Leave them all off and weather gear stays held back until a fetched forecast calls for it.</p></fieldset>
     <fieldset data-trip-only><legend>Catering</legend>${radioRow('catering', CATERING.map((c) => ({ value: c.id, label: c.label })), ev.catering)}</fieldset>
     <fieldset><legend>WET Options</legend>${checkRow('contexts', CONTEXTS, ev.contexts)}</fieldset>
 
@@ -1223,6 +1225,7 @@ function eventForm(ev, lists, isEdit) {
     ev.catering = fd.get('catering') || 'mixed';
     ev.nights = nightsBetween(ev.startDate, ev.endDate) || 0;  // derived from start -> end date
     ev.contexts = fd.getAll('contexts');
+    ev.weatherOn = fd.getAll('weatherOn');
     ev.activities = fd.getAll('activities');
     // In quick mode there's no base to fall back on, so no ticks means an empty list.
     if (ev.mode === 'quick' && !ev.activities.length
@@ -1478,6 +1481,15 @@ function tripSetupCard(ev) {
   if (contexts.length) {
     const tags = contexts.map((c) => `<span class="setup-tag">${CONTEXT_EMOJI[c] || '•'} ${esc(c)}</span>`).join('');
     blocks.push(`<div class="setup-block"><span class="setup-lbl">WET options</span><div class="setup-tags">${tags}</div></div>`);
+  }
+  const weatherOn = ev.weatherOn || [];
+  if (weatherOn.length) {
+    const WX_EMOJI = { rain: '🌧', cold: '🥶', hot: '🔥', wind: '💨', snow: '❄️' };
+    const tags = weatherOn.map((w) => {
+      const def = WEATHER_CONDITIONS.find((x) => x.id === w);
+      return `<span class="setup-tag">${WX_EMOJI[w] || '•'} ${esc(def ? def.label : w)}</span>`;
+    }).join('');
+    blocks.push(`<div class="setup-block"><span class="setup-lbl">Force-packed weather gear</span><div class="setup-tags">${tags}</div></div>`);
   }
 
   const byId = new Map((ALL_LISTS || []).map((l) => [l.id, l]));
@@ -2800,7 +2812,7 @@ function itemEditor(list, it, setOpen, draw) {
         <fieldset class="mini"><legend>Transport</legend>${checkRow('transports', TRANSPORTS, it.transports)}</fieldset>
         <fieldset class="mini"><legend>Catering</legend>${checkRow('catering', CATERING.map((c) => ({ value: c.id, label: c.label })), it.catering)}</fieldset>
         <fieldset class="mini"><legend>Weather</legend>${checkRow('weather', WEATHER_CONDITIONS.map((w) => ({ value: w.id, label: w.label })), it.weather)}
-          <p class="cond-note">Tick a condition and this item is <b>held back until the trip’s forecast calls for it</b> — e.g. tick <b>Rain</b> and it’s only added when rain is forecast. Leave them all unticked and the item is <b>always included</b>, like the rest of the list.</p>
+          <p class="cond-note">Tick a condition and this item is <b>held back until the trip’s forecast calls for it</b> — e.g. tick <b>Rain</b> and it’s only added when rain is forecast. You can also <b>force it into any trip</b> whatever the forecast or season, using <b>Force-pack weather gear</b> in the event settings. Leave them all unticked and the item is <b>always included</b>, like the rest of the list.</p>
         </fieldset>
       </div>
       <label class="field"><span>Note</span><input name="note" value="${esc(it.note)}"></label>
@@ -3565,6 +3577,7 @@ function howtoCard() {
         <ul>
           <li>A <b>temperature chip</b> in the trip header and a <b>7-day strip</b> with icons and highs/lows; rainy days are highlighted.</li>
           <li><b>Weather-conditional gear:</b> tag an item (in its editor) with Rain / Cold / Heat / Wind / Snow to make it “conditional”. Conditional items are kept <i>out</i> of the normal list and only offered when the forecast calls for them — so your rain suit stops cluttering every trip.</li>
+          <li><b>Force-pack weather gear (per trip):</b> in an event’s settings, tick a condition under <b>Force-pack weather gear</b> to pull in <i>all</i> gear tagged for it straight away — no forecast or destination needed, and regardless of the season. This is the “just in case” switch: force in your cold-weather kit for a summer high-altitude hike, or a rain layer as a precaution on a sunny trip.</li>
           <li>When the forecast triggers a condition, a <b>suggestion banner</b> offers matching gear — <i>your own</i> tagged items first (with their real bag and category), then a few generic add-ons — with <b>Add all</b>.</li>
           <li><b>Pack weather gear anyway:</b> a panel that lets you add any of the trip's weather gear regardless of (or without) a forecast — e.g. a rain shell as a backup layer on a dry day. Items added this way keep their bag/category and fold into trip-review stats.</li>
         </ul>
@@ -3601,6 +3614,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v79', '2026-08-11 · 18:00 UTC', false, 'Force-pack weather gear — a “just in case” switch per trip',
+      'A new way to <b>deliberately pack weather gear</b>, even when the forecast (or the season) says you won’t need it. Open a trip’s settings and you’ll find a new <b>Force-pack weather gear</b> box, right under <b>Time of year</b>, with a tick for <b>Rain / Cold / Heat / Wind / Snow</b>. Tick one and <b>every item you’ve tagged for that condition is pulled straight into the packing list</b> — no destination, no forecast, no internet needed. This is the switch you wanted for the classic cases: heading <b>high into the mountains on a summer trip</b>, so you <b>force in your cold-weather kit</b> (gloves, hat, warm layers) even though it’s July; or packing a <b>rain layer as a precaution</b> on a trip the forecast calls dry. It works hand-in-hand with the existing weather tags: an item still needs to be <b>tagged</b> (in its editor, under <b>Weather</b>) as Rain / Cold / etc. to be eligible — this new toggle just decides whether that tagged gear is <b>held back for the forecast</b> (the default) or <b>forced in for this particular trip</b>. Your choices show up in the <b>✨ Trip setup</b> recap at the top of the event, and editing them and re-saving regenerates the list. Leave every box unticked and nothing changes — weather gear stays held back until a fetched forecast asks for it, exactly as before. To get you started, ready-tagged cold items now come built in: <b>Warm gloves</b>, <b>Warm beanie</b> and <b>Warm hat</b> in your <b>Travel</b> base list, plus <b>Insulated gloves</b>, <b>Insulated beanie</b> and a <b>Balaclava</b> in your <b>Hiking</b> list (so forcing Cold works even on a quick hiking activity with no base). All are already marked for <b>Cold</b>, so ticking <b>Cold</b> on a summer trip pulls them straight in with nothing to set up; tag your own gear the same way in any item’s <b>Weather</b> box. <em>(This refreshes the built-in starter templates, so any tweak you’d made to a built-in list is reset to the seed — your own templates are untouched.)</em>',
+      'Pack for conditions you know are coming even when the forecast can’t see them yet — force your cold-weather or rain gear into a specific trip in one tick, whatever the season or the weather report.'),
     v('v78', '2026-08-11 · 09:00 UTC', false, 'Places visited — zoom in on the map',
       'The <b>Places visited</b> map can now <b>zoom</b>, so trips that sit close together stop overlapping into a single blob. Two things changed. <b>(1) It opens already framed on where you’ve been.</b> Instead of always showing the whole globe, the map now <b>fits itself to your pins</b> the moment it opens — so two trips in, say, Scandinavia appear as <b>two separate pins</b> you can actually tell apart and tap, not one dot on top of another. <b>(2) You can zoom and move around freely.</b> There’s a small <b>＋ / − / ⤢ (fit)</b> button stack in the map’s top-right corner — the <b>⤢</b> re-frames everything at any time. You can also <b>pinch on a trackpad</b> (or hold <b>⌘</b> and scroll) to zoom, <b>double-click</b> a spot to zoom in (double-click again once you’re deep in to pop back out to the fitted view), and <b>drag</b> to move around once you’re zoomed in. A plain two-finger <b>scroll still scrolls the page</b> — the map only zooms on a deliberate pinch or ⌘-scroll, so it never traps your scrolling. (Pinch and double-tap work on a phone too.) The pins keep their neat size as you zoom (they don’t balloon), the coastline stays crisp, and a gentle drag never accidentally fires the pin underneath. It’s all still drawn <b>inside the app</b> — fully offline, no outside map service.',
       'Nearby trips no longer merge into one dot — the map opens framed on your travels and you can zoom right in to separate and tap places that sit close together.'),

@@ -261,6 +261,13 @@ const HIKE = [
   it('Fleece trousers ("Smurf")', { sv: 'Fleecebyxa (Smurf)', cat: CL, con: 'Hiking backpack' }),
   it('Cap / sun hat', { sv: 'Keps/Solhatt', cat: CL, con: 'Hiking backpack' }),
   it('Beanie and mittens', { sv: 'Mössa och vantar', cat: CL, con: 'Hiking backpack', seas: ['Winter'] }),
+  // Cold-weather gear tagged for the per-trip "Force-pack weather gear · Cold" toggle,
+  // so forcing Cold works even on a Quick hiking activity (no Travel base). Distinct
+  // names from the Travel base's Warm gloves/beanie/hat to avoid the same item showing
+  // up in two bags on a full trip.
+  it('Insulated gloves', { sv: 'Isolerade handskar', cat: ADV, con: 'Hiking backpack', we: ['cold'] }),
+  it('Insulated beanie', { sv: 'Isolerad mössa', cat: CL, con: 'Hiking backpack', we: ['cold'] }),
+  it('Balaclava', { sv: 'Balaklava', cat: CL, con: 'Hiking backpack', we: ['cold'] }),
   it('Rain suit', { sv: 'Regnställ', cat: ADV, con: 'Hiking backpack', we: ['rain'] }),
   it('Extra socks', { sv: 'Extra strumpor', cat: CL, con: 'Hiking backpack' }),
   it('Adventure trousers', { sv: 'Äventyrsbyxor', cat: ADV, con: 'Hiking backpack' }),
@@ -371,6 +378,12 @@ const TRAVEL = [
   it('Beanie', { sv: 'Mössa', cat: CL, con: CK, seas: ['Winter'] }),
   it('Gloves (finger)', { sv: 'Handskar, finger', cat: CL, con: CK, seas: ['Winter'] }),
   it('Gloves (mitten)', { sv: 'Handskar, tum', cat: CL, con: CK, seas: ['Winter'] }),
+  // Cold-weather gear tagged for the per-trip "Force-pack weather gear · Cold" toggle:
+  // held back on a normal trip, forced in (whatever the season/forecast) when Cold is ticked
+  // — e.g. a summer trip that climbs to high altitude. See model.js buildTotalEntries.
+  it('Warm gloves', { sv: 'Varma handskar', cat: CL, con: CK, we: ['cold'] }),
+  it('Warm beanie', { sv: 'Varm mössa', cat: CL, con: CK, we: ['cold'] }),
+  it('Warm hat', { sv: 'Varm hatt', cat: CL, con: CK, we: ['cold'] }),
   it('Jacket', { sv: 'Jacka', cat: CL, con: CK }),
   it('Windbreaker jacket', { sv: 'Windbreaker-jacka', cat: CL, con: CK }),
   // Äventyrskläd (adventure clothing)
@@ -655,6 +668,8 @@ const WEIGHT_RULES = [
   ['down jacket', 500], ['windbreaker', 350], ['shell garment', 350], ['poncho', 300], ['rain suit', 400], ['jacket', 500],
   ['vests & t-shirts', 150], ['t-shirt', 150], ['polo', 220], ['adventure shirt', 220], ['shirt', 220], ['sweater', 350],
   ['adventure trousers', 450], ['three-quarter', 250], ['long trousers', 400], ['trousers', 400], ['shorts', 250], ['skirt', 200], ['dress', 300], ['belt', 150],
+  ['warm beanie', 90], ['warm hat', 110], ['insulated beanie', 90], ['balaclava', 80],
+  // (warm/insulated "gloves" fall through to the earlier ['glove', 90] rule — 90 g is fine)
   ['reading glasses', 30], ['sun hat', 100], ['cap', 80], ['beanie', 80], ['headband', 40], ['alpine mittens', 110], ['flop mittens', 90], ['gloves', 90], ['mittens', 90],
   ['neck gaiter', 60], ['swim trunks', 150], ['swimsuit', 150], ['swimwear', 150], ['sarong', 200], ['lounge pants', 300], ['loungewear', 300], ['bathrobe', 600],
   ['reflectors', 40], ['reflex', 40], ['change of clothes', 500], ['change + a little', 500], ['spare change', 500], ['warm change', 500],
