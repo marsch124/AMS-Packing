@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v76';
+const APP_VERSION = 'v77';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1125,19 +1125,57 @@ async function renderEventForm(existing) {
 // Event Total List (the heart)
 // ============================================================
 const VIEW_KEY = 'ams-view';
-const VIEW_MODES = ['when', 'container', 'category', 'section', 'stored'];
+const VIEW_MODES = ['when', 'container', 'category', 'ga', 'wet', 'section', 'stored'];
 function totalView() { try { const v = localStorage.getItem(VIEW_KEY); return VIEW_MODES.includes(v) ? v : 'when'; } catch { return 'when'; } }
 // Does this trip have any sectioned items? (The Section group-by only appears then.)
 function tripHasSections(ev) { return (ev.entries || []).some((e) => (e.section || '').trim()); }
 // Does this trip have any items with a storage place? (Gates the Stored group-by.)
 function tripHasStorage(ev) { return (ev.entries || []).some((e) => (e.storage || '').trim()); }
-// The effective group-by for a trip: fall back off Section/Stored when there's
-// nothing to group by that way, so the toggle can't leave the list looking empty.
+// Map each template list's id to its group (GA/WET/…) and name, from the cache
+// loaded on the event screen — so an entry can be traced back to the activity it
+// came from for the GA / WET group-by.
+function listInfoById() {
+  const m = new Map();
+  for (const l of (ALL_LISTS || [])) m.set(l.id, { group: l.group, name: l.name });
+  return m;
+}
+// Does this trip pack anything from a GA (or WET) activity list? Gates those
+// group-by buttons, so they only appear when there's an activity to group by.
+function tripHasGroup(ev, gid) {
+  const info = listInfoById();
+  return (ev.entries || []).some((e) => info.get(e.sourceListId)?.group === gid);
+}
+// The effective group-by for a trip: fall back off any mode that would leave the
+// list looking empty (no sections / storage / GA / WET items), so the toggle is safe.
 function viewFor(ev) {
   const v = totalView();
   if (v === 'section' && !tripHasSections(ev)) return 'when';
   if (v === 'stored' && !tripHasStorage(ev)) return 'when';
+  if (v === 'ga' && !tripHasGroup(ev, 'GA')) return 'when';
+  if (v === 'wet' && !tripHasGroup(ev, 'WET')) return 'when';
   return v;
+}
+// Group entries by the ACTIVITY list they came from, within one group (GA or WET):
+// each Golf / Hiking / Swim / Run list becomes its own bucket, so you can gather
+// one activity's kit at once. Everything not from that group — the common base,
+// the transport kit, other activities and manual adds — falls into a trailing
+// "Everything else" bucket. (Shared gear lands in the base, so a bucket holds the
+// kit that's specific to that activity.)
+function groupByActivity(entries, gid) {
+  const info = listInfoById();
+  const buckets = new Map(); // list name -> entries
+  const other = [];
+  for (const e of entries) {
+    const src = info.get(e.sourceListId);
+    const name = src && src.group === gid ? (src.name || '').trim() : '';
+    if (name) { if (!buckets.has(name)) buckets.set(name, []); buckets.get(name).push(e); }
+    else other.push(e);
+  }
+  const out = [...buckets.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([label, list]) => ({ label, entries: list }));
+  if (other.length) out.push({ label: 'Everything else', entries: other });
+  return out;
 }
 function setTotalView(v) { try { localStorage.setItem(VIEW_KEY, v); } catch {} }
 let expandedEntry = null; // id of the entry whose inline editor is open
@@ -1201,7 +1239,7 @@ async function renderEvent(eventId) {
   const toolbar = h(`<div class="toolbar">
     <span class="toolbar-lbl">Group by</span>
     <div class="segmented small">
-      ${segBtn('when', 'When')}${segBtn('container', 'Where')}${segBtn('category', 'Category')}${tripHasSections(ev) ? segBtn('section', 'Section') : ''}${tripHasStorage(ev) ? segBtn('stored', 'Stored') : ''}
+      ${segBtn('when', 'When')}${segBtn('container', 'Where')}${segBtn('category', 'Category')}${tripHasGroup(ev, 'GA') ? segBtn('ga', 'GA') : ''}${tripHasGroup(ev, 'WET') ? segBtn('wet', 'WET') : ''}${tripHasSections(ev) ? segBtn('section', 'Section') : ''}${tripHasStorage(ev) ? segBtn('stored', 'Stored') : ''}
     </div>
     <div class="spacer"></div>
     <button class="btn ghost" data-act="add">${IC.plus}<span>Item</span></button>
@@ -1510,7 +1548,10 @@ function renderTotalBody(body, ev) {
     ? (entries) => groupByContainer(entries).map((g) => ({ label: g.container || 'Unpacked', entries: g.entries }))
     : (entries) => entriesByPhase(entries).map((g) => ({ label: g.phase.label, entries: g.entries }));
 
-  for (const g of groupBy(mode, entries)) {
+  const groups = (mode === 'ga' || mode === 'wet')
+    ? groupByActivity(entries, mode === 'ga' ? 'GA' : 'WET')
+    : groupBy(mode, entries);
+  for (const g of groups) {
     const key = `${mode}|${g.label}`;
     const collapsed = collapsedGroups.has(key);
     const done = g.entries.filter((e) => e.checked).length;
@@ -3436,6 +3477,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v77', '2026-08-10 · 21:30 UTC', false, 'Group by GA / WET — pack one activity at a time',
+      'The <b>Group by</b> toolbar on an event gains two new views: <b>GA</b> and <b>WET</b>. Tap <b>GA</b> and the list reorganises so each <b>Goal Activity</b> you packed for — <b>Golf, Hiking, Diving…</b> — becomes its own group, and tapping <b>WET</b> does the same for your <b>Workout / Exercise</b> lists — <b>Swim, Bike, Run…</b>. So you can round up <b>all your golf kit</b>, or <b>everything for your runs</b>, in one place instead of hunting through the whole list. Anything that isn’t specific to that activity — your <b>common base</b>, the <b>transport kit</b>, other activities and items you added by hand — gathers into a tidy <b>“Everything else”</b> group you can collapse out of the way. (Shared gear lives in the base, so each activity group holds the kit that’s special to it.) The two buttons only appear when a trip actually packs for that kind of activity, and — like the other views — your choice is remembered.',
+      'Pack activity-by-activity — gather every golf or running item at a glance, so nothing activity-specific gets left behind.'),
     v('v76', '2026-08-10 · 20:00 UTC', false, 'Trip setup — a pretty recap of every choice on the event screen',
       'Open any event and you now see a tidy <b>✨ Trip setup</b> card at the top, laying out <b>everything you chose when you created it</b>. Each single choice — <b>List type</b> (Full trip / Quick activity), <b>Dates</b> (with the night count), <b>Destination</b>, <b>Way of transport</b>, <b>Time of year</b> and <b>Catering</b> — gets its own little tile with an icon, so it reads at a glance. Below those, your <b>WET options</b> (Indoor / Outdoor / Race) and every <b>activity you ticked</b> appear as neat pills, <b>grouped under GA / WET / OE</b> just like the picker. The card is <b>collapsible</b> (tap the header) so it never crowds the packing list, and it recolours for light and dark themes. Trip-only choices (transport, catering) are hidden on Quick-activity events, since they don’t apply. Behind the scenes the small summary chips that used to sit up top moved into this card, leaving just the countdown and weather chips for a cleaner header.',
       'Remember at a glance why a list looks the way it does — every setting behind the trip is now shown clearly in one good-looking place, instead of only living in the settings form.'),
