@@ -3825,12 +3825,23 @@ table.grid {
       color-mix(in srgb, var(--brand) 6%, var(--card)));
   box-shadow: var(--shadow);
 }
+/* Map + pins share this layer, so one transform zooms/pans both together.
+   One finger scrolls the page until you're zoomed in; then it pans the map. */
+.worldmap-view {
+  position: absolute; inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+  touch-action: pan-y;
+}
+.worldmap-wrap.zoomed .worldmap-view { touch-action: none; cursor: grab; }
+.worldmap-wrap.zoomed .worldmap-view:active { cursor: grabbing; }
 .worldmap { display: block; width: 100%; height: 100%; }
 .worldmap-land {
   fill: color-mix(in srgb, var(--brand) 26%, var(--card));
   stroke: color-mix(in srgb, var(--brand) 42%, var(--card));
   stroke-width: .3;
   stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;   /* stays crisp when zoomed */
 }
 
 /* The date-ordered "journey" line — subtle, dashed, gently flowing. */
@@ -3842,6 +3853,7 @@ table.grid {
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-dasharray: 1.6 2;
+  vector-effect: non-scaling-stroke;
   animation: route-flow 3s linear infinite;
 }
 @keyframes route-flow { to { stroke-dashoffset: -7.2; } }
@@ -3850,7 +3862,7 @@ table.grid {
 .pins { position: absolute; inset: 0; }
 .pin {
   position: absolute;
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--pz, 1));   /* --pz counter-scales against the zoom */
   width: 26px; height: 26px;         /* tap target; the visible dot is smaller */
   margin: 0; padding: 0; border: 0;
   background: none; cursor: pointer;
@@ -3890,6 +3902,30 @@ table.grid {
   text-align: center;
   border: 1.5px solid var(--card);
 }
+
+/* Floating +/−/fit controls in the map's top-right corner. */
+.map-zoom {
+  position: absolute; top: 8px; right: 8px;
+  display: grid; gap: 6px;
+  z-index: 4;
+}
+.map-zoom-btn {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  padding: 0; margin: 0;
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+  color: var(--brand);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background .15s ease, transform .1s ease;
+}
+.map-zoom-btn:hover { background: var(--card); }
+.map-zoom-btn:active { transform: scale(.92); }
+.map-zoom-btn .ic { width: 20px; height: 20px; }
 
 .map-hint { margin: 10px 2px 16px; color: var(--muted); font-size: .82rem; text-align: center; }
 

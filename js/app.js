@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v77';
+const APP_VERSION = 'v78';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -886,14 +886,25 @@ async function renderMap() {
   const routePts = stops.map((s) => { const { x, y } = project(s.lat, s.lon); return `${x.toFixed(2)},${y.toFixed(2)}`; }).join(' ');
   const routeSvg = stops.length >= 2 ? `<polyline class="worldmap-route" points="${routePts}"/>` : '';
 
-  // The map + its pin overlay. Pins are real buttons for good tap targets.
+  // The map + its pin overlay. The land, the route and the pins all live inside
+  // one `.worldmap-view` layer, so a single zoom/pan transform moves them together
+  // and the pins stay glued to the land (see the zoom setup further down). Pins are
+  // real buttons for good tap targets.
   const mapWrap = h(`<div class="worldmap-wrap">
-    <svg class="worldmap" viewBox="0 0 ${MAP_W} ${MAP_H}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-      <path class="worldmap-land" d="${WORLD_PATH}"/>
-      ${routeSvg}
-    </svg>
-    <div class="pins"></div>
+    <div class="worldmap-view">
+      <svg class="worldmap" viewBox="0 0 ${MAP_W} ${MAP_H}" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <path class="worldmap-land" d="${WORLD_PATH}"/>
+        ${routeSvg}
+      </svg>
+      <div class="pins"></div>
+    </div>
+    <div class="map-zoom" role="group" aria-label="Zoom the map">
+      <button class="map-zoom-btn" type="button" data-z="in" aria-label="Zoom in">${IC.plus}</button>
+      <button class="map-zoom-btn" type="button" data-z="out" aria-label="Zoom out"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M6 12h12"/></svg></button>
+      <button class="map-zoom-btn" type="button" data-z="fit" aria-label="Fit all places"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+    </div>
   </div>`);
+  const view = mapWrap.querySelector('.worldmap-view');
   const pinsBox = mapWrap.querySelector('.pins');
   places.forEach((pl, idx) => {
     const { x, y } = project(pl.lat, pl.lon);
@@ -905,7 +916,7 @@ async function renderMap() {
     pinsBox.appendChild(pin);
   });
   wrap.appendChild(mapWrap);
-  wrap.appendChild(h('<p class="map-hint">Tap a pin to jump to that place below.</p>'));
+  wrap.appendChild(h('<p class="map-hint">Zoom with the ＋ / − buttons, a trackpad pinch, or a double-click; drag to move around. Click a pin to jump to that place below.</p>'));
 
   // One card per place, newest visit first, each trip linking to its event.
   const list = h('<div class="place-list"></div>');
@@ -924,8 +935,121 @@ async function renderMap() {
   });
   wrap.appendChild(list);
 
-  // Tapping a pin highlights and scrolls to its place card.
+  // ——— Zoom & pan ————————————————————————————————————————————————
+  // Map and pins share the one transformed layer (`view`), so a single
+  // scale + translate moves both and the pins stay glued to the land. Position is
+  // kept as fractions of the frame (0..1), so nothing needs measuring in pixels
+  // until a finger actually moves. `s` = zoom, `tx/ty` = pan.
+  const MAX_S = 8;        // deepest zoom
+  const MIN_SPAN = 0.14;  // a lone place still opens on a comfortable region, not max zoom
+  let s = 1, tx = 0, ty = 0, dragged = false;
+
+  const apply = () => {
+    tx = Math.min(0, Math.max(1 - s, tx));   // keep the map covering the frame
+    ty = Math.min(0, Math.max(1 - s, ty));
+    view.style.transform = `translate(${(tx * 100).toFixed(4)}%, ${(ty * 100).toFixed(4)}%) scale(${s.toFixed(4)})`;
+    view.style.setProperty('--pz', (1 / s).toFixed(4));   // counter-scale so pin dots keep their size
+    mapWrap.classList.toggle('zoomed', s > 1.001);
+  };
+  // Zoom to scale `ns`, keeping the map point under (px,py) — fractions of the
+  // frame — pinned where it is.
+  const zoomTo = (ns, px = 0.5, py = 0.5) => {
+    ns = Math.min(MAX_S, Math.max(1, ns));
+    tx = px - (px - tx) * ns / s;
+    ty = py - (py - ty) * ns / s;
+    s = ns;
+    apply();
+  };
+  // Frame the map on the places actually visited, so nearby pins separate at once.
+  const fit = () => {
+    if (!places.length) { s = 1; tx = 0; ty = 0; return apply(); }
+    let minx = 1, maxx = 0, miny = 1, maxy = 0;
+    places.forEach((pl) => {
+      const { x, y } = project(pl.lat, pl.lon);
+      const fx = x / MAP_W, fy = y / MAP_H;
+      minx = Math.min(minx, fx); maxx = Math.max(maxx, fx);
+      miny = Math.min(miny, fy); maxy = Math.max(maxy, fy);
+    });
+    const spanX = Math.max(MIN_SPAN, (maxx - minx) * 1.7);   // ×1.7 leaves breathing room
+    const spanY = Math.max(MIN_SPAN, (maxy - miny) * 1.7);
+    s = Math.min(MAX_S, Math.max(1, Math.min(1 / spanX, 1 / spanY)));
+    tx = 0.5 - (minx + maxx) / 2 * s;
+    ty = 0.5 - (miny + maxy) / 2 * s;
+    apply();
+  };
+  fit();   // open already framed on the visited region
+
+  // Pointer gestures: one finger pans (when zoomed in), two fingers pinch-zoom.
+  // A tap that barely moves is left alone, so it still reaches the pin underneath.
+  const pts = new Map();
+  let startDist = 0, startS = 1, startMid = null;
+  const frac = (e) => { const r = mapWrap.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }; };
+  view.addEventListener('pointerdown', (e) => {
+    pts.set(e.pointerId, frac(e));
+    dragged = false;
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      startDist = Math.hypot(a.x - b.x, a.y - b.y) || 1e-4;
+      startS = s;
+      startMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    }
+  });
+  view.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    const prev = pts.get(e.pointerId);
+    const cur = frac(e);
+    pts.set(e.pointerId, cur);
+    if (pts.size === 2 && startMid) {
+      const [a, b] = [...pts.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1e-4;
+      dragged = true;
+      if (!view.hasPointerCapture(e.pointerId)) view.setPointerCapture(e.pointerId);
+      zoomTo(startS * (dist / startDist), startMid.x, startMid.y);
+    } else if (pts.size === 1 && s > 1.001) {
+      if (Math.abs(cur.x - prev.x) + Math.abs(cur.y - prev.y) > 0.004) {
+        dragged = true;
+        if (!view.hasPointerCapture(e.pointerId)) view.setPointerCapture(e.pointerId);
+      }
+      tx += cur.x - prev.x; ty += cur.y - prev.y;
+      apply();
+    }
+  });
+  const endPtr = (e) => { pts.delete(e.pointerId); if (pts.size < 2) startMid = null; };
+  view.addEventListener('pointerup', endPtr);
+  view.addEventListener('pointercancel', endPtr);
+
+  // Double-tap / double-click steps the zoom in on the spot (and, once deep, back
+  // out to the framed view). Mouse wheel / trackpad zooms on desktop.
+  let lastTap = 0;
+  view.addEventListener('pointerup', (e) => {
+    if (dragged) return;
+    const now = Date.now();
+    if (now - lastTap < 320) { const p = frac(e); if (s < MAX_S - 0.01) zoomTo(s * 2, p.x, p.y); else fit(); lastTap = 0; }
+    else lastTap = now;
+  });
+  // On a Mac a plain two-finger scroll should scroll the PAGE (not get trapped
+  // zooming the map); a trackpad pinch (or ⌘/Ctrl + scroll) sends ctrlKey and
+  // zooms. Scaling by the scroll amount keeps a pinch smooth and a wheel-notch sane.
+  view.addEventListener('wheel', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;   // let the page scroll past the map
+    e.preventDefault();
+    const p = frac(e);
+    zoomTo(s * Math.exp(-e.deltaY * 0.0025), p.x, p.y);
+  }, { passive: false });
+
+  // The +, − and fit buttons.
+  mapWrap.querySelector('.map-zoom').addEventListener('click', (e) => {
+    const b = e.target.closest('.map-zoom-btn'); if (!b) return;
+    const z = b.getAttribute('data-z');
+    if (z === 'in') zoomTo(s * 1.8);
+    else if (z === 'out') zoomTo(s / 1.8);
+    else fit();
+  });
+
+  // Tapping a pin highlights and scrolls to its place card (ignored right after a
+  // pan/pinch, so dragging the map never fires a pin).
   pinsBox.addEventListener('click', (ev) => {
+    if (dragged) { ev.preventDefault(); ev.stopPropagation(); return; }
     const btn = ev.target.closest('.pin');
     if (!btn) return;
     const idx = btn.getAttribute('data-idx');
@@ -3339,7 +3463,7 @@ function howtoCard() {
         <p>A toolbar above the grid bends the table to how you work: <b>Sort</b> the whole thing by <b>Name</b>, <b>Weight</b>, <b>Storage</b>, <b>Container</b> or <b>how many lists</b> an item is in, with a <b>▲/▼</b> button to flip the direction; and a <b>Columns</b> button opens a panel to <b>reorder the “item itself” columns</b> into the order you like. Both your <b>sort choice</b> and your <b>column order</b> are remembered on this device, so the table opens just how you left it.</p>
 
         <h3>Places visited (the world map)</h3>
-        <p>The <b>Events</b> tab → <b>🌍 Map</b> button opens a <b>world map of everywhere you’ve been</b>. Every trip that has a <b>destination</b> set becomes a pin; <b>repeat visits to the same place merge into one pin</b> with a small count, and pins are ordered most-recent-first in the list beneath. <b>Tap a pin</b> to highlight and scroll to that place in the list, where each visit links to its trip. A place is pinned automatically once its <b>weather</b> has been looked up; for trips whose destination hasn’t been located yet, the <b>“Find places on the map”</b> button geocodes them all at once (this needs the internet) and caches each spot so the map then works fully <b>offline</b>. The map is drawn inside the app from open geographic data — no outside map service, and nothing about your trips leaves the device.</p>
+        <p>The <b>Events</b> tab → <b>🌍 Map</b> button opens a <b>world map of everywhere you’ve been</b>. Every trip that has a <b>destination</b> set becomes a pin; <b>repeat visits to the same place merge into one pin</b> with a small count, and pins are ordered most-recent-first in the list beneath. <b>Tap a pin</b> to highlight and scroll to that place in the list, where each visit links to its trip. The map <b>opens framed on the places you’ve visited</b> (rather than the whole globe), and you can <b>zoom</b> for a closer look — use the small <b>＋ / − / ⤢</b> buttons in the corner (the <b>⤢</b> re-frames everything), a <b>trackpad pinch</b> or <b>⌘-scroll</b>, or a <b>double-click</b> (pinch and double-tap work on a phone too) — then <b>drag</b> to move around; this keeps trips that sit close together from overlapping into one dot. A place is pinned automatically once its <b>weather</b> has been looked up; for trips whose destination hasn’t been located yet, the <b>“Find places on the map”</b> button geocodes them all at once (this needs the internet) and caches each spot so the map then works fully <b>offline</b>. The map is drawn inside the app from open geographic data — no outside map service, and nothing about your trips leaves the device.</p>
         <p>Two finishing touches: your trips are joined by a <b>subtle dotted line in date order</b> (oldest → newest) so you can trace your travels over time — undated trips keep their pin but sit off the line — and a small <b>★ “most visited” badge</b> at the top names the place you’ve been most, appearing once anywhere has more than one visit.</p>
 
         <h3>The timeline (phases)</h3>
@@ -3477,6 +3601,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v78', '2026-08-11 · 09:00 UTC', false, 'Places visited — zoom in on the map',
+      'The <b>Places visited</b> map can now <b>zoom</b>, so trips that sit close together stop overlapping into a single blob. Two things changed. <b>(1) It opens already framed on where you’ve been.</b> Instead of always showing the whole globe, the map now <b>fits itself to your pins</b> the moment it opens — so two trips in, say, Scandinavia appear as <b>two separate pins</b> you can actually tell apart and tap, not one dot on top of another. <b>(2) You can zoom and move around freely.</b> There’s a small <b>＋ / − / ⤢ (fit)</b> button stack in the map’s top-right corner — the <b>⤢</b> re-frames everything at any time. You can also <b>pinch on a trackpad</b> (or hold <b>⌘</b> and scroll) to zoom, <b>double-click</b> a spot to zoom in (double-click again once you’re deep in to pop back out to the fitted view), and <b>drag</b> to move around once you’re zoomed in. A plain two-finger <b>scroll still scrolls the page</b> — the map only zooms on a deliberate pinch or ⌘-scroll, so it never traps your scrolling. (Pinch and double-tap work on a phone too.) The pins keep their neat size as you zoom (they don’t balloon), the coastline stays crisp, and a gentle drag never accidentally fires the pin underneath. It’s all still drawn <b>inside the app</b> — fully offline, no outside map service.',
+      'Nearby trips no longer merge into one dot — the map opens framed on your travels and you can zoom right in to separate and tap places that sit close together.'),
     v('v77', '2026-08-10 · 21:30 UTC', false, 'Group by GA / WET — pack one activity at a time',
       'The <b>Group by</b> toolbar on an event gains two new views: <b>GA</b> and <b>WET</b>. Tap <b>GA</b> and the list reorganises so each <b>Goal Activity</b> you packed for — <b>Golf, Hiking, Diving…</b> — becomes its own group, and tapping <b>WET</b> does the same for your <b>Workout / Exercise</b> lists — <b>Swim, Bike, Run…</b>. So you can round up <b>all your golf kit</b>, or <b>everything for your runs</b>, in one place instead of hunting through the whole list. Anything that isn’t specific to that activity — your <b>common base</b>, the <b>transport kit</b>, other activities and items you added by hand — gathers into a tidy <b>“Everything else”</b> group you can collapse out of the way. (Shared gear lives in the base, so each activity group holds the kit that’s special to it.) The two buttons only appear when a trip actually packs for that kind of activity, and — like the other views — your choice is remembered.',
       'Pack activity-by-activity — gather every golf or running item at a glance, so nothing activity-specific gets left behind.'),
