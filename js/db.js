@@ -29,7 +29,7 @@ const EVENTS = 'events';
 const ACTIONS = 'actions';          // standalone to-do store (tied-to-item or loose)
 const LISTS = 'lists';              // legacy v1 store — read once to migrate, then ignored
 // Bump when the built-in seed data changes, to refresh the built-in templates on next load.
-const SEED_VERSION = 15;            // v15: cold-tagged Insulated gloves/beanie + Balaclava in Hiking; v14: cold-tagged Warm gloves/beanie/hat in Travel base (for the Force-pack Cold toggle); v13: storage place on every item; v12: weights on every item; v11: seeded Containers catalogue
+const SEED_VERSION = 16;            // v16: rain-tagged Rain jacket in Hiking; v15: cold-tagged Insulated gloves/beanie + Balaclava in Hiking; v14: cold-tagged Warm gloves/beanie/hat in Travel base (for the Force-pack Cold toggle); v13: storage place on every item; v12: weights on every item; v11: seeded Containers catalogue
 const SEED_KEY = 'ams-seed-version';
 
 function open() {

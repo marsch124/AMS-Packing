@@ -268,6 +268,9 @@ const HIKE = [
   it('Insulated gloves', { sv: 'Isolerade handskar', cat: ADV, con: 'Hiking backpack', we: ['cold'] }),
   it('Insulated beanie', { sv: 'Isolerad mössa', cat: CL, con: 'Hiking backpack', we: ['cold'] }),
   it('Balaclava', { sv: 'Balaklava', cat: CL, con: 'Hiking backpack', we: ['cold'] }),
+  // Packable rain shell tagged for the "Force-pack weather gear · Rain" toggle — a lighter
+  // precautionary layer alongside the full Rain suit (both held back until Rain is forecast/forced).
+  it('Rain jacket', { sv: 'Regnjacka', cat: ADV, con: 'Hiking backpack', we: ['rain'] }),
   it('Rain suit', { sv: 'Regnställ', cat: ADV, con: 'Hiking backpack', we: ['rain'] }),
   it('Extra socks', { sv: 'Extra strumpor', cat: CL, con: 'Hiking backpack' }),
   it('Adventure trousers', { sv: 'Äventyrsbyxor', cat: ADV, con: 'Hiking backpack' }),
@@ -665,7 +668,7 @@ const WEIGHT_RULES = [
   // — Clothing —
   ['sports bra', 80], ['bra', 80], ['underwear', 60], ['boxers', 60], ['compression socks', 60], ['hiking socks', 70], ['running socks', 60], ['socks', 50],
   ['merino wool', 250], ['woolpower', 250], ['base layer', 250], ['fleece top', 350], ['fleece trousers', 400], ['fleece', 350],
-  ['down jacket', 500], ['windbreaker', 350], ['shell garment', 350], ['poncho', 300], ['rain suit', 400], ['jacket', 500],
+  ['down jacket', 500], ['windbreaker', 350], ['shell garment', 350], ['poncho', 300], ['rain suit', 400], ['rain jacket', 300], ['jacket', 500],
   ['vests & t-shirts', 150], ['t-shirt', 150], ['polo', 220], ['adventure shirt', 220], ['shirt', 220], ['sweater', 350],
   ['adventure trousers', 450], ['three-quarter', 250], ['long trousers', 400], ['trousers', 400], ['shorts', 250], ['skirt', 200], ['dress', 300], ['belt', 150],
   ['warm beanie', 90], ['warm hat', 110], ['insulated beanie', 90], ['balaclava', 80],
