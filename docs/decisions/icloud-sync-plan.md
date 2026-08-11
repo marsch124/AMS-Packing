@@ -146,21 +146,47 @@ better fit if sync is going to happen at all — this document only scopes that 
 
 ---
 
-## 9. Open questions — decide before Claude starts building
+## 9. Sharing with another person (e.g. Anna)
+
+**Anna does not need her own Apple Developer account or the $99/year fee.** That
+membership belongs to whoever *builds and owns* the CloudKit container — Martin, in this
+case. Anna only needs what she already has: her own regular, free Apple ID, signed in on
+her device.
+
+How the sharing itself works: CloudKit has a built-in "share with someone" mechanism —
+Apple calls it a **CKShare**, the same thing behind sharing a Notes folder or a Photos
+album with someone. Martin would pick which trips (or all of them) to share, generate an
+invite link, and send it to Anna however he likes (Messages, email, AirDrop). Anna taps
+it, accepts, and from then on that data shows up for her too — synced under Martin's
+container, not copied into a separate one of her own.
+
+A few things worth knowing:
+- **Martin controls permissions** — Anna can be given read/write access (she can also
+  tick things off and edit) or read-only (she can only look).
+- **This is a real, distinct feature**, not something that comes for free with "sync my
+  own devices." Building the invite/accept flow is additional scope beyond Phases 1–3 in
+  §7 — worth planning as its own step once the core sync is working.
+- Accepting a share **from a website** (rather than a native Apple app) has a little more
+  friction than in, say, Notes — similar spirit to the sign-in rough edge in §6, just at
+  the one-time "accept the invite" moment rather than every sign-in.
+
+---
+
+## 10. Open questions — decide before Claude starts building
 
 1. Comfortable with the **$99/year** and doing the **Apple Developer Console** steps
    yourself (Claude will give exact instructions)?
-2. Should this be **just Martin's account**, or should **Anna** see the same trips too?
-   (Sharing between two people is possible in CloudKit but adds scope.)
+2. Should this be **just Martin's account**, or should **Anna** also get shared access?
+   (See §9 — no extra cost for her, but it's additional scope to build.)
 3. OK with the **occasional re-sign-in** on Safari described in §6?
 
 ---
 
-## 10. How to pick this back up
+## 11. How to pick this back up
 
 Martin: when you're back at your computer, just say *"let's continue the iCloud sync
 plan"* (or paste this file back to me) and I'll pick up exactly here — no need to
-re-explain anything. Once you answer the three questions in §9, I'll start on Phase 1.
+re-explain anything. Once you answer the three questions in §10, I'll start on Phase 1.
 
 ## Decision log
 
@@ -169,3 +195,7 @@ re-explain anything. Once you answer the three questions in §9, I'll start on P
 - 2026-08-11 — Clarified: separate CloudKit containers per app (not shared), at no extra
   cost — the $99/year membership covers the whole Apple Developer account. See the note
   under §3, step 2.
+- 2026-08-11 — Clarified: Anna would not need her own developer account to see shared
+  trips — only her own free Apple ID. Sharing works via CloudKit's CKShare mechanism
+  (invite link, Martin sets permissions), which is real additional scope beyond the core
+  sync. See new §9.
