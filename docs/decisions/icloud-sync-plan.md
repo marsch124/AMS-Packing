@@ -55,6 +55,16 @@ Apple account and a payment method, since they're tied to Apple's developer syst
    this; it's a hard requirement.
 2. **Create a CloudKit "container"** in Apple's CloudKit Console (Apple's web dashboard
    for iCloud data) — a few clicks once enrolled.
+
+   > **Multiple apps?** If Martin builds other apps with Claude later, each should get
+   > its **own container** (e.g. `iCloud.com.martinschabbauer.ams-packing`, then a
+   > different name for the next app) — not share one. Apple explicitly allows sharing
+   > one container across apps, but separate containers avoid any chance of two apps'
+   > data types colliding, keep each app's data independent to reset or manage, and cost
+   > nothing extra: the **$99/year Apple Developer membership is account-wide**, not
+   > per-container — create as many as needed at no added cost. Only combine two apps
+   > into one container if they genuinely need to read/write the *same* underlying data.
+
 3. **Register the app's web address** for CloudKit + "Sign in with Apple," and generate
    a small web credential (a key/token pair). Claude gives exact steps; Martin copies a
    couple of values back.
@@ -156,3 +166,6 @@ re-explain anything. Once you answer the three questions in §9, I'll start on P
 
 - 2026-08-11 — Scoped and written up; no decisions finalised yet. Paused at Martin's
   request until he's at his computer.
+- 2026-08-11 — Clarified: separate CloudKit containers per app (not shared), at no extra
+  cost — the $99/year membership covers the whole Apple Developer account. See the note
+  under §3, step 2.
