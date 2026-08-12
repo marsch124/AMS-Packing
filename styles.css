@@ -1,7 +1,7 @@
 /* AMS Packing List — mobile-first styling, light & dark. */
 :root {
-  --brand: #127a8a;
-  --brand-2: #0e6473;
+  --brand: #0a92a6;
+  --brand-2: #077283;
   --brand-ink: #ffffff;
   --bg: #f4f6f7;
   --card: #ffffff;
@@ -69,8 +69,8 @@
 
 /* Templates */
 :root[data-section="care"] {
-  --brand: #0e9aa6;
-  --brand-2: #0b7a84;
+  --brand: #dd7324;
+  --brand-2: #bd5d18;
 }
 
 /* Care & maintenance */
@@ -330,14 +330,15 @@ em {
   border-radius: 10px;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--muted);
+  /* Pick up the section's accent so chrome icons are colour-coded by place. */
+  color: var(--brand);
   cursor: pointer;
   flex: none;
 }
 
 .iconbtn:hover {
-  background: var(--line-2);
-  color: var(--ink);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  color: var(--brand-2);
 }
 
 .iconbtn.sm {
@@ -1086,6 +1087,19 @@ legend {
 .group-h .ph {
   font-weight: 800;
   font-size: 1.02rem;
+}
+
+/* A travel/packing glyph on each group header (category / container / phase). */
+.group-h .grp-ic {
+  flex: none;
+  align-self: center;
+  font-size: 1.08rem;
+  line-height: 1;
+}
+
+.sub .grp-ic {
+  font-size: .95rem;
+  margin-right: 3px;
 }
 
 .group-h .ph-hint {

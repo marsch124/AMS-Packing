@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v79';
+const APP_VERSION = 'v80';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -639,17 +639,43 @@ const IC = {
   star: '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.77 6.8 19.5l.99-5.79-4.21-4.1 5.82-.85Z"/></svg>',
 };
 
-// Weather glyphs, keyed by the symbolic icon keys model.js emits.
+// Weather glyphs, keyed by the symbolic icon keys model.js emits. Colours are
+// baked in (not currentColor) so the sky reads at a glance — chosen to stay legible
+// on both light and dark chips: gold sun, slate clouds, blue rain, cyan snow, amber bolt.
 const WIC = {
-  sun: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>',
-  'sun-cloud': '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8a4 4 0 0 1 7.5-1.5"/><path d="M4 6.5l-.9-.9M8 3v1M12.5 5.5l.9-.9M2.5 10h1"/><path d="M7 18h10a3 3 0 0 0 0-6 4 4 0 0 0-7.7-1.3A3.2 3.2 0 0 0 7 18Z"/></svg>',
-  cloud: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 10 3.5 3.5 0 0 0 7 18Z"/></svg>',
-  fog: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9h11a3 3 0 0 0-5.7-1.3A3.4 3.4 0 0 0 6 9Z"/><path d="M4 13h13M6 16h12M8 19h9"/></svg>',
-  rain: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 6 3.5 3.5 0 0 0 7 14Z"/><path d="M8 18l-1 2M12 18l-1 2M16 18l-1 2"/></svg>',
-  snow: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 13h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 5 3.5 3.5 0 0 0 7 13Z"/><path d="M8 17h.01M12 19h.01M16 17h.01M10 20h.01M14 20h.01"/></svg>',
-  storm: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 13h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 5 3.5 3.5 0 0 0 7 13Z"/><path d="M13 14l-3 4h3l-1 3"/></svg>',
+  sun: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4" fill="#f9b62a" stroke="#f5a623"/><g stroke="#f5a623"><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></g></svg>',
+  'sun-cloud': '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g stroke="#f5a623"><path d="M7 8a4 4 0 0 1 7.5-1.5"/><path d="M4 6.5l-.9-.9M8 3v1M12.5 5.5l.9-.9M2.5 10h1"/></g><path d="M7 18h10a3 3 0 0 0 0-6 4 4 0 0 0-7.7-1.3A3.2 3.2 0 0 0 7 18Z" stroke="#8b98a8"/></svg>',
+  cloud: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 10 3.5 3.5 0 0 0 7 18Z" stroke="#8b98a8"/></svg>',
+  fog: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><g stroke="#a0aab5"><path d="M6 9h11a3 3 0 0 0-5.7-1.3A3.4 3.4 0 0 0 6 9Z"/><path d="M4 13h13M6 16h12M8 19h9"/></g></svg>',
+  rain: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 6 3.5 3.5 0 0 0 7 14Z" stroke="#8b98a8"/><g stroke="#3b82f6" stroke-width="2"><path d="M8 18l-1 2M12 18l-1 2M16 18l-1 2"/></g></svg>',
+  snow: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 13h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 5 3.5 3.5 0 0 0 7 13Z" stroke="#8b98a8"/><g stroke="#38bdf8" stroke-width="2.3"><path d="M8 17h.01M12 19h.01M16 17h.01M10 20h.01M14 20h.01"/></g></svg>',
+  storm: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 13h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 5 3.5 3.5 0 0 0 7 13Z" stroke="#7f8b99"/><path d="M13 14l-3 4h3l-1 3" fill="#f59e0b" stroke="#f59e0b"/></svg>',
 };
 const wIcon = (key) => WIC[key] || WIC.cloud;
+
+// Travel/packing glyphs for the packing-list group headers. Keyed by the exact
+// category / container / phase label so one lookup covers every group-by mode.
+const CATEGORY_ICON = {
+  'Clothing': '👕', 'Adventure clothing': '🧥', 'Footwear': '👟', 'Sport gear': '🎽',
+  'Food & drink': '🥨', 'Toiletries': '🧴', 'Pharmacy / meds': '💊', 'Electronics': '🔌',
+  'Documents & money': '🛂', 'Charging': '🔋', 'Comfort & misc': '🧸', 'Reminders': '🔔',
+};
+const CONTAINER_ICON = {
+  'Toiletry bag': '👝', 'Carry-on / hand luggage': '💼', 'Checked luggage': '🧳',
+  'Hiking backpack': '🎒', 'Climbing backpack': '🧗', 'Golf bag': '⛳', 'Triathlon bag': '🚴',
+  'Swim bag': '🏊', 'Duffel bag': '👜', 'Day pack': '🥾', 'Bellroy backpack': '🎒',
+  'Tech pouch': '🔌', 'Electronics bag': '💻', 'Cool box': '🧊', 'Handbag': '👛',
+  'RV storage box': '📦', 'Other': '📦',
+};
+const PHASE_ICON = {
+  'Preparations': '📋', '≥1 week ahead': '🗓️', 'Day before (stage / move to RV)': '📦',
+  'Morning list': '🌅', 'At the front door': '🚪', 'Wear / carry on the day': '🚶',
+  'After / recovery': '🛁',
+};
+// The glyph for a group/sub header, matched by its label across all three maps.
+function groupIcon(label) {
+  return CATEGORY_ICON[label] || CONTAINER_ICON[label] || PHASE_ICON[label] || '';
+}
 
 // ---------- small render helpers ----------
 function chip(text) { return `<span class="chip">${esc(text)}</span>`; }
@@ -1694,6 +1720,7 @@ function renderTotalBody(body, ev) {
     const sec = h(`<div class="group${collapsed ? ' collapsed' : ''}">
       <div class="group-h clickable" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}">
         <span class="group-caret" aria-hidden="true">▾</span>
+        ${groupIcon(g.label) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(g.label)}</span>` : ''}
         <span class="ph">${esc(g.label)}</span>
         ${g.hint ? `<span class="ph-hint">${esc(g.hint)}</span>` : ''}
         <span class="group-count">${done}/${g.entries.length}</span>
@@ -1704,7 +1731,7 @@ function renderTotalBody(body, ev) {
     const subs = subOf(g.entries);
     const showSub = subs.length > 1; // only show sub-headers when they actually split the group
     for (const s of subs) {
-      if (showSub) gb.appendChild(h(`<div class="sub">${esc(s.label)}</div>`));
+      if (showSub) gb.appendChild(h(`<div class="sub">${groupIcon(s.label) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(s.label)}</span>` : ''}${esc(s.label)}</div>`));
       for (const entry of s.entries) gb.appendChild(entryRow(ev, entry, body));
     }
     const head = $('.group-h', sec);
@@ -2092,7 +2119,7 @@ async function renderPackMode(eventId) {
     const stepper = h(`<div class="pack-stepper">
       <button class="iconbtn" data-nav="prev" ${packState.idx === 0 ? 'disabled' : ''} aria-label="Previous phase">${IC.back}</button>
       <div class="pack-phase">
-        <div class="pack-phase-t">${esc(step.phase.label)}</div>
+        <div class="pack-phase-t">${groupIcon(step.phase.label) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(step.phase.label)}</span> ` : ''}${esc(step.phase.label)}</div>
         <div class="pack-phase-n">Phase ${packState.idx + 1} of ${steps.length} · ${step.remaining} of ${step.total} left</div>
       </div>
       <button class="iconbtn" data-nav="next" ${packState.idx >= steps.length - 1 ? 'disabled' : ''} aria-label="Next phase">${IC.fwd}</button>
@@ -2106,7 +2133,7 @@ async function renderPackMode(eventId) {
     for (const cg of groupByContainer(step.entries)) {
       const items = cg.entries.filter((e) => packState.showPacked || !e.checked);
       if (!items.length) continue;
-      if (cg.container) listEl.appendChild(h(`<div class="sub">${esc(cg.container)}</div>`));
+      if (cg.container) listEl.appendChild(h(`<div class="sub">${groupIcon(cg.container) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(cg.container)}</span>` : ''}${esc(cg.container)}</div>`));
       for (const entry of items) { listEl.appendChild(packRow(ev, entry, draw)); shown++; }
     }
     if (step.remaining === 0) listEl.appendChild(h(`<div class="pack-phase-done">${IC.check}<span>${esc(step.phase.label)} — all packed</span></div>`));
@@ -3614,6 +3641,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v80', '2026-08-12 · 09:00 UTC', false, 'Icons that travel — colour on the weather, glyphs on every group',
+      'A visual refresh so the app reads more like travel and packing, and its colours pop. <b>(1) The weather is now in colour.</b> The forecast strip and the little temperature chip up top show a <b>gold sun</b>, <b>slate clouds</b>, <b>blue rain</b>, <b>cyan snow</b> and an <b>amber lightning bolt</b> — so a glance tells you the sky, instead of everything being the same grey. <b>(2) Every packing-list group now has a glyph.</b> Whichever way you <b>Group by</b> — When, Where (your bags) or Category — each heading gets a small travel/packing icon: 👕 Clothing, 👟 Footwear, 🔌 Electronics, 🧳 Checked luggage, 🎒 Hiking backpack, 🌅 Morning, 🚪 At the front door, and so on. The same glyphs show in <b>Packing Mode</b>. It makes the list far quicker to scan by shape and colour. <b>(3) The interface icons pick up each area’s colour.</b> The little back/edit/settings icons now take on the <b>section’s accent</b> — teal on Care… actually, see the next point — so the app feels colour-coded by where you are. <b>(4) The two flat teals now pop.</b> The overall <b>brand teal</b> is brighter and cleaner, and the <b>Care</b> area moves from a dull teal to a warm <b>amber</b> — a classic teal-and-amber travel pairing that gives the app some warmth. <b>(5) The Home tab is now a suitcase</b>, so the very first icon says “trip”. Nothing about how the app works changed — it’s purely how it looks.',
+      'The app looks the part now — the weather reads at a glance in real colour, every list group carries a travel glyph you can scan by, and the palette finally pops.'),
     v('v79', '2026-08-11 · 18:00 UTC', false, 'Force-pack weather gear — a “just in case” switch per trip',
       'A new way to <b>deliberately pack weather gear</b>, even when the forecast (or the season) says you won’t need it. Open a trip’s settings and you’ll find a new <b>Force-pack weather gear</b> box, right under <b>Time of year</b>, with a tick for <b>Rain / Cold / Heat / Wind / Snow</b>. Tick one and <b>every item you’ve tagged for that condition is pulled straight into the packing list</b> — no destination, no forecast, no internet needed. This is the switch you wanted for the classic cases: heading <b>high into the mountains on a summer trip</b>, so you <b>force in your cold-weather kit</b> (gloves, hat, warm layers) even though it’s July; or packing a <b>rain layer as a precaution</b> on a trip the forecast calls dry. It works hand-in-hand with the existing weather tags: an item still needs to be <b>tagged</b> (in its editor, under <b>Weather</b>) as Rain / Cold / etc. to be eligible — this new toggle just decides whether that tagged gear is <b>held back for the forecast</b> (the default) or <b>forced in for this particular trip</b>. Your choices show up in the <b>✨ Trip setup</b> recap at the top of the event, and editing them and re-saving regenerates the list. Leave every box unticked and nothing changes — weather gear stays held back until a fetched forecast asks for it, exactly as before. To get you started, ready-tagged cold items now come built in: <b>Warm gloves</b>, <b>Warm beanie</b> and <b>Warm hat</b> in your <b>Travel</b> base list, plus <b>Insulated gloves</b>, <b>Insulated beanie</b>, a <b>Balaclava</b> and a packable <b>Rain jacket</b> in your <b>Hiking</b> list (so forcing Cold or Rain works even on a quick hiking activity with no base). All are already marked for <b>Cold</b>, so ticking <b>Cold</b> on a summer trip pulls them straight in with nothing to set up; tag your own gear the same way in any item’s <b>Weather</b> box. <em>(This refreshes the built-in starter templates, so any tweak you’d made to a built-in list is reset to the seed — your own templates are untouched.)</em>',
       'Pack for conditions you know are coming even when the forecast can’t see them yet — force your cold-weather or rain gear into a specific trip in one tick, whatever the season or the weather report.'),
