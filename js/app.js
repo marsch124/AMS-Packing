@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v80';
+const APP_VERSION = 'v81';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -3641,6 +3641,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v81', '2026-08-12 · 10:00 UTC', false, 'Each page heading now wears its tab’s colour',
+      'A small polish: the <b>heading at the top of each tab</b> now takes on that section’s <b>accent colour</b>, instead of being plain black everywhere. So <b>“AMS Packing List”</b> on <b>Home</b> is <b>blue</b>, <b>Events</b> is <b>green</b>, <b>Templates</b> is <b>purple</b>, <b>Care</b> is <b>amber</b>, <b>Actions</b> is <b>red</b> and <b>Settings</b> is <b>grey</b> — matching the lit tab in the bottom bar. It makes it instantly obvious which section you’re in. Purely visual; nothing about how the app works changed.',
+      'You can tell which tab you’re on at a glance — the page title and the highlighted tab now share the same colour.'),
     v('v80', '2026-08-12 · 09:00 UTC', false, 'Icons that travel — colour on the weather, glyphs on every group',
       'A visual refresh so the app reads more like travel and packing, and its colours pop. <b>(1) The weather is now in colour.</b> The forecast strip and the little temperature chip up top show a <b>gold sun</b>, <b>slate clouds</b>, <b>blue rain</b>, <b>cyan snow</b> and an <b>amber lightning bolt</b> — so a glance tells you the sky, instead of everything being the same grey. <b>(2) Every packing-list group now has a glyph.</b> Whichever way you <b>Group by</b> — When, Where (your bags) or Category — each heading gets a small travel/packing icon: 👕 Clothing, 👟 Footwear, 🔌 Electronics, 🧳 Checked luggage, 🎒 Hiking backpack, 🌅 Morning, 🚪 At the front door, and so on. The same glyphs show in <b>Packing Mode</b>. It makes the list far quicker to scan by shape and colour. <b>(3) The interface icons pick up each area’s colour.</b> The little back/edit/settings icons now take on the <b>section’s accent</b> — teal on Care… actually, see the next point — so the app feels colour-coded by where you are. <b>(4) The two flat teals now pop.</b> The overall <b>brand teal</b> is brighter and cleaner, and the <b>Care</b> area moves from a dull teal to a warm <b>amber</b> — a classic teal-and-amber travel pairing that gives the app some warmth. <b>(5) The Home tab is now a suitcase</b>, so the very first icon says “trip”. Nothing about how the app works changed — it’s purely how it looks.',
       'The app looks the part now — the weather reads at a glance in real colour, every list group carries a travel glyph you can scan by, and the palette finally pops.'),
