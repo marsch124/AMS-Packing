@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v81';
+const APP_VERSION = 'v82';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -3641,6 +3641,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v82', '2026-08-12 · 20:00 UTC', false, 'Updates now arrive reliably on iPhone',
+      'A behind-the-scenes fix: previously, after publishing an update, your phone could keep running an old cached copy of the app even after fully quitting and reopening it — because the piece of code responsible for checking for updates was itself being cached, so it never noticed anything had changed. The update-check now includes the version number directly in its own request, which forces your phone to always fetch the latest copy. From now on, a normal quit-and-reopen after publishing is enough to get the newest version.',
+      'You can trust that closing and reopening the app after an update actually gets you the new version, every time — no more repeated force-quitting or wondering if something worked.'),
     v('v81', '2026-08-12 · 10:00 UTC', false, 'Each page heading now wears its tab’s colour',
       'A small polish: the <b>heading at the top of each tab</b> now takes on that section’s <b>accent colour</b>, instead of being plain black everywhere. So <b>“AMS Packing List”</b> on <b>Home</b> is <b>blue</b>, <b>Events</b> is <b>green</b>, <b>Templates</b> is <b>purple</b>, <b>Care</b> is <b>amber</b>, <b>Actions</b> is <b>red</b> and <b>Settings</b> is <b>grey</b> — matching the lit tab in the bottom bar. It makes it instantly obvious which section you’re in. Purely visual; nothing about how the app works changed.',
       'You can tell which tab you’re on at a glance — the page title and the highlighted tab now share the same colour.'),
@@ -4549,6 +4552,6 @@ window.addEventListener('hashchange', render);
   // app subtree and re-evaluate the accent mode whenever the DOM changes.
   new MutationObserver(applyMode).observe(app, { childList: true, subtree: true });
   if ('serviceWorker' in navigator) {
-    try { await navigator.serviceWorker.register('./service-worker.js'); } catch { /* offline still works via cache on next load */ }
+    try { await navigator.serviceWorker.register('./service-worker.js?v=' + APP_VERSION); } catch { /* offline still works via cache on next load */ }
   }
 })();
