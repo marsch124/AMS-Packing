@@ -178,6 +178,10 @@ em {
 
 .topbar h1 {
   flex: 1;
+  /* The page heading takes its section's accent, so each tab's title fits its
+     colour — "AMS Packing List" blue on Home, Events green, Care amber, etc. */
+  color: var(--brand);
+  letter-spacing: -.01em;
 }
 
 .section-h {
