@@ -1,6 +1,6 @@
 // service-worker.js — offline app shell caching.
 // Bump CACHE when you change any of the cached files to force an update.
-const CACHE = 'ams-packing-list-v89';
+const CACHE = 'ams-packing-list-v91';
 const ASSETS = [
   './',
   './index.html',

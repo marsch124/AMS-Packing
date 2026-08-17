@@ -22,7 +22,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v89';
+const APP_VERSION = 'v91';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -156,6 +156,35 @@ function snapshotWhen(iso) {
   if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
   return new Date(iso).toLocaleDateString();
 }
+
+// --- Diagnostics: a tiny on-device log of errors, so a glitch on the phone can be
+// seen (and copied for a fix) instead of vanishing. Newest-first, capped, and it
+// only ever holds error text the app itself produced. ---
+const DIAG_KEY = 'ams-diagnostics';
+const DIAG_MAX = 30;
+function loadDiag() {
+  try { const raw = localStorage.getItem(DIAG_KEY); if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) return a; } } catch { /* ignore */ }
+  return [];
+}
+function logDiag(context, err) {
+  try {
+    const entry = {
+      t: new Date().toISOString(),
+      ctx: String(context || ''),
+      msg: String((err && err.message) || err || 'Unknown error').slice(0, 300),
+      stack: err && err.stack ? String(err.stack).split('\n').slice(0, 4).join(' | ').slice(0, 500) : '',
+    };
+    localStorage.setItem(DIAG_KEY, JSON.stringify([entry, ...loadDiag()].slice(0, DIAG_MAX)));
+  } catch { /* never let logging break anything */ }
+}
+function clearDiag() { try { localStorage.removeItem(DIAG_KEY); } catch { /* ignore */ } }
+function diagAsText() {
+  return loadDiag().map((e) => `[${e.t}] (${e.ctx}) ${e.msg}${e.stack ? `\n    ${e.stack}` : ''}`).join('\n\n')
+    || 'No errors logged.';
+}
+// Catch anything uncaught, app-wide.
+window.addEventListener('error', (e) => logDiag('window', (e && e.error) || (e && e.message)));
+window.addEventListener('unhandledrejection', (e) => logDiag('promise', e && e.reason));
 function loadStorageLocs() {
   try {
     const raw = localStorage.getItem(STORAGE_LOC_KEY);
@@ -644,6 +673,7 @@ async function saveGuard(promise) {
   try { await promise; return true; }
   catch (err) {
     console.error('AMS Packing List: save failed', err);
+    logDiag('save', err);
     const quota = err && (err.name === 'QuotaExceededError' || /quota|exceeded/i.test(String((err && err.message) || err)));
     alert(quota
       ? 'This device is out of storage. Export a backup, remove some old events, and try again.'
@@ -3845,6 +3875,12 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v91', '2026-08-17 · 21:00 UTC', false, 'Diagnostics — see what went wrong',
+      'A quiet safety-and-support feature: the app now keeps a small, private <b>Diagnostics</b> log of any errors it runs into, <b>on your device</b>. Find it at the bottom of <b>Settings → Diagnostics</b>. If something ever misbehaves — a screen fails to load, a save doesn’t go through — the details are recorded there instead of vanishing, so you (or I) can see the real cause rather than guessing. You can <b>Copy log</b> to share it, or <b>Clear</b> it any time, and it shows “all healthy” when there’s nothing to report. The log never leaves your device unless you copy and send it yourself. Most of the time you’ll never need it — it’s there for the rare occasion when you do.',
+      'If the app ever hiccups on your phone, there’s now a real record of what happened — easy to copy and share for a quick fix, instead of an error that disappears.'),
+    v('v90', '2026-08-17 · 20:00 UTC', false, 'The app tells you when an update is ready',
+      'No more wondering whether you’re on the latest version. When a new version has been published and your device has quietly fetched it in the background, a small <b>“🎉 A new version is ready”</b> bar now slides up above the tab bar with an <b>Update now</b> button — one tap reloads straight into the new version. It only appears for a genuine update (never on a first install), and it never reloads on its own, so it won’t interrupt you mid-pack. The app checks for a new version when it opens and again each time you switch back to it. Combined with the little <b>version marker</b> in the bottom-right corner, you can always tell exactly which version you’re running and update the moment a new one lands.',
+      'Publishing an update now reaches you reliably: reopen the app, tap “Update now” when the bar appears, and you’re current — no guessing, no repeated force-quitting.'),
     v('v89', '2026-08-17 · 19:00 UTC', false, 'A more polished, satisfying feel',
       'A visual and tactile polish across the app. <b>(1) Boarding-pass trip cards:</b> your events on Home and the Events tab now look like travel tickets — a coloured stub down the side, the trip name with its <b>destination and length</b> beneath, a <b>countdown badge</b> (highlighted when the trip is within a week), the day’s <b>weather glyph</b> when a forecast has been fetched, and a slim progress rail along the bottom that reads <b>✓ Packed</b> once you’re done. <b>(2) Colour-coded packing rows:</b> every item on a packing list now carries a small <b>dot in its category’s colour</b> — clothing, electronics, toiletries and so on each get their own hue — so a long list is far quicker to scan by eye. <b>(3) Satisfying packing:</b> ticking an item gives a little <b>pop</b> and a gentle <b>haptic tap</b> (on phones that support it), the readiness ring now fills in <b>live</b> as you tick (it previously only refreshed on reopening), and finishing a trip gives the ring a small celebratory <b>bounce</b>. All the motion respects your device’s “reduce motion” setting. Nothing about how packing works changed — it just feels nicer to use.',
       'The app is more pleasant to look at and to use: trips read like tickets at a glance, lists scan by colour, and packing each thing off gives a small, satisfying bit of feedback.'),
@@ -4425,6 +4461,36 @@ async function renderSettings() {
   wrap.appendChild(howtoCard());
   wrap.appendChild(versionHistoryCard());
 
+  // Diagnostics — a private on-device error log for troubleshooting.
+  const diag = loadDiag();
+  const diagCard = h(`<div class="card block">
+    <details class="diag">
+      <summary><span class="howto-h">Diagnostics</span><span class="howto-sum">${diag.length ? `${diag.length} logged issue${diag.length === 1 ? '' : 's'} — for troubleshooting` : 'No issues logged — all healthy'}</span></summary>
+      <div class="diag-body">
+        <p class="muted">A private log of any errors the app ran into, kept <b>on this device</b> so a glitch can be diagnosed. Nothing here leaves your device unless you copy it and share it yourself.</p>
+        <div class="btnrow">
+          <button class="btn" data-diag="copy"${diag.length ? '' : ' disabled'}>Copy log</button>
+          <button class="btn" data-diag="clear"${diag.length ? '' : ' disabled'}>Clear</button>
+        </div>
+        <pre class="diag-log">${esc(diagAsText())}</pre>
+      </div>
+    </details>
+  </div>`);
+  wrap.appendChild(diagCard);
+  diagCard.addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-diag]')?.dataset.diag;
+    if (!act) return;
+    if (act === 'copy') {
+      const text = diagAsText();
+      try { await navigator.clipboard.writeText(text); alert('Diagnostics copied to the clipboard.'); }
+      catch { alert('Could not copy automatically — the log is shown below; select and copy it.'); }
+    } else if (act === 'clear') {
+      if (!confirm('Clear the diagnostics log?')) return;
+      clearDiag();
+      render();
+    }
+  });
+
   const about = h(`<div class="card block">
     <h2>About</h2>
     <p class="muted">AMS Packing List — a private, offline packing-list builder. Combine reusable templates into one Packing List per event, organised by when to pack and where it goes.</p>
@@ -4897,8 +4963,9 @@ async function render() {
     window.scrollTo(0, 0);
   } catch (err) {
     console.error('AMS Packing List: render failed', err);
+    logDiag(`render ${location.hash || '#/'}`, err);
     app.innerHTML = '';
-    app.appendChild(h(`<section class="screen"><div class="empty"><p class="empty-t">Something went wrong</p><p class="empty-s">${esc(err.message || err)}</p></div></section>`));
+    app.appendChild(h(`<section class="screen"><div class="empty"><p class="empty-t">Something went wrong</p><p class="empty-s">${esc(err.message || err)}</p><p class="empty-s muted">The details were saved to Settings → Diagnostics.</p></div></section>`));
   } finally { rendering = false; }
 }
 
@@ -4930,6 +4997,39 @@ function applyMode() {
 
 window.addEventListener('hashchange', render);
 
+// When a newer published version installs in the background, offer a one-tap
+// refresh instead of silently leaving the app on the old copy. We only prompt on
+// an actual UPDATE (a controller already exists — not the very first install),
+// and never auto-reload; the user taps when they're ready.
+let updateToastShown = false;
+function showUpdateToast() {
+  if (updateToastShown) return;
+  updateToastShown = true;
+  const toast = h(`<div class="update-toast" role="status">
+    <span class="ut-txt">🎉 A new version is ready</span>
+    <button type="button" class="ut-btn">Update now</button>
+  </div>`);
+  toast.querySelector('.ut-btn').addEventListener('click', () => location.reload());
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('in'));
+}
+function watchForUpdate(reg) {
+  if (!reg) return;
+  const offer = (worker) => {
+    if (!worker) return;
+    worker.addEventListener('statechange', () => {
+      if (worker.state === 'installed' && navigator.serviceWorker.controller) showUpdateToast();
+    });
+  };
+  if (reg.waiting && navigator.serviceWorker.controller) showUpdateToast();
+  reg.addEventListener('updatefound', () => offer(reg.installing));
+  // Check for a new version now, and again whenever the app returns to the fore.
+  reg.update().catch(() => {});
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') reg.update().catch(() => {});
+  });
+}
+
 (async function init() {
   // Show the build version in the tab-bar corner marker.
   const verEl = document.querySelector('[data-app-version]');
@@ -4947,6 +5047,9 @@ window.addEventListener('hashchange', render);
   // app subtree and re-evaluate the accent mode whenever the DOM changes.
   new MutationObserver(applyMode).observe(app, { childList: true, subtree: true });
   if ('serviceWorker' in navigator) {
-    try { await navigator.serviceWorker.register('./service-worker.js?v=' + APP_VERSION); } catch { /* offline still works via cache on next load */ }
+    try {
+      const reg = await navigator.serviceWorker.register('./service-worker.js?v=' + APP_VERSION);
+      watchForUpdate(reg);
+    } catch { /* offline still works via cache on next load */ }
   }
 })();
