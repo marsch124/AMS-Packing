@@ -85,6 +85,19 @@
   --brand-2: #475569;
 }
 
+/* Fixed per-section colours, always available (unlike --brand, which only holds
+   the *current* section). Used so every tab in the bottom bar can wear its own
+   colour even when it isn't the active tab. Keep these in sync with the
+   --brand values above. */
+:root {
+  --sec-home: #2f6fe0;
+  --sec-events: #2f9e63;
+  --sec-templates: #7c5cd6;
+  --sec-care: #dd7324;
+  --sec-actions: #dc3d43;
+  --sec-settings: #64748b;
+}
+
 /* Settings */
 /* Ease the recolour when moving between sections rather than snapping. */
 .btn,
@@ -1759,6 +1772,20 @@ legend {
   width: 24px;
   height: 24px;
   transition: stroke-width .18s ease;
+}
+
+/* Each tab wears its own section's colour, even when it isn't the active tab —
+   so the whole bar reads as a colourful set rather than one lit tab among greys.
+   A soft tinted pill sits behind every icon; the active tab fills it solid. */
+.tabbar a[href="#/"] { color: var(--sec-home); }
+.tabbar a[href="#/events"] { color: var(--sec-events); }
+.tabbar a[href="#/lists"] { color: var(--sec-templates); }
+.tabbar a[href="#/maintenance"] { color: var(--sec-care); }
+.tabbar a[href="#/actions"] { color: var(--sec-actions); }
+.tabbar a[href="#/settings"] { color: var(--sec-settings); }
+
+.tabbar a .ico {
+  background: color-mix(in srgb, currentColor 14%, transparent);
 }
 
 /* Active tab: filled brand pill behind the icon + a bold, saturated label. */

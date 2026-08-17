@@ -21,7 +21,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v82';
+const APP_VERSION = 'v83';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -3641,6 +3641,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v83', '2026-08-12 · 21:00 UTC', false, 'The whole tab bar is in colour now',
+      'A visual lift for the bottom navigation. Before, only the <b>active</b> tab showed colour and the rest were grey. Now <b>every tab wears its own section’s colour all the time</b> — <b>Home</b> blue, <b>Events</b> green, <b>Templates</b> purple, <b>Care</b> amber, <b>Actions</b> red, <b>Settings</b> grey — each with a soft tinted circle behind its icon. The tab you’re currently on still stands out clearly: its circle fills in solid and its label goes bold. It makes the bar (and the Home screen) look brighter and more finished, and each tab is easier to pick out at a glance by colour. Purely visual; nothing about how the app works changed.',
+      'The navigation bar looks much nicer — every tab is colour-coded and instantly recognisable, while the one you’re on is still obvious at a glance.'),
     v('v82', '2026-08-12 · 20:00 UTC', false, 'Updates now arrive reliably on iPhone',
       'A behind-the-scenes fix: previously, after publishing an update, your phone could keep running an old cached copy of the app even after fully quitting and reopening it — because the piece of code responsible for checking for updates was itself being cached, so it never noticed anything had changed. The update-check now includes the version number directly in its own request, which forces your phone to always fetch the latest copy. From now on, a normal quit-and-reopen after publishing is enough to get the newest version.',
       'You can trust that closing and reopening the app after an update actually gets you the new version, every time — no more repeated force-quitting or wondering if something worked.'),
