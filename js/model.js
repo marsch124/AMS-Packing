@@ -1680,6 +1680,29 @@ export function buildCatalog(lists) {
   return { items, memberships, templates };
 }
 
+// Count the meaningful contents of a backup / snapshot payload ({ lists, events,
+// actions }). Powers the restore preview ("383 items · 14 templates · 5 trips")
+// and the "would this shrink my data?" guard. `items` is the count of UNIQUE
+// catalog items (merged by name), i.e. real things, not per-template copies.
+export function backupCounts(payload = {}) {
+  const lists = asArray(payload.lists);
+  const events = asArray(payload.events);
+  const actions = asArray(payload.actions);
+  let items = 0;
+  try { items = buildCatalog(lists).items.length; } catch { items = 0; }
+  return { items, templates: lists.length, events: events.length, actions: actions.length };
+}
+
+// Is `next` meaningfully smaller than `prev`? Used to warn before a REPLACE that
+// would wipe most of the data, and to protect the richest snapshot from eviction.
+// True when next drops to under half of prev's items, or empties a non-empty set.
+export function backupShrinks(prev = {}, next = {}) {
+  const p = prev.items || 0, n = next.items || 0;
+  if (p === 0) return false;                 // nothing to lose
+  if (n === 0) return true;                   // going to empty
+  return n < p * 0.5;                         // lost more than half the catalog
+}
+
 // ============================================================================
 // DATABASE OVERVIEW ("maintenance mode") — one line per real item, across all
 // templates, with duplicate surfacing. Pure so it can be unit-tested; the UI

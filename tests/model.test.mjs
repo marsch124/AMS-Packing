@@ -17,6 +17,7 @@ import {
   containerNames, containerLimits, groupByStorage,
   catalogRows, dupeKey, duplicateGroups, duplicateIds,
   coerceGeo, eventCoords, eventsNeedingCoords, placesVisited, tripPath, mostVisited,
+  backupCounts, backupShrinks,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1420,4 +1421,31 @@ test('mostVisited: the top place, but only when somewhere beats a single visit',
   ]));
   assert.equal(top.place, 'Beta, X');
   assert.equal(top.events.length, 2);
+});
+
+// ---- Backup counts + shrink guard (data-safety hardening) ----
+
+test('backupCounts: empty payload is all zeros', () => {
+  const c = backupCounts({});
+  assert.deepEqual(c, { items: 0, templates: 0, events: 0, actions: 0 });
+});
+
+test('backupCounts: counts unique catalog items, templates, events, actions', () => {
+  const lists = seedLists();
+  const c = backupCounts({ lists, events: [newEvent({ name: 'A' }), newEvent({ name: 'B' })], actions: [{ id: 'x' }] });
+  assert.equal(c.templates, lists.length);
+  assert.equal(c.events, 2);
+  assert.equal(c.actions, 1);
+  assert.ok(c.items > 0, 'seed has catalog items');
+  // Unique items <= total per-template copies (merge-by-name collapses duplicates).
+  const totalCopies = lists.reduce((n, l) => n + (l.items || []).length, 0);
+  assert.ok(c.items <= totalCopies);
+});
+
+test('backupShrinks: flags a replace that loses more than half the catalog', () => {
+  assert.equal(backupShrinks({ items: 383 }, { items: 380 }), false); // small drop is fine
+  assert.equal(backupShrinks({ items: 383 }, { items: 100 }), true);  // lost most of it
+  assert.equal(backupShrinks({ items: 383 }, { items: 0 }), true);    // going to empty
+  assert.equal(backupShrinks({ items: 0 }, { items: 0 }), false);     // nothing to lose
+  assert.equal(backupShrinks({ items: 0 }, { items: 5 }), false);     // growing is fine
 });

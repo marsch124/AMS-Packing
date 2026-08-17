@@ -12,6 +12,7 @@ import {
   maintenanceList, maintenanceSummary, maintenanceByDate, logMaintenance, addDays, daysBetween,
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
   catalogRows, duplicateGroups, duplicateIds,
+  backupCounts, backupShrinks,
 } from './model.js';
 import * as db from './db.js';
 import * as weather from './weather.js';
@@ -21,7 +22,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v83';
+const APP_VERSION = 'v85';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -118,6 +119,42 @@ function shouldRemindBackup(events) {
   if (backupNudgeSnoozed()) return false;
   const d = daysSinceBackup();
   return d === null || d >= BACKUP_STALE_DAYS;
+}
+
+// A plain-language one-liner for a set of backup counts ({items,templates,events,actions}).
+function countsSummary(c) {
+  if (!c) return '';
+  const parts = [
+    `${c.items} item${c.items === 1 ? '' : 's'}`,
+    `${c.templates} template${c.templates === 1 ? '' : 's'}`,
+    `${c.events} trip${c.events === 1 ? '' : 's'}`,
+  ];
+  if (c.actions) parts.push(`${c.actions} to-do${c.actions === 1 ? '' : 's'}`);
+  return parts.join(' · ');
+}
+// Best-effort on-device storage used, for the data card. '' when unavailable.
+async function storageUsedLabel() {
+  try {
+    const e = navigator.storage && navigator.storage.estimate ? await navigator.storage.estimate() : null;
+    const n = e && e.usage ? e.usage : 0;
+    if (!n) return '';
+    const mb = n / 1048576;
+    return mb >= 1 ? `${mb.toFixed(mb >= 10 ? 0 : 1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+  } catch { return ''; }
+}
+// Friendly label + relative age for an automatic snapshot.
+const SNAPSHOT_REASONS = { auto: 'Automatic', 'before-restore': 'Before a restore', manual: 'Saved by you' };
+function snapshotWhen(iso) {
+  const t = new Date(iso).getTime();
+  if (!t) return '';
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
+  return new Date(iso).toLocaleDateString();
 }
 function loadStorageLocs() {
   try {
@@ -1359,16 +1396,10 @@ async function renderEvent(eventId) {
   });
   wrap.appendChild(topbar);
 
-  const dToGo = daysUntil(ev.startDate);
-  const countChip = dToGo != null ? `<span class="chip count">🗓 ${esc(countdownLabel(dToGo))}</span>` : '';
-  const dw = deriveWeather(ev);
-  const tempChip = dw ? `<span class="chip count">${wIcon(dw.days[0].icon)} ${esc(dw.rangeLabel)}</span>` : '';
-  wrap.appendChild(h(`<div class="ev-summary">
-    <div class="chips">${countChip}${tempChip}</div>
-    <div class="bar big"><span style="width:${p.pct}%"></span></div>
-    <div class="ev-prog">${p.done}/${p.total} packed · ${p.pct}%</div>
-    ${p.total ? `<a class="btn primary lg pack-cta" href="#/event/${ev.id}/pack">${IC.bag}<span>${p.done >= p.total ? 'All packed ✓' : p.done ? 'Continue packing' : 'Start packing'}</span></a>` : ''}
-  </div>`));
+  const openTodos = (await db.getActions()).filter((a) => !a.done).length;
+  const summary = h('<div class="ev-summary"></div>');
+  summary.appendChild(readinessDashboard(ev, openTodos));
+  wrap.appendChild(summary);
 
   wrap.appendChild(tripSetupCard(ev));
 
@@ -1543,6 +1574,55 @@ function tripSetupCard(ev) {
       ${blocks.join('')}
     </div>
   </details>`);
+}
+
+// A glanceable "trip readiness" hero for the top of the event screen: a packed
+// progress ring plus the three numbers you check before a trip — days to go,
+// packed weight (flagged if a bag is over its limit) and open to-dos. Every value
+// is composed from data the app already computes; it's presentation, not new state.
+function readinessDashboard(ev, openTodos = 0) {
+  const p = progress(ev.entries);
+  const f = packingFlags(ev.entries, ev.nights);
+  const overBags = bagLoads(ev.entries, ev.nights, containerLimits(ALL_LISTS || [])).filter((b) => b.over).length;
+
+  // Days to go — a big value plus a short label, "soon" when it's within a week.
+  const d = daysUntil(ev.startDate);
+  let daysVal, daysLbl, daysState = '';
+  if (d == null) { daysVal = '—'; daysLbl = 'no date set'; }
+  else if (d > 1) { daysVal = String(d); daysLbl = 'days to go'; if (d <= 7) daysState = 'soon'; }
+  else if (d === 1) { daysVal = '1'; daysLbl = 'day to go'; daysState = 'soon'; }
+  else if (d === 0) { daysVal = 'Today'; daysLbl = 'departure'; daysState = 'soon'; }
+  else { daysVal = String(-d); daysLbl = `day${d === -1 ? '' : 's'} ago`; }
+
+  // Packed weight — flagged when any bag is over its limit.
+  let wtVal, wtLbl, wtState = '';
+  if (f.totalKg > 0) {
+    wtVal = `${f.totalKg}<small>kg</small>`;
+    if (overBags) { wtLbl = `${overBags} bag${overBags === 1 ? '' : 's'} over`; wtState = 'over'; }
+    else wtLbl = f.weighed < f.total ? `${f.weighed}/${f.total} weighed` : 'packed weight';
+  } else { wtVal = '—'; wtLbl = 'no weights yet'; }
+
+  // Open to-dos (across the app), matching the Home nudge — links to the Actions tab.
+  const todoVal = openTodos > 0 ? String(openTodos) : '✓';
+  const todoLbl = openTodos > 0 ? `open to-do${openTodos === 1 ? '' : 's'}` : 'all clear';
+
+  const pct = p.pct;
+  return h(`<div class="readiness">
+    <div class="rd-main">
+      <div class="rd-ring${pct >= 100 ? ' done' : ''}" style="--pct:${pct}" role="img" aria-label="${pct}% packed">
+        <div class="rd-ring-in">
+          <span class="rd-ring-num">${pct}<small>%</small></span>
+          <span class="rd-ring-cap">${p.done}/${p.total}</span>
+        </div>
+      </div>
+      <div class="rd-side">
+        <div class="rd-stat ${daysState}"><span class="rd-val">${daysVal}</span><span class="rd-lbl">${daysLbl}</span></div>
+        <div class="rd-stat ${wtState}"><span class="rd-val">${wtVal}</span><span class="rd-lbl">${wtLbl}</span></div>
+        <a class="rd-stat rd-link" href="#/actions"><span class="rd-val">${todoVal}</span><span class="rd-lbl">${todoLbl}</span></a>
+      </div>
+    </div>
+    ${p.total ? `<a class="btn primary lg pack-cta" href="#/event/${ev.id}/pack">${IC.bag}<span>${p.done >= p.total ? 'All packed ✓' : p.done ? 'Continue packing' : 'Start packing'}</span></a>` : ''}
+  </div>`);
 }
 
 // A collapsible "Bags & weight" panel: per-bag weight vs airline limit, plus liquids/battery counts.
@@ -3621,6 +3701,7 @@ function howtoCard() {
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
         <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Export backup (JSON)</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. The app remembers your last backup and gives a gentle <b>💾</b> reminder on the Home screen when it’s been a while. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
+        <p><b>Automatic backups.</b> On top of the file backups, the app quietly keeps recent <b>copies of your data on this device</b> — about one a day, and always one <b>just before any restore</b> — so a mistaken edit, an accidental delete or a wrong import is easy to undo. They’re in <b>Settings → Your data → Automatic backups</b>, each labelled with when it was taken and what it holds; tap <b>Restore</b> on any copy, or <b>Save a copy now</b> whenever you like. This safety net is careful never to record an empty database over real data and never to clear your richest copy. And when you tap <b>Import backup</b>, the app now <b>shows exactly what’s in the file</b> — items, templates, trips, photos and the date — before changing anything, warning you first if a Replace would wipe most of your data. These on-device copies protect against mistakes; a saved backup <b>file</b> is still your insurance against losing the device itself.</p>
 
         <h3>Maintenance mode — the whole-database overview</h3>
         <p>At the top of <b>Settings</b>, <b>🗂️ Maintenance mode — database overview</b> opens a single <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the quickest way to keep everything current without hopping between templates. Each row shows the <b>item</b> (with its category and any Swedish wording), <b>which templates it belongs to</b> (tap a template name to jump there), its <b>flags</b> — <b>⚡</b> charging (and the plug type), <b>💧</b> liquid, <b>⚠️</b> restricted, <b>🌙</b> per-night, <b>⭐</b> short list, <b>🧰</b> care, <b>📷</b> photo, <b>🚫</b> not in use — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. <b>Search</b> by item, template or storage; use the same <b>category chips</b> from the Care tab to narrow; and <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. The page also <b>finds probable duplicates</b> — same or very similar names (e.g. “Sunglasses” and “Sun glasses”) — listing them in a <b>⚠️ Possible duplicates</b> panel and highlighting them in the table; it never merges anything for you, so you can open each and rename or remove as you see fit. <b>Export (Excel)</b> saves the whole overview as a spreadsheet for review on a computer.</p>
@@ -3641,6 +3722,12 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v85', '2026-08-17 · 12:00 UTC', false, 'A trip-readiness dashboard at the top of every trip',
+      'Opening a trip now greets you with a clean <b>readiness hero</b> instead of a plain progress bar: a big <b>packed-progress ring</b> (filling up as you tick items, turning green at 100%) sitting beside three at-a-glance tiles — <b>days to go</b> (highlighted when the trip is within a week), <b>packed weight</b> (which turns red and calls it out if a bag is over its limit), and your <b>open to-dos</b> (tap to jump to the Actions tab). It’s the same information the app already tracked, now surfaced the moment you open a trip so you can see where things stand in a single glance. The <b>Start / Continue packing</b> button sits right underneath as before. Nothing about how packing works changed — this is purely a clearer, nicer summary.',
+      'You see exactly how ready a trip is the instant you open it — how much is packed, how long you’ve got, whether a bag is overweight and what’s still on your to-do list — without hunting through the screen.'),
+    v('v84', '2026-08-17 · 10:00 UTC', false, 'Automatic backups — a safety net you don’t have to think about',
+      'Your data lives <b>only on this device</b>, so this release adds a quiet safety net. <b>(1) Automatic on-device backups:</b> the app now keeps recent full copies of everything (about one a day, and always one <b>just before any restore</b>), so a mistaken edit, an accidental delete or a wrong import is easy to undo. Find them in <b>Settings → Your data → Automatic backups</b>, each labelled with when it was taken and what it holds (“383 items · 14 templates · 5 trips”); tap <b>Restore</b> on any of them, or <b>Save a copy now</b> any time. It’s built to be safe even from itself — it will never record an empty database over your real data, and it always protects the richest copy from being cleared. <b>(2) A clear preview before importing:</b> choosing <b>Import backup</b> now first shows exactly what’s in the file — items, templates, trips, photos and the date it was saved — before anything is changed, and if a <b>Replace</b> would wipe most of your data it warns you loudly (and still saves a copy of your current data first). <b>(3) Your data at a glance:</b> the Your-data card now shows how much you have and the space it uses. Nothing about packing changed — this is all about never losing your work.',
+      'A mistake or a bad import is no longer scary: the app keeps recent copies of your data by itself, shows you exactly what any backup contains before it touches anything, and always keeps a copy before a restore — so your work is genuinely hard to lose.'),
     v('v83', '2026-08-12 · 21:00 UTC', false, 'The whole tab bar is in colour now',
       'A visual lift for the bottom navigation. Before, only the <b>active</b> tab showed colour and the rest were grey. Now <b>every tab wears its own section’s colour all the time</b> — <b>Home</b> blue, <b>Events</b> green, <b>Templates</b> purple, <b>Care</b> amber, <b>Actions</b> red, <b>Settings</b> grey — each with a soft tinted circle behind its icon. The tab you’re currently on still stands out clearly: its circle fills in solid and its label goes bold. It makes the bar (and the Home screen) look brighter and more finished, and each tab is easier to pick out at a glance by colour. Purely visual; nothing about how the app works changed.',
       'The navigation bar looks much nicer — every tab is colour-coded and instantly recognisable, while the one you’re on is still obvious at a glance.'),
@@ -4025,6 +4112,9 @@ async function renderSettings() {
   wrap.appendChild(h('<div class="topbar"><h1>Settings</h1></div>'));
 
   const protectedNow = await storageProtected();
+  const [curCounts, usedLabel, snapshots] = await Promise.all([
+    db.currentCounts(), storageUsedLabel(), db.listSnapshots(),
+  ]);
   const dsb = daysSinceBackup();
   const backupStatus = dsb === null
     ? '<b class="warn-txt">No backup saved yet</b> — export one and keep it somewhere safe (Files / iCloud Drive).'
@@ -4043,6 +4133,7 @@ async function renderSettings() {
   const card = h(`<div class="card block">
     <h2>Your data</h2>
     <p class="muted">Everything is stored <b>on this device only</b> — nothing is uploaded. Because it lives in the browser, a saved backup file is your real safety net.</p>
+    <p class="data-status">📦 <b>${esc(countsSummary(curCounts))}</b>${usedLabel ? ` · ${esc(usedLabel)} used` : ''}</p>
     <p class="data-status">${protectStatus}</p>
     <p class="data-status">${backupStatus}</p>
     <div class="btnrow">
@@ -4053,6 +4144,57 @@ async function renderSettings() {
     <input type="file" accept="application/json,.json" hidden>
   </div>`);
   wrap.appendChild(card);
+
+  // Automatic on-device safety net — the app keeps recent full copies here.
+  const snapCard = h(`<div class="card block">
+    <h2>Automatic backups</h2>
+    <p class="muted">The app quietly keeps recent copies of your data <b>on this device</b>, so a mistaken edit, delete or import is easy to undo. A copy is also taken automatically <b>before</b> any restore. These live on this device — a saved backup <b>file</b> is still your insurance against losing the device itself.</p>
+    <div class="snap-list" data-snaps></div>
+    <div class="btnrow"><button class="btn" data-snap="save">${IC.plus}<span>Save a copy now</span></button></div>
+  </div>`);
+  wrap.appendChild(snapCard);
+  const drawSnaps = (list) => {
+    const box = snapCard.querySelector('[data-snaps]');
+    if (!list.length) { box.innerHTML = '<p class="muted">No automatic backups yet — one is saved as you use the app (about once a day).</p>'; return; }
+    box.innerHTML = list.map((s) => `<div class="snap-row">
+      <span class="snap-info">
+        <b class="snap-when">${esc(snapshotWhen(s.createdAt))}</b>
+        <span class="snap-sub">${esc(SNAPSHOT_REASONS[s.reason] || 'Backup')} · ${esc(countsSummary(s.counts))}</span>
+      </span>
+      <span class="snap-acts">
+        <button type="button" class="btn sm" data-snap-restore="${esc(s.id)}">Restore</button>
+        <button type="button" class="iconbtn sm" data-snap-del="${esc(s.id)}" aria-label="Delete this backup" title="Delete">${IC.trash}</button>
+      </span></div>`).join('');
+  };
+  drawSnaps(snapshots);
+  snapCard.addEventListener('click', async (e) => {
+    const save = e.target.closest('[data-snap="save"]');
+    const restore = e.target.closest('[data-snap-restore]');
+    const del = e.target.closest('[data-snap-del]');
+    if (save) {
+      const snap = await db.saveSnapshot({ reason: 'manual', prefs: collectPrefs(), force: true });
+      drawSnaps(await db.listSnapshots());
+      if (snap) alert(`Saved a copy: ${countsSummary(snap.counts)}.`);
+    } else if (restore) {
+      const id = restore.dataset.snapRestore;
+      const snap = (await db.listSnapshots()).find((s) => s.id === id);
+      if (!snap) { alert('That backup is no longer available.'); drawSnaps(await db.listSnapshots()); return; }
+      const cur = await db.currentCounts();
+      let warn = `Restore this backup?\n\n  ${countsSummary(snap.counts)}\n  (${snapshotWhen(snap.createdAt)})\n\nThis REPLACES everything currently in the app. Your current data (${countsSummary(cur)}) is saved as a fresh automatic backup first, so this is undoable.`;
+      if (!confirm(warn)) return;
+      try {
+        const res = await db.restoreSnapshot(id);
+        if (res.prefs) applyPrefs(res.prefs);
+        alert(`Restored: ${countsSummary(res.counts)}.`);
+        render();
+      } catch (err) { alert(err.message || 'Could not restore that backup.'); }
+    } else if (del) {
+      const id = del.dataset.snapDel;
+      if (!confirm('Delete this automatic backup? This only removes this on-device copy.')) return;
+      await db.deleteSnapshot(id);
+      drawSnaps(await db.listSnapshots());
+    }
+  });
 
   const trips = h(`<div class="card block">
     <h2>Shared trips</h2>
@@ -4139,11 +4281,29 @@ async function renderSettings() {
   file.addEventListener('change', async () => {
     const f = file.files[0]; if (!f) return;
     const text = await f.text();
-    const merge = confirm('Import as a MERGE (keep existing data)? Cancel = replace everything.');
     try {
+      // 1) Validate + read the file WITHOUT touching the database, and show what's inside.
+      const info = db.inspectBackup(text);
+      const when = info.exportedAt ? new Date(info.exportedAt).toLocaleDateString() : 'an unknown date';
+      const contents = `This backup contains:\n\n  • ${info.counts.items} items\n  • ${info.counts.templates} templates\n  • ${info.counts.events} trips`
+        + (info.counts.actions ? `\n  • ${info.counts.actions} to-dos` : '')
+        + (info.photos ? `\n  • ${info.photos} photos` : '')
+        + `\n\nExported: ${when}\n\nContinue?`;
+      if (!confirm(contents)) { file.value = ''; return; }
+      // 2) Merge vs replace.
+      const merge = confirm('Import as a MERGE — keep your current data too?\n\nOK = Merge   ·   Cancel = REPLACE everything with this backup.');
+      // 3) Guard a shrinking replace: warn loudly if it would wipe most of the data.
+      if (!merge) {
+        const cur = await db.currentCounts();
+        if (backupShrinks(cur, info.counts)
+          && !confirm(`⚠️  This REPLACES your current data\n( ${countsSummary(cur)} )\nwith a much smaller backup\n( ${countsSummary(info.counts)} ).\n\nYour current data is saved as an automatic backup first, so it's undoable — but continue only if you're sure.\n\nReplace anyway?`)) {
+          file.value = ''; return;
+        }
+      }
       const res = await db.importJSON(text, { merge });
       if (res.prefs) applyPrefs(res.prefs); // restore storage places / theme / view too
-      alert(`Imported ${res.lists} list(s) and ${res.events} event(s).`);
+      alert(`Imported ${res.lists} template(s) and ${res.events} trip(s)${res.actions ? ` and ${res.actions} to-do(s)` : ''}.`
+        + (merge ? '' : '\n\nYour previous data was saved under Settings → Automatic backups, in case you want it back.'));
       render();
     } catch (err) { alert(err.message || 'Could not import that file.'); }
     file.value = '';
@@ -4550,6 +4710,9 @@ window.addEventListener('hashchange', render);
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
   await db.ensureSeeded();
   ensurePersistentStorage(); // ask the browser to protect our data (non-blocking)
+  // Quietly keep an automatic on-device backup (roughly one a day), so a bad edit
+  // or accidental delete is always recoverable. Non-blocking and self-guarded.
+  db.maybeAutoSnapshot(collectPrefs()).catch(() => {});
   await render();
   // Item editors open via partial re-renders (not the router), so watch the
   // app subtree and re-evaluate the accent mode whenever the DOM changes.

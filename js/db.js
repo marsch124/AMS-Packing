@@ -16,18 +16,20 @@
 import {
   coerceList, coerceEvent, coerceItem, coerceMembership, coerceAction, normName,
   resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
-  buildTripBundle, parseTripBundle, sortEventsForList,
+  buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
 } from './model.js';
 import { seedLists } from './seed.js';
 
 const DB_NAME = 'ams-packing-list';
-const DB_VERSION = 3;               // v3: adds the `actions` store (to-dos); v2: relational stores
+const DB_VERSION = 4;               // v4: adds the `snapshots` store (automatic safety-net backups); v3: `actions`; v2: relational stores
 const ITEMS = 'items';
 const MEMBERSHIPS = 'memberships';
 const TEMPLATES = 'templates';
 const EVENTS = 'events';
 const ACTIONS = 'actions';          // standalone to-do store (tied-to-item or loose)
+const SNAPSHOTS = 'snapshots';      // automatic on-device backup snapshots (a ring buffer)
 const LISTS = 'lists';              // legacy v1 store — read once to migrate, then ignored
+const MAX_SNAPSHOTS = 8;            // how many automatic snapshots to keep (plus the richest is never evicted)
 // Bump when the built-in seed data changes, to refresh the built-in templates on next load.
 const SEED_VERSION = 16;            // v16: rain-tagged Rain jacket in Hiking; v15: cold-tagged Insulated gloves/beanie + Balaclava in Hiking; v14: cold-tagged Warm gloves/beanie/hat in Travel base (for the Force-pack Cold toggle); v13: storage place on every item; v12: weights on every item; v11: seeded Containers catalogue
 const SEED_KEY = 'ams-seed-version';
@@ -44,6 +46,7 @@ function open() {
       if (!db.objectStoreNames.contains(MEMBERSHIPS)) db.createObjectStore(MEMBERSHIPS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(TEMPLATES)) db.createObjectStore(TEMPLATES, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(ACTIONS)) db.createObjectStore(ACTIONS, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(SNAPSHOTS)) db.createObjectStore(SNAPSHOTS, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -321,36 +324,164 @@ export async function exportJSON(extra = {}) {
   );
 }
 
-export async function importJSON(text, { merge = false } = {}) {
-  const data = JSON.parse(text);
-  if (!data || typeof data !== 'object' || (!Array.isArray(data.lists) && !Array.isArray(data.events))) {
-    throw new Error('This file does not look like an AMS Packing List backup.');
-  }
+// Does a parsed object look like one of our backups? (Has lists or events.)
+function looksLikeBackup(data) {
+  return !!data && typeof data === 'object' && (Array.isArray(data.lists) || Array.isArray(data.events));
+}
+
+// Parse + validate a backup file WITHOUT touching the database, and report what's
+// inside — so the UI can show "383 items · 14 templates · 5 trips (exported …)"
+// and warn before a shrinking restore. Throws on anything that isn't a backup.
+export function inspectBackup(text) {
+  let data;
+  try { data = JSON.parse(text); }
+  catch { throw new Error('That file isn’t readable as a backup (not valid JSON).'); }
+  if (!looksLikeBackup(data)) throw new Error('This file does not look like an AMS Packing List backup.');
   const lists = Array.isArray(data.lists) ? data.lists.map(coerceList) : [];
   const events = Array.isArray(data.events) ? data.events.map(coerceEvent) : [];
   const actions = Array.isArray(data.actions) ? data.actions.map(coerceAction) : [];
+  const prefs = (data.prefs && typeof data.prefs === 'object') ? data.prefs : null;
+  let photos = 0;
+  for (const l of lists) for (const it of (l.items || [])) photos += (it.photos || []).length;
+  return {
+    counts: backupCounts({ lists, events, actions }),
+    exportedAt: typeof data.exportedAt === 'string' ? data.exportedAt : '',
+    photos,
+    data: { lists, events, actions, prefs },
+  };
+}
+
+// Live counts of what's currently stored, for the "you'd be replacing …" guard.
+export async function currentCounts() {
+  const [items, tmpls, events, actions] = await Promise.all([
+    getAllRaw(ITEMS), getAllRaw(TEMPLATES), getAllRaw(EVENTS), getAllRaw(ACTIONS),
+  ]);
+  return { items: (items || []).length, templates: (tmpls || []).length, events: (events || []).length, actions: (actions || []).length };
+}
+
+// Write an already-parsed backup payload into the stores. Shared by file import
+// and snapshot restore. Never called without the caller having taken (or chosen
+// to skip) a safety snapshot first.
+async function applyBackup({ lists = [], events = [], actions = [] }, { merge = false } = {}) {
+  const L = lists.map(coerceList);
+  const E = events.map(coerceEvent);
+  const A = actions.map(coerceAction);
   if (!merge) {
-    // Replace: rebuild the catalog from the imported lists in one shot.
-    await replaceCatalog(buildCatalog(lists));
+    await replaceCatalog(buildCatalog(L));
     const db = await open();
     const tx = db.transaction([EVENTS, ACTIONS], 'readwrite');
     tx.objectStore(EVENTS).clear();
-    for (const e of events) tx.objectStore(EVENTS).put(e);
+    for (const e of E) tx.objectStore(EVENTS).put(e);
     tx.objectStore(ACTIONS).clear();
-    for (const a of actions) tx.objectStore(ACTIONS).put(a);
+    for (const a of A) tx.objectStore(ACTIONS).put(a);
     await txP(tx);
   } else {
-    // Merge: decompose each imported list into the existing catalog, add events + actions.
-    for (const l of lists) await saveList(l);
-    if (events.length || actions.length) {
+    for (const l of L) await saveList(l);
+    if (E.length || A.length) {
       const db = await open();
       const tx = db.transaction([EVENTS, ACTIONS], 'readwrite');
-      for (const e of events) tx.objectStore(EVENTS).put(e);
-      for (const a of actions) tx.objectStore(ACTIONS).put(a);
+      for (const e of E) tx.objectStore(EVENTS).put(e);
+      for (const a of A) tx.objectStore(ACTIONS).put(a);
       await txP(tx);
     }
   }
-  return { lists: lists.length, events: events.length, actions: actions.length, prefs: (data.prefs && typeof data.prefs === 'object') ? data.prefs : null };
+  return { lists: L.length, events: E.length, actions: A.length };
+}
+
+export async function importJSON(text, { merge = false } = {}) {
+  const info = inspectBackup(text);
+  // A REPLACE overwrites everything — capture the current state as a safety
+  // snapshot FIRST, so an unwanted import is always undoable.
+  if (!merge) await saveSnapshot({ reason: 'before-restore', force: true }).catch(() => {});
+  const res = await applyBackup(info.data, { merge });
+  return { ...res, prefs: info.data.prefs };
+}
+
+// --- Automatic on-device snapshots (a self-healing safety net) ---
+// The app quietly keeps the last few full copies of your data here, so a bad edit,
+// an accidental delete or a mistaken import is always recoverable. Everything below
+// is written to be safe even from itself (see the guards on saveSnapshot):
+//   • it NEVER records an empty database over your real data;
+//   • it keeps the newest MAX_SNAPSHOTS, but the single richest snapshot (the
+//     "anchor") is never evicted, so a run of tiny snapshots can't push it out;
+//   • it tolerates storage limits — on a quota error it prunes and retries, and
+//     if it still can't save it skips silently rather than breaking anything.
+
+async function snapshotData(prefs) {
+  const [lists, events, actions] = await Promise.all([getLists(), getEvents(), getActions()]);
+  return { lists, events, actions, prefs: prefs || null };
+}
+
+export async function listSnapshots() {
+  const raw = await getAllRaw(SNAPSHOTS);
+  return (raw || []).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+export async function newestSnapshotAt() {
+  const all = await listSnapshots();
+  return all.length ? all[0].createdAt : '';
+}
+
+// Prune to survivors: the newest MAX_SNAPSHOTS by time, always UNION the richest
+// (most catalog items; newest wins ties) so the best copy is protected.
+function chooseSnapshotSurvivors(all) {
+  if (all.length <= MAX_SNAPSHOTS) return new Set(all.map((s) => s.id));
+  const byTime = [...all].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  const keep = new Set(byTime.slice(0, MAX_SNAPSHOTS).map((s) => s.id));
+  let anchor = all[0];
+  for (const s of all) {
+    const si = (s.counts && s.counts.items) || 0, ai = (anchor.counts && anchor.counts.items) || 0;
+    if (si > ai || (si === ai && String(s.createdAt) > String(anchor.createdAt))) anchor = s;
+  }
+  keep.add(anchor.id);
+  return keep;
+}
+
+export async function saveSnapshot({ reason = 'auto', prefs = null, force = false } = {}) {
+  const data = await snapshotData(prefs);
+  const counts = backupCounts(data);
+  // Never record "nothing" over real data — the classic safety-net-that-hurts bug.
+  if (!force && counts.items === 0 && counts.events === 0) return null;
+  const snap = {
+    id: `snap-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    createdAt: new Date().toISOString(), reason, counts, data,
+  };
+  const existing = await listSnapshots();
+  const keep = chooseSnapshotSurvivors([...existing, snap]);
+  const dels = existing.filter((s) => !keep.has(s.id)).map((s) => ({ store: SNAPSHOTS, key: s.id }));
+  try {
+    await writeBatch([{ store: SNAPSHOTS, value: snap }], dels);
+  } catch (err) {
+    // Out of room? Drop the oldest non-anchor snapshots and try once more; if it
+    // still fails, give up quietly — a failed snapshot must never break the app.
+    try {
+      const anchorKeep = chooseSnapshotSurvivors([snap]); // keep only the new one
+      await writeBatch([{ store: SNAPSHOTS, value: snap }], existing.filter((s) => !anchorKeep.has(s.id)).map((s) => ({ store: SNAPSHOTS, key: s.id })));
+    } catch { return null; }
+  }
+  return snap;
+}
+
+// Take an automatic snapshot only if the newest is older than ~20h, so ordinary
+// use produces roughly one snapshot a day rather than one per launch.
+export async function maybeAutoSnapshot(prefs = null) {
+  const newest = await newestSnapshotAt();
+  if (newest) {
+    const ageMs = Date.now() - new Date(newest).getTime();
+    if (ageMs >= 0 && ageMs < 20 * 3600 * 1000) return null;
+  }
+  return saveSnapshot({ reason: 'auto', prefs });
+}
+
+export function deleteSnapshot(id) { return delOne(SNAPSHOTS, id); }
+
+// Restore a snapshot, capturing the current state as a fresh safety snapshot first
+// (so a restore is itself undoable). Returns its counts + saved prefs.
+export async function restoreSnapshot(id) {
+  const snap = await getOneRaw(SNAPSHOTS, id);
+  if (!snap || !snap.data) throw new Error('That backup is no longer available.');
+  await saveSnapshot({ reason: 'before-restore', force: true }).catch(() => {});
+  await applyBackup(snap.data, { merge: false });
+  return { counts: snap.counts, prefs: snap.data.prefs || null };
 }
 
 // --- Trip sharing (one event, backend-free) ---
