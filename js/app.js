@@ -4,7 +4,7 @@ import {
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
-  effectiveQty, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
+  effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
   deriveWeather, weatherSuggestions, weatherGear, WEATHER_CONDITIONS,
   placesVisited, eventsNeedingCoords, coerceGeo, tripPath, mostVisited,
@@ -12,7 +12,7 @@ import {
   maintenanceList, maintenanceSummary, maintenanceByDate, logMaintenance, addDays, daysBetween,
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
   catalogRows, duplicateGroups, duplicateIds,
-  backupCounts, backupShrinks,
+  backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
 } from './model.js';
 import * as db from './db.js';
 import * as weather from './weather.js';
@@ -22,7 +22,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v85';
+const APP_VERSION = 'v87';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1174,7 +1174,15 @@ function eventForm(ev, lists, isEdit) {
   const transportHint = transportsWithKit.length
     ? ` Choosing <b>${esc(transportsWithKit.join(' / '))}</b> also adds that transport’s own kit${transportsWithKit.includes('RV') ? ' (the full motorhome list)' : ''}.`
     : '';
+  // On the Home builder (not the edit screen), offer any saved presets to fill
+  // the form in one tap.
+  const presets = !isEdit ? loadPresets() : [];
+  const presetBar = presets.length ? `<div class="preset-bar" data-preset-bar>
+    <span class="preset-lbl">⚡ Start from a preset</span>
+    <div class="preset-chips">${presets.map((p) => `<button type="button" class="preset-chip" data-preset="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div>
+  </div>` : '';
   form.innerHTML = `
+    ${presetBar}
     <fieldset class="mode-pick"><legend>List type</legend>${radioRow('mode', [
     { value: 'trip', label: '🧳 Full trip' },
     { value: 'quick', label: '⏱️ Quick activity' },
@@ -1190,6 +1198,8 @@ function eventForm(ev, lists, isEdit) {
         <input type="date" name="endDate" value="${esc(endVal)}" min="${esc(ev.startDate || '')}"></label>
     </div>
     <p class="nights-hint muted" data-nights-hint></p>
+    <label class="field-check"><input type="checkbox" name="laundry"${ev.laundry ? ' checked' : ''}>
+      <span class="fc-txt"><b>🧺 Laundry available on this trip</b><em>Caps per-night items (socks, underwear, tees) at ${LAUNDRY_CAP_NIGHTS} rather than one per night, so a long trip doesn’t demand a dozen. Short trips are unaffected.</em></span></label>
     <label class="field"><span>Destination <em>(optional — for weather)</em></span>
       <input name="destination" value="${esc(ev.destination)}" placeholder="e.g. Chamonix" autocomplete="off"></label>
 
@@ -1236,6 +1246,16 @@ function eventForm(ev, lists, isEdit) {
     if (t.name === 'mode') syncMode();
   });
   syncMode();
+
+  // Preset chips (Home builder): fill the whole form from a saved recipe.
+  form.querySelector('[data-preset-bar]')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-preset]');
+    if (!btn) return;
+    const preset = loadPresets().find((p) => p.id === btn.dataset.preset);
+    if (!preset) return;
+    applyPresetToForm(form, preset.config);
+    form.querySelectorAll('.preset-chip').forEach((c) => c.classList.toggle('applied', c === btn));
+  });
 
   // Live nights readout: the trip length is derived from start -> end, and still
   // shown explicitly because it drives per-night quantities.
@@ -1287,6 +1307,7 @@ function eventForm(ev, lists, isEdit) {
     ev.season = fd.get('season') || 'Summer';
     ev.catering = fd.get('catering') || 'mixed';
     ev.nights = nightsBetween(ev.startDate, ev.endDate) || 0;  // derived from start -> end date
+    ev.laundry = !!fd.get('laundry');
     ev.contexts = fd.getAll('contexts');
     ev.weatherOn = fd.getAll('weatherOn');
     ev.activities = fd.getAll('activities');
@@ -1428,6 +1449,7 @@ async function renderEvent(eventId) {
     <div class="spacer"></div>
     <button class="btn ghost" data-act="add">${IC.plus}<span>Item</span></button>
     <button class="btn ghost" data-act="regen">${IC.refresh}<span>Regenerate</span></button>
+    <button class="btn ghost" data-act="preset">${IC.star || '⭐'}<span>Save as preset</span></button>
     <button class="btn ghost" data-act="review">${IC.check}<span>Trip review</span></button>
     <button class="btn ghost" data-act="share">${IC.share}<span>Share</span></button>
     <button class="btn ghost" data-act="xlsx">${IC.sheet}<span>Excel</span></button>
@@ -1493,6 +1515,13 @@ async function renderEvent(eventId) {
       const lists = await db.getLists();
       ev.entries = regenerateEntries(ev, lists);
       if (await saveGuard(db.saveEvent(ev))) render();
+    } else if (act === 'preset') {
+      const name = (prompt('Save this trip’s setup (its activities + conditions, not its dates or packed items) as a preset you can reuse for a similar trip.\n\nPreset name:', ev.name || '') || '').trim();
+      if (!name) return;
+      if (loadPresets().some((p) => p.name.toLowerCase() === name.toLowerCase())
+        && !confirm(`A preset called “${name}” already exists. Replace it?`)) return;
+      addPreset(name, ev);
+      alert(`Saved “${name}” as a preset.\n\nStart a new trip from it on the Home screen — look for “⚡ Start from a preset”.`);
     } else if (act === 'review') { location.assign(`#/event/${ev.id}/review`); }
     else if (act === 'share') { shareTrip(ev); }
     else if (act === 'xlsx') { exportEventXlsx(ev); }
@@ -1528,6 +1557,7 @@ function tripSetupCard(ev) {
     tile('🗓', 'Dates', `${esc(prettyRange(ev.startDate, endVal))}${sub}`);
   }
   if (ev.destination) tile('📍', 'Destination', esc(ev.destination));
+  if (ev.laundry) tile('🧺', 'Laundry', ev.nights > LAUNDRY_CAP_NIGHTS ? `Yes · per-night capped at ${LAUNDRY_CAP_NIGHTS}` : 'Yes');
   if (!quick && ev.transport) tile(TRANSPORT_EMOJI[ev.transport] || '🧭', 'Transport', esc(ev.transport));
   if (ev.season) tile(SEASON_EMOJI[ev.season] || '📅', 'Time of year', esc(ev.season));
   if (!quick && ev.catering) tile(CATERING_EMOJI[ev.catering] || '🍴', 'Catering', esc(cateringLabel(ev.catering)));
@@ -1582,8 +1612,9 @@ function tripSetupCard(ev) {
 // is composed from data the app already computes; it's presentation, not new state.
 function readinessDashboard(ev, openTodos = 0) {
   const p = progress(ev.entries);
-  const f = packingFlags(ev.entries, ev.nights);
-  const overBags = bagLoads(ev.entries, ev.nights, containerLimits(ALL_LISTS || [])).filter((b) => b.over).length;
+  const qn = qtyNights(ev);
+  const f = packingFlags(ev.entries, qn);
+  const overBags = bagLoads(ev.entries, qn, containerLimits(ALL_LISTS || [])).filter((b) => b.over).length;
 
   // Days to go — a big value plus a short label, "soon" when it's within a week.
   const d = daysUntil(ev.startDate);
@@ -1627,14 +1658,16 @@ function readinessDashboard(ev, openTodos = 0) {
 
 // A collapsible "Bags & weight" panel: per-bag weight vs airline limit, plus liquids/battery counts.
 function logisticsSummary(ev) {
-  const f = packingFlags(ev.entries, ev.nights);
-  const loads = bagLoads(ev.entries, ev.nights, containerLimits(ALL_LISTS || [])).filter((b) => b.grams > 0 || b.limitKg > 0);
+  const qn = qtyNights(ev);
+  const f = packingFlags(ev.entries, qn);
+  const loads = bagLoads(ev.entries, qn, containerLimits(ALL_LISTS || [])).filter((b) => b.grams > 0 || b.limitKg > 0);
   const overBags = loads.filter((b) => b.over);
   const bits = [];
   if (f.totalKg > 0) bits.push(`${f.totalKg} kg`);
   if (f.liquids) bits.push(`💧 ${f.liquids} liquid`);
   if (f.restricted) bits.push(`⚠️ ${f.restricted} restricted`);
   if (ev.nights) bits.push(`${ev.nights} night${ev.nights === 1 ? '' : 's'}`);
+  if (ev.laundry && ev.nights > LAUNDRY_CAP_NIGHTS) bits.push('🧺 laundry');
   const head = bits.length ? bits.join(' · ') : 'Add weights & flags to items to track bag loads';
 
   const det = h(`<details class="logi"${overBags.length ? ' open' : ''}>
@@ -1836,7 +1869,7 @@ function formatGrams(g) { return g >= 1000 ? `${Math.round(g / 100) / 10} kg` : 
 // weight shown, so the heavy things to reconsider are right at the top. Unweighed
 // items fall to the bottom under their own sub-header.
 function renderHeaviest(body, ev, entries) {
-  const g = (e) => entryGrams(e, ev.nights);
+  const g = (e) => entryGrams(e, qtyNights(ev));
   const weighed = entries.filter((e) => g(e) > 0).sort((a, b) => g(b) - g(a) || a.name.localeCompare(b.name));
   const unweighed = entries.filter((e) => g(e) <= 0).sort((a, b) => a.name.localeCompare(b.name));
   const totalG = weighed.reduce((s, e) => s + g(e), 0);
@@ -1871,12 +1904,15 @@ function entryRow(ev, entry, body, showWeight = false) {
     + `${entry.liquid ? '<span class="badge liquid" title="Liquid / 100 ml rule">💧</span>' : ''}`
     + `${entry.restricted ? '<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">⚠️</span>' : ''}`
     + `${isRem ? '<span class="badge rem">reminder</span>' : ''}`;
-  // Scaled quantity: per-night items show × trip nights; otherwise the explicit qty.
-  const eq = effectiveQty(entry, ev.nights);
-  const qtyLabel = isRem ? '' : (entry.perNight && ev.nights ? ` <em title="scaled to ${ev.nights} nights">×${eq}</em>` : (entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''));
+  // Scaled quantity: per-night items show × trip nights (capped when laundry is on);
+  // otherwise the explicit qty.
+  const qn = qtyNights(ev);
+  const eq = effectiveQty(entry, qn);
+  const qtyTitle = ev.laundry && ev.nights > LAUNDRY_CAP_NIGHTS ? `capped to ${qn} with laundry (trip is ${ev.nights} nights)` : `scaled to ${ev.nights} nights`;
+  const qtyLabel = isRem ? '' : (entry.perNight && ev.nights ? ` <em title="${esc(qtyTitle)}">×${eq}${ev.laundry && ev.nights > LAUNDRY_CAP_NIGHTS ? ' 🧺' : ''}</em>` : (entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''));
   const subItems = (entry.sub && entry.sub.length) ? `<span class="e-subitems">${entry.sub.map(esc).join(' · ')}</span>` : '';
   // In "Heaviest first" view, show each item's weight (— when none recorded).
-  const g = showWeight ? entryGrams(entry, ev.nights) : 0;
+  const g = showWeight ? entryGrams(entry, qn) : 0;
   const weightPill = showWeight ? `<span class="e-weight${g > 0 ? '' : ' none'}">${g > 0 ? esc(formatGrams(g)) : '—'}</span>` : '';
   const row = h(`<div class="entry${entry.checked ? ' done' : ''}${isRem ? ' reminder' : ''}">
     <label class="ck"><input type="checkbox"${entry.checked ? ' checked' : ''}><span class="box"></span></label>
@@ -3610,9 +3646,10 @@ function howtoCard() {
 
         <h3>Creating a trip</h3>
         <p>The <b>Home</b> tab is the builder. Set the trip's conditions, tick any <b>extra activities</b> you're doing, and press <b>Create Event</b> — it generates an editable Event (with its own Packing List) that then lives under the <b>Events</b> tab.</p>
+        <p><b>Presets.</b> For trips you take often, save the whole setup and reuse it. On any trip, tap <b>⭐ Save as preset</b> to remember its recipe — the activities plus all the conditions (trip/quick, transport, season, WET options, forced weather gear, laundry), but not the dates, destination or packed items. Back on <b>Home</b>, a <b>⚡ Start from a preset</b> row lets you fill the whole builder in one tap, then just add this trip's name and dates. Manage them under <b>Settings → Trip presets</b>; they ride along in your backups.</p>
         <ul>
           <li><b>Name, start date, end date, destination</b> (end date and destination are optional). You give the <b>end date</b> — the return day — rather than counting nights yourself; the app works out the nights and shows them live below the dates.</li>
-          <li><b>Time of year, catering, context</b> narrow the list; the <b>nights between your start and end date</b> drive per-night quantities (e.g. socks ×6 for six nights).</li>
+          <li><b>Time of year, catering, context</b> narrow the list; the <b>nights between your start and end date</b> drive per-night quantities (e.g. socks ×6 for six nights). Tick <b>🧺 Laundry available</b> to cap those per-night items at ${LAUNDRY_CAP_NIGHTS} — so a long trip doesn’t demand a dozen (short trips are unaffected); capped items show a small 🧺 by their ×count.</li>
           <li>The <b>start date</b> also decides where a trip sorts on Home and the Events tab — nearest upcoming first, then undated drafts, then past trips.</li>
         </ul>
 
@@ -3722,6 +3759,12 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v87', '2026-08-17 · 16:00 UTC', false, 'Trip presets — spin up a familiar trip in one tap',
+      'If you take the same kinds of trips again and again — a weekend dive, a business trip with a run, an RV weekend — you can now save that whole setup as a <b>preset</b> and reuse it. Open any trip and tap <b>⭐ Save as preset</b> (in its toolbar), give it a name, and the app remembers the <b>recipe</b>: the activities you ticked plus every condition — full-trip vs quick, transport, season, WET options, forced weather gear and the laundry setting. It deliberately does <b>not</b> save the dates, destination or the packed items, since those change every trip. Then, on the <b>Home</b> builder, a new <b>⚡ Start from a preset</b> row appears — tap a preset and the whole form fills itself in, ready for you to add this trip’s name and dates and press Create Event. Manage or remove presets under <b>Settings → Trip presets</b>, and they’re included in your backups and automatic snapshots so you won’t lose them. A real time-saver for the trips you take often.',
+      'Your regular trips are one tap away: save a trip’s setup once, then start the next one just like it without re-picking every activity and condition.'),
+    v('v86', '2026-08-17 · 14:00 UTC', false, 'Laundry-aware quantities — no more twelve pairs of socks',
+      'When you’ll have <b>laundry</b> on a trip, you don’t need one of everything per night — you wash and re-wear. The trip form (and a trip’s settings) now has a <b>🧺 “Laundry available on this trip”</b> toggle. Turn it on and the <b>per-night items</b> — socks, underwear, t-shirts and anything marked to scale with nights — are <b>capped at ' + LAUNDRY_CAP_NIGHTS + '</b> instead of stretching to one per night, so a two-week trip stops demanding a dozen pairs. <b>Short trips are never affected</b> (the cap only ever lowers a count, never raises it), and it changes only the <b>quantities</b> — your real trip length, dates and countdown stay exactly as they are. On the packing list a capped item shows a small <b>🧺</b> next to its ×count, and the <b>Bags &amp; weight</b> panel and the readiness <b>weight</b> tile update to match, so your load reflects what you’ll actually carry.',
+      'Long trips pack realistically: flick on “Laundry available” and per-night basics stop multiplying to absurd numbers, while short trips and everything else are untouched.'),
     v('v85', '2026-08-17 · 12:00 UTC', false, 'A trip-readiness dashboard at the top of every trip',
       'Opening a trip now greets you with a clean <b>readiness hero</b> instead of a plain progress bar: a big <b>packed-progress ring</b> (filling up as you tick items, turning green at 100%) sitting beside three at-a-glance tiles — <b>days to go</b> (highlighted when the trip is within a week), <b>packed weight</b> (which turns red and calls it out if a bag is over its limit), and your <b>open to-dos</b> (tap to jump to the Actions tab). It’s the same information the app already tracked, now surfaced the moment you open a trip so you can see where things stand in a single glance. The <b>Start / Continue packing</b> button sits right underneath as before. Nothing about how packing works changed — this is purely a clearer, nicer summary.',
       'You see exactly how ready a trip is the instant you open it — how much is packed, how long you’ve got, whether a bag is overweight and what’s still on your to-do list — without hunting through the screen.'),
@@ -4252,6 +4295,35 @@ async function renderSettings() {
     }
   });
 
+  // Trip presets — saved event recipes, with delete. Save one from any trip's
+  // ⭐ Save as preset button; start a new trip from one on Home.
+  const presetCard = h(`<div class="card block">
+    <h2>Trip presets</h2>
+    <p class="muted">Saved trip setups — the activities and conditions, not the dates or packed items. Start a new trip from one on the <b>Home</b> screen; save a new one from any trip via its <b>⭐ Save as preset</b> button.</p>
+    <div class="snap-list" data-presets></div>
+  </div>`);
+  wrap.appendChild(presetCard);
+  const drawPresets = () => {
+    const box = presetCard.querySelector('[data-presets]');
+    const list = loadPresets().sort((a, b) => a.name.localeCompare(b.name));
+    box.innerHTML = list.length
+      ? list.map((p) => `<div class="snap-row">
+          <span class="snap-info"><b class="snap-when">${esc(p.name)}</b><span class="snap-sub">${esc(presetSummary(p.config))}</span></span>
+          <span class="snap-acts"><button type="button" class="iconbtn sm" data-preset-del="${esc(p.id)}" aria-label="Delete preset ${esc(p.name)}" title="Delete">${IC.trash}</button></span>
+        </div>`).join('')
+      : '<p class="muted">No presets yet — open a trip and tap ⭐ Save as preset to make your first.</p>';
+  };
+  drawPresets();
+  presetCard.addEventListener('click', (e) => {
+    const del = e.target.closest('[data-preset-del]');
+    if (!del) return;
+    const p = loadPresets().find((x) => x.id === del.dataset.presetDel);
+    if (p && confirm(`Delete the preset “${p.name}”? This won’t affect any trips you already made from it.`)) {
+      deletePreset(p.id);
+      drawPresets();
+    }
+  });
+
   const theme = h(`<div class="card block">
     <h2>Appearance</h2>
     ${radioRow('theme', [{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }], currentTheme())}
@@ -4588,9 +4660,68 @@ function setTheme(v) {
 // export is a truly complete restore point. Operational keys (last-backup date,
 // reminder snooze, seed version) are intentionally excluded — they describe this
 // device's state, not your data, and shouldn't travel to another device.
+// --- Trip presets (saved event recipes) — kept in localStorage and folded into
+// `prefs`, so they travel in every JSON backup and automatic snapshot for free. ---
+const PRESET_KEY = 'ams-trip-presets';
+function loadPresets() {
+  try {
+    const raw = localStorage.getItem(PRESET_KEY);
+    if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) return a.filter((p) => p && p.id && p.name && p.config); }
+  } catch { /* ignore */ }
+  return [];
+}
+function savePresets(arr) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(arr)); } catch { /* ignore */ } return arr; }
+// Save the current event's setup as a named preset (replacing any same-name one).
+function addPreset(name, ev) {
+  const preset = { id: id(), name: String(name).trim(), createdAt: new Date().toISOString(), config: presetConfigFromEvent(ev) };
+  const arr = loadPresets().filter((p) => p.name.toLowerCase() !== preset.name.toLowerCase());
+  arr.push(preset);
+  savePresets(arr);
+  return preset;
+}
+function deletePreset(pid) { savePresets(loadPresets().filter((p) => p.id !== pid)); }
+// A short one-line description of what a preset packs, for the Settings list.
+function presetSummary(config = {}) {
+  const bits = [config.mode === 'quick' ? 'Quick activity' : 'Full trip'];
+  if (config.mode !== 'quick' && config.transport) bits.push(config.transport);
+  if (config.season) bits.push(config.season);
+  const na = (config.activities || []).length;
+  if (na) bits.push(`${na} activit${na === 1 ? 'y' : 'ies'}`);
+  if ((config.weatherOn || []).length) bits.push(`force ${config.weatherOn.length} weather`);
+  if (config.laundry) bits.push('🧺 laundry');
+  return bits.join(' · ');
+}
+
+// Fill an OPEN event form from a preset's config, reusing the form's own change
+// handlers to keep the segmented/checkbox visuals in sync. The typed name and
+// dates are left alone.
+function applyPresetToForm(form, config) {
+  const fire = (el) => el.dispatchEvent(new Event('change', { bubbles: true }));
+  const setRadio = (name, val) => {
+    if (val == null) return;
+    const el = form.querySelector(`input[name="${name}"][value="${(window.CSS && CSS.escape) ? CSS.escape(val) : val}"]`);
+    if (el) { el.checked = true; fire(el); }
+  };
+  const setChecks = (name, vals) => {
+    const set = new Set(vals || []);
+    form.querySelectorAll(`input[name="${name}"]`).forEach((el) => { el.checked = set.has(el.value); fire(el); });
+  };
+  setRadio('mode', config.mode || 'trip');
+  setRadio('transport', config.transport);
+  setRadio('season', config.season);
+  setRadio('catering', config.catering);
+  setChecks('contexts', config.contexts);
+  setChecks('weatherOn', config.weatherOn);
+  setChecks('activities', config.activities);
+  const laundry = form.querySelector('input[name="laundry"]');
+  if (laundry) laundry.checked = !!config.laundry;
+}
+
 function collectPrefs() {
   const prefs = { storageLocations: loadStorageLocs(), theme: currentTheme() };
   try { const v = localStorage.getItem(VIEW_KEY); if (v) prefs.view = v; } catch { /* ignore */ }
+  const presets = loadPresets();
+  if (presets.length) prefs.presets = presets;
   return prefs;
 }
 // Apply prefs from an imported backup. Storage places are UNIONed with what's
@@ -4603,6 +4734,12 @@ function applyPrefs(prefs) {
   }
   if (typeof prefs.theme === 'string') setTheme(prefs.theme);
   try { if (typeof prefs.view === 'string' && VIEW_MODES.includes(prefs.view)) localStorage.setItem(VIEW_KEY, prefs.view); } catch { /* ignore */ }
+  if (Array.isArray(prefs.presets)) {
+    // Merge by id, keeping any presets already on this device.
+    const have = new Map(loadPresets().map((p) => [p.id, p]));
+    for (const p of prefs.presets) if (p && p.id && p.name && p.config && !have.has(p.id)) have.set(p.id, p);
+    savePresets([...have.values()]);
+  }
 }
 
 // ---------- utilities ----------

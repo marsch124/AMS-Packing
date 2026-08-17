@@ -314,6 +314,7 @@ export function coerceEvent(e) {
   e.status = e.status === 'done' ? 'done' : 'active';   // 'active' | 'done' (reviewed)
   if (typeof e.reviewedAt !== 'string') e.reviewedAt = '';
   e.nights = Number.isFinite(e.nights) && e.nights >= 0 ? Math.floor(e.nights) : 0;  // trip length; drives per-night scaling
+  e.laundry = !!e.laundry;   // laundry available on this trip -> cap per-night quantities (see qtyNights)
   if (typeof e.endDate !== 'string') e.endDate = '';   // return date; `nights` derives from start->end
   if (typeof e.destination !== 'string') e.destination = '';  // free text -> geocoded for weather
   e.weather = coerceWeather(e.weather);  // cached Open-Meteo snapshot, or null
@@ -462,6 +463,7 @@ export function newEvent(partial = {}) {
     startDate: '',
     endDate: '',          // return date; trip length in nights derives from start->end
     nights: 0,            // trip length in nights (drives per-night quantity scaling)
+    laundry: false,       // laundry available -> cap per-night quantities to a cycle's worth
     destination: '',      // optional place name for the weather forecast
     weather: null,        // cached Open-Meteo snapshot (set when fetched online)
     entries: [],          // materialised, editable Total-List lines
@@ -764,6 +766,17 @@ export function effectiveQty(entry, nights = 0) {
   if (entry && entry.perNight && nights > 0) return nights;
   const n = Number(entry && entry.qty);
   return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+// When laundry is available you wash and re-wear, so per-night items (socks,
+// underwear, tees) don't need one per night. This caps the "nights" used for
+// quantity scaling to a sensible cycle's worth. Short trips are unaffected
+// (min never raises the count); only display quantities change, not the real
+// trip length. Feed the result to effectiveQty / bagLoads / packingFlags.
+export const LAUNDRY_CAP_NIGHTS = 4;
+export function qtyNights(event) {
+  const n = Number(event && event.nights) || 0;
+  return (event && event.laundry && n > LAUNDRY_CAP_NIGHTS) ? LAUNDRY_CAP_NIGHTS : n;
 }
 
 // A per-container-name weight-limit map (kg): the built-in airline defaults,
@@ -1701,6 +1714,36 @@ export function backupShrinks(prev = {}, next = {}) {
   if (p === 0) return false;                 // nothing to lose
   if (n === 0) return true;                   // going to empty
   return n < p * 0.5;                         // lost more than half the catalog
+}
+
+// --- Trip presets: a saved event "recipe" (which activities + which conditions),
+// reusable to spin up a similar trip in one tap. Dates, destination and the packed
+// entries are trip-specific and deliberately NOT part of a preset. ---
+export function presetConfigFromEvent(ev = {}) {
+  return {
+    mode: ev.mode === 'quick' ? 'quick' : 'trip',
+    activities: asArray(ev.activities).slice(),
+    transport: ev.transport || 'Car',
+    season: ev.season || 'Summer',
+    contexts: asArray(ev.contexts).slice(),
+    catering: ev.catering || 'mixed',
+    weatherOn: asArray(ev.weatherOn).slice(),
+    laundry: !!ev.laundry,
+  };
+}
+// Copy a preset's config onto an event object (mutates and returns it). Leaves the
+// event's own name/dates/destination/entries untouched.
+export function applyPresetConfig(ev, config = {}) {
+  if (!ev || !config || typeof config !== 'object') return ev;
+  if (config.mode) ev.mode = config.mode === 'quick' ? 'quick' : 'trip';
+  if (Array.isArray(config.activities)) ev.activities = config.activities.slice();
+  if (config.transport) ev.transport = config.transport;
+  if (config.season) ev.season = config.season;
+  if (Array.isArray(config.contexts)) ev.contexts = config.contexts.slice();
+  if (config.catering) ev.catering = config.catering;
+  if (Array.isArray(config.weatherOn)) ev.weatherOn = config.weatherOn.slice();
+  ev.laundry = !!config.laundry;
+  return ev;
 }
 
 // ============================================================================

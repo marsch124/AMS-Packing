@@ -17,7 +17,8 @@ import {
   containerNames, containerLimits, groupByStorage,
   catalogRows, dupeKey, duplicateGroups, duplicateIds,
   coerceGeo, eventCoords, eventsNeedingCoords, placesVisited, tripPath, mostVisited,
-  backupCounts, backupShrinks,
+  backupCounts, backupShrinks, qtyNights, LAUNDRY_CAP_NIGHTS,
+  presetConfigFromEvent, applyPresetConfig,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1448,4 +1449,72 @@ test('backupShrinks: flags a replace that loses more than half the catalog', () 
   assert.equal(backupShrinks({ items: 383 }, { items: 0 }), true);    // going to empty
   assert.equal(backupShrinks({ items: 0 }, { items: 0 }), false);     // nothing to lose
   assert.equal(backupShrinks({ items: 0 }, { items: 5 }), false);     // growing is fine
+});
+
+// ---- Laundry-aware quantity scaling ----
+
+test('qtyNights: no laundry -> full trip length', () => {
+  assert.equal(qtyNights(newEvent({ nights: 12 })), 12);
+  assert.equal(qtyNights(newEvent({ nights: 3 })), 3);
+});
+
+test('qtyNights: laundry caps long trips but never raises short ones', () => {
+  assert.equal(qtyNights(newEvent({ nights: 12, laundry: true })), LAUNDRY_CAP_NIGHTS);
+  assert.equal(qtyNights(newEvent({ nights: 3, laundry: true })), 3);   // below the cap -> unchanged
+  assert.equal(qtyNights(newEvent({ nights: LAUNDRY_CAP_NIGHTS, laundry: true })), LAUNDRY_CAP_NIGHTS);
+  assert.equal(qtyNights(newEvent({ nights: 0, laundry: true })), 0);
+});
+
+test('laundry feeds effectiveQty: a per-night item packs the cap, not one per night', () => {
+  const socks = newItem({ name: 'Socks', perNight: true });
+  const trip = newEvent({ nights: 10, laundry: true });
+  assert.equal(effectiveQty(socks, qtyNights(trip)), LAUNDRY_CAP_NIGHTS); // 4, not 10
+  const noLaundry = newEvent({ nights: 10 });
+  assert.equal(effectiveQty(socks, qtyNights(noLaundry)), 10);
+});
+
+test('coerceEvent + newEvent carry the laundry flag', () => {
+  assert.equal(newEvent({}).laundry, false);
+  assert.equal(coerceEvent({ laundry: true }).laundry, true);
+  assert.equal(coerceEvent({}).laundry, false);
+});
+
+// ---- Trip presets (saved event recipes) ----
+
+test('presetConfigFromEvent: captures the recipe, not the trip specifics', () => {
+  const ev = newEvent({
+    name: 'Kalmar 2026', startDate: '2026-08-20', endDate: '2026-08-24', nights: 4,
+    destination: 'Kalmar', mode: 'trip', transport: 'Plane', season: 'Summer',
+    contexts: ['Outdoor'], catering: 'self', weatherOn: ['rain'], laundry: true,
+    activities: ['a', 'b'],
+  });
+  const c = presetConfigFromEvent(ev);
+  assert.deepEqual(c, { mode: 'trip', activities: ['a', 'b'], transport: 'Plane', season: 'Summer', contexts: ['Outdoor'], catering: 'self', weatherOn: ['rain'], laundry: true });
+  // Trip specifics are NOT part of the preset.
+  assert.equal('startDate' in c, false);
+  assert.equal('destination' in c, false);
+  assert.equal('name' in c, false);
+});
+
+test('applyPresetConfig: fills conditions but leaves name/dates/entries alone', () => {
+  const ev = newEvent({ name: 'My trip', startDate: '2026-09-01', destination: 'Rome' });
+  ev.entries = [newItem({ name: 'Passport' })];
+  applyPresetConfig(ev, { mode: 'quick', activities: ['x'], transport: 'RV', season: 'Winter', contexts: ['Indoor'], catering: 'eatout', weatherOn: ['cold'], laundry: true });
+  assert.equal(ev.mode, 'quick');
+  assert.deepEqual(ev.activities, ['x']);
+  assert.equal(ev.transport, 'RV');
+  assert.equal(ev.season, 'Winter');
+  assert.equal(ev.laundry, true);
+  // Untouched:
+  assert.equal(ev.name, 'My trip');
+  assert.equal(ev.startDate, '2026-09-01');
+  assert.equal(ev.destination, 'Rome');
+  assert.equal(ev.entries.length, 1);
+});
+
+test('preset round-trip: config from an event re-applies to an identical config', () => {
+  const src = newEvent({ mode: 'trip', transport: 'Car', season: 'Summer', contexts: ['Race'], catering: 'mixed', weatherOn: [], laundry: false, activities: ['golf'] });
+  const config = presetConfigFromEvent(src);
+  const target = applyPresetConfig(newEvent({ name: 'New', startDate: '2026-01-01' }), config);
+  assert.deepEqual(presetConfigFromEvent(target), config);
 });

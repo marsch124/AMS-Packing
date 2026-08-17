@@ -867,6 +867,68 @@ legend {
   font-weight: 600;
 }
 
+/* "Start from a preset" bar at the top of the Home builder. */
+.preset-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px dashed color-mix(in srgb, var(--brand) 45%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--brand) 6%, var(--card));
+}
+.preset-lbl {
+  font-size: .78rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--brand-2);
+  text-transform: uppercase;
+}
+.preset-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.preset-chip {
+  padding: 7px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand) 35%, var(--line));
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--brand-2);
+  font: inherit;
+  font-size: .9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, transform .1s ease;
+}
+.preset-chip:hover { border-color: var(--brand); }
+.preset-chip.applied {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .preset-chip:active { transform: scale(.96); }
+}
+
+/* A standalone checkbox field (label + explainer), e.g. "Laundry available". */
+.field-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  cursor: pointer;
+}
+.field-check input[type="checkbox"] {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  accent-color: var(--brand);
+}
+.field-check .fc-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.field-check .fc-txt b { font-weight: 650; }
+.field-check .fc-txt em { font-style: normal; color: var(--muted); font-size: .84rem; }
+
 .actions {
   margin-top: 4px;
   display: flex;
