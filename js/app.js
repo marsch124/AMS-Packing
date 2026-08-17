@@ -22,7 +22,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v87';
+const APP_VERSION = 'v89';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -697,6 +697,14 @@ const CATEGORY_ICON = {
   'Food & drink': '🥨', 'Toiletries': '🧴', 'Pharmacy / meds': '💊', 'Electronics': '🔌',
   'Documents & money': '🛂', 'Charging': '🔋', 'Comfort & misc': '🧸', 'Reminders': '🔔',
 };
+// A distinct hue per category, so a packing list scans by colour at a glance
+// (shown as a small dot on each row). Values are readable on light and dark.
+const CATEGORY_COLOR = {
+  'Clothing': '#3b82f6', 'Adventure clothing': '#0ea5a2', 'Footwear': '#8b5cf6', 'Sport gear': '#ec4899',
+  'Food & drink': '#f59e0b', 'Toiletries': '#14b8a6', 'Pharmacy / meds': '#ef4444', 'Electronics': '#6366f1',
+  'Documents & money': '#0891b2', 'Charging': '#22c55e', 'Comfort & misc': '#a1a1aa', 'Reminders': '#eab308',
+};
+function categoryColor(cat) { return CATEGORY_COLOR[cat] || 'var(--muted)'; }
 const CONTAINER_ICON = {
   'Toiletry bag': '👝', 'Carry-on / hand luggage': '💼', 'Checked luggage': '🧳',
   'Hiking backpack': '🎒', 'Climbing backpack': '🧗', 'Golf bag': '⛳', 'Triathlon bag': '🚴',
@@ -857,16 +865,38 @@ function cateringShort(id) { return id === 'self' ? 'Self-sufficient' : id === '
 // One saved-event card — shared by the Home preview and the Events tab.
 function eventCardHTML(e) {
   const p = progress(e.entries);
-  const meta = (e.mode === 'quick'
+  const quick = e.mode === 'quick';
+  const meta = (quick
     ? ['⏱️ Quick', e.season, ...(e.contexts || [])]
     : [e.transport, e.season, cateringShort(e.catering), ...(e.contexts || [])]).filter(Boolean);
   const dToGo = daysUntil(e.startDate);
-  const dateLabel = dToGo != null ? `🗓 ${esc(countdownLabel(dToGo))}` : '';
-  return `<a class="card ev" href="#/event/${e.id}">
-    <div class="ev-h"><span class="ev-name">${esc(e.name || 'Untitled event')}</span>${dateLabel ? `<span class="ev-date">${dateLabel}</span>` : ''}</div>
-    <div class="chips">${meta.map(chip).join('')}</div>
-    <div class="bar"><span style="width:${p.pct}%"></span></div>
-    <div class="ev-prog">${p.done}/${p.total} packed · ${p.pct}%</div>
+  const countdown = dToGo != null ? esc(countdownLabel(dToGo)) : '';
+  const soon = dToGo != null && dToGo >= 0 && dToGo <= 7;
+  // A boarding-pass style sub-line: destination + trip length when known.
+  const endVal = e.endDate || endFromNights(e.startDate, e.nights);
+  const n = nightsBetween(e.startDate, endVal);
+  const nightsBit = n == null ? '' : n === 0 ? 'day trip' : `${n} night${n === 1 ? '' : 's'}`;
+  const sub = [e.destination ? `📍 ${esc(e.destination)}` : '', nightsBit].filter(Boolean).join(' · ');
+  // Weather glyph + range, only when a forecast has actually been fetched for the trip.
+  const dw = deriveWeather(e);
+  const wx = dw ? `<span class="ev-wx">${wIcon(dw.days[0].icon)} ${esc(dw.rangeLabel)}</span>` : '';
+  const done = p.total > 0 && p.done >= p.total;
+  return `<a class="card ev ticket${done ? ' done' : ''}" href="#/event/${e.id}">
+    <div class="ev-top">
+      <div class="ev-title-wrap">
+        <span class="ev-name">${esc(e.name || 'Untitled event')}</span>
+        ${sub ? `<span class="ev-sub">${sub}</span>` : ''}
+      </div>
+      <div class="ev-badge">
+        ${countdown ? `<span class="ev-countdown${soon ? ' soon' : ''}">🗓 ${countdown}</span>` : ''}
+        ${wx}
+      </div>
+    </div>
+    ${meta.length ? `<div class="chips">${meta.map(chip).join('')}</div>` : ''}
+    <div class="ev-foot">
+      <div class="bar"><span style="width:${p.pct}%"></span></div>
+      <span class="ev-prog">${done ? '✓ Packed' : `${p.done}/${p.total} · ${p.pct}%`}</span>
+    </div>
   </a>`;
 }
 
@@ -1885,6 +1915,39 @@ function renderHeaviest(body, ev, entries) {
   body.appendChild(sec);
 }
 
+// A little tactile reward when something gets packed: a gentle haptic tap (where
+// supported) plus a one-shot "pop" on the row. The animation is CSS and self-guards
+// against reduced-motion; vibrate is a no-op on devices without it.
+function packFeedback(rowEl) {
+  try { if (navigator.vibrate) navigator.vibrate(12); } catch { /* ignore */ }
+  if (!rowEl) return;
+  rowEl.classList.remove('just-packed');
+  void rowEl.offsetWidth;           // restart the animation if re-triggered
+  rowEl.classList.add('just-packed');
+  setTimeout(() => rowEl.classList.remove('just-packed'), 360);
+}
+// Update the readiness ring in place after a tick (no full re-render). Returns the
+// fresh progress, and briefly celebrates the moment everything is packed.
+function updateReadinessProgress(ev, wasComplete) {
+  const p = progress(ev.entries);
+  const ring = document.querySelector('.readiness .rd-ring');
+  if (ring) {
+    ring.style.setProperty('--pct', p.pct);
+    const nowComplete = p.total > 0 && p.done >= p.total;
+    ring.classList.toggle('done', nowComplete);
+    const num = ring.querySelector('.rd-ring-num'); if (num) num.innerHTML = `${p.pct}<small>%</small>`;
+    const cap = ring.querySelector('.rd-ring-cap'); if (cap) cap.textContent = `${p.done}/${p.total}`;
+    if (nowComplete && !wasComplete) {
+      ring.classList.remove('celebrate'); void ring.offsetWidth; ring.classList.add('celebrate');
+      try { if (navigator.vibrate) navigator.vibrate([18, 40, 28]); } catch { /* ignore */ }
+    }
+  }
+  // Keep the pack button's label honest as the count changes.
+  const ctaSpan = document.querySelector('.readiness .pack-cta span');
+  if (ctaSpan) ctaSpan.textContent = p.total > 0 && p.done >= p.total ? 'All packed ✓' : (p.done ? 'Continue packing' : 'Start packing');
+  return p;
+}
+
 function entryRow(ev, entry, body, showWeight = false) {
   const isRem = entry.itemType === 'reminder';
   const mode = viewFor(ev);
@@ -1917,7 +1980,7 @@ function entryRow(ev, entry, body, showWeight = false) {
   const row = h(`<div class="entry${entry.checked ? ' done' : ''}${isRem ? ' reminder' : ''}">
     <label class="ck"><input type="checkbox"${entry.checked ? ' checked' : ''}><span class="box"></span></label>
     <button class="entry-main" type="button">
-      <span class="e-name">${esc(entry.name)}${qtyLabel} ${badges}</span>
+      <span class="e-name">${isRem ? '' : `<span class="e-cat" style="background:${categoryColor(entry.category)}" title="${esc(entry.category || '')}"></span>`}${esc(entry.name)}${qtyLabel} ${badges}</span>
       <span class="e-sub">${subLine}${subBits.join(' · ')}</span>
       ${subItems}
     </button>
@@ -1926,14 +1989,13 @@ function entryRow(ev, entry, body, showWeight = false) {
   </div>`);
 
   row.querySelector('input').addEventListener('change', async (e) => {
+    const wasComplete = (() => { const p = progress(ev.entries); return p.total > 0 && p.done >= p.total; })();
     entry.checked = e.target.checked;
     row.classList.toggle('done', entry.checked);
-    // update the progress bar without a full re-render
+    if (entry.checked) packFeedback(row);        // a small reward for packing something
+    // Refresh the readiness ring in place (no full re-render).
     await saveGuard(db.saveEvent(ev));
-    const p = progress(ev.entries);
-    const barSpan = $('.ev-summary .bar span'); const prog = $('.ev-summary .ev-prog');
-    if (barSpan) barSpan.style.width = `${p.pct}%`;
-    if (prog) prog.textContent = `${p.done}/${p.total} packed · ${p.pct}%`;
+    updateReadinessProgress(ev, wasComplete);
   });
 
   const openEditor = () => {
@@ -2289,6 +2351,7 @@ function packRow(ev, entry, redraw) {
   </button>`);
   row.addEventListener('click', async () => {
     entry.checked = !entry.checked;
+    if (entry.checked) { try { if (navigator.vibrate) navigator.vibrate(12); } catch { /* ignore */ } }
     await saveGuard(db.saveEvent(ev));
     redraw();
   });
@@ -3586,6 +3649,16 @@ function howtoCard() {
         <p>Everything here exists to surface <b>the exact packing list for whatever you're about to do</b> — one activity or a combination (a city trip + a run + a hike), under the specific conditions of that trip. You keep small, reusable <b>templates</b>; an <b>Event</b> composes the ones you pick into a single <b>Packing List</b> for a trip and filters it down to what actually applies. Category, where it's packed and when to pack it are just how that result is organised.</p>
         <p class="hint">Three words to keep straight: a <b>Template</b> is a reusable building block (Swim, Run, Travel, Golf…); an <b>Event</b> is one specific trip that combines templates; the <b>Packing List</b> is the single merged list that Event produces — the one you actually pack from.</p>
 
+        <h3>Quick start (the whole app in four steps)</h3>
+        <p>If you remember nothing else, remember this loop:</p>
+        <ol>
+          <li><b>Templates hold your gear.</b> The app comes pre-filled with reusable lists (Travel, Golf, Run, Diving…). Edit them in the <b>Templates</b> tab whenever your kit changes — it's a one-time-ish setup you tweak over the years.</li>
+          <li><b>Home builds a trip.</b> On <b>Home</b>, pick your transport and season, tick any <b>extra activities</b> you'll do, add a name and dates, and press <b>Create Event</b>. (Take a similar trip often? Tap a saved <b>⚡ preset</b> to fill it all in at once.)</li>
+          <li><b>The trip gives you one Packing List.</b> Open the new trip (under <b>Events</b>) to see a single, tidy list combined from everything above — organised by when to pack and which bag it goes in.</li>
+          <li><b>Pack it off.</b> Tap <b>Start packing</b> and tick things phase by phase. That's it — the readiness ring at the top fills up as you go.</li>
+        </ol>
+        <p>Everything else in this guide is detail on top of that loop — you can ignore most of it until you need it.</p>
+
         <h3>Building blocks: templates</h3>
         <p>Under the <b>Templates</b> tab your reusable templates are grouped three ways:</p>
         <ul>
@@ -3636,13 +3709,16 @@ function howtoCard() {
         </ul>
 
         <h3>Colour tells you where you are</h3>
-        <p>The whole interface — buttons, tabs, chips, progress bars — shifts colour to signal which stage of the flow you're in, so a glance tells you what you're doing:</p>
+        <p>Each of the six tabs has its <b>own colour</b>, and that colour flows through the whole screen — the page heading, the buttons, the chips and progress bars, the back/edit icons, and the tab itself. In the bottom bar <b>every tab always shows its colour</b>, and the one you're currently on fills in solid and goes bold — so a single glance tells you which part of the app you're in:</p>
         <ul>
-          <li><b style="color:#4f68d0">Indigo — Defining:</b> building a trip on Home, or editing a trip's settings.</li>
-          <li><b style="color:#127a8a">Teal — Looking:</b> viewing a trip's packing list (the default).</li>
-          <li><b style="color:#c07d1e">Amber — Adding:</b> whenever an item editor is open.</li>
-          <li><b style="color:#2f9e63">Green — Packing:</b> the focused Packing Mode.</li>
+          <li><b style="color:#2f6fe0">Blue — Home:</b> building a new trip.</li>
+          <li><b style="color:#2f9e63">Green — Events:</b> your trips — including a trip's packing list and the focused <b>Packing Mode</b>.</li>
+          <li><b style="color:#7c5cd6">Purple — Templates:</b> your reusable building blocks, and any <b>item editor</b> opened from them.</li>
+          <li><b style="color:#dd7324">Amber — Care:</b> storage, maintenance, containers and the all-items views.</li>
+          <li><b style="color:#dc3d43">Red — Actions:</b> your to-do list.</li>
+          <li><b style="color:#64748b">Grey — Settings:</b> backups, presets, storage places, this guide and the version history.</li>
         </ul>
+        <p>When you open a detail screen (an item, a trip), it keeps the colour of the tab you came from and shows a <b>← Back</b> arrow to return.</p>
 
         <h3>Creating a trip</h3>
         <p>The <b>Home</b> tab is the builder. Set the trip's conditions, tick any <b>extra activities</b> you're doing, and press <b>Create Event</b> — it generates an editable Event (with its own Packing List) that then lives under the <b>Events</b> tab.</p>
@@ -3672,13 +3748,23 @@ function howtoCard() {
         <h3>How the Packing List is composed</h3>
         <p>The Event takes the union of every item from the sources for your chosen <b>List type</b> — a <b>Full trip</b> uses common base + transport template + ticked activities; a <b>Quick activity</b> uses only the ticked activities — then drops anything whose conditions (season, catering, context) don't match the trip, and de-duplicates by name + container (earlier sources win a clash, so the common base takes priority). Weather-conditional items are held back (see below). The result is your editable <b>Packing List</b> — add, edit, tick, or remove any line.</p>
 
+        <h3>Opening a trip — the readiness dashboard</h3>
+        <p>Every trip opens with a small <b>readiness</b> summary at the very top, so you can see how ready you are at a glance before you scroll into the list:</p>
+        <ul>
+          <li>A <b>progress ring</b> showing how much is packed — e.g. <b>43% · 3/8</b> — filling up as you tick items and turning <b>green</b> when everything's in.</li>
+          <li><b>Days to go</b> — the countdown to your start date (it highlights when the trip is within a week; it shows “no date set” if you haven't given one).</li>
+          <li><b>Weight</b> — the total packed weight; it turns <b>red</b> and tells you how many bags are <b>over limit</b> if any bag is too heavy. (Add weights to items to make this exact — see <b>Bags &amp; weight</b>.)</li>
+          <li><b>Open to-dos</b> — how many <b>Actions</b> are still open; tap it to jump to the Actions tab.</li>
+        </ul>
+        <p>The big <b>Start / Continue packing</b> button sits right underneath, opening <b>Packing Mode</b> at the first phase that still has unpacked things. Below the dashboard is a <b>✨ Trip setup</b> panel that recaps every choice you made when creating the trip (type, dates, destination, transport, season, catering, laundry, forced weather and the activities you ticked) — a read-only reminder of what this list was built from.</p>
+
         <h3>Reading &amp; organising the list</h3>
         <ul>
           <li><b>Group by</b> When / Where / Category — same list, several lenses — plus <b>GA</b> and <b>WET</b> (each appears once a trip packs for that kind of activity), which group the list by the <em>activity each item came from</em>: pick <b>GA</b> to see <b>Golf, Hiking, Diving…</b> each in their own block, or <b>WET</b> for <b>Swim, Bike, Run…</b>, so you can round up one activity's kit at once — everything not specific to that activity (your common base, transport kit, other activities and hand-added items) gathers under <b>Everything else</b>. There's also <b>Section</b> (once a trip has sectioned items) and <b>Stored</b> (once items have a storage place), which groups by <em>where each thing lives at home</em> so you can empty one cupboard at a time. <b>Tap any group heading to fold it shut</b> (and again to reopen) — handy for hiding a bag you've finished packing; each heading shows a <b>packed/total</b> count.</li>
           <li><b>Sort out</b> — quick filters above the list isolate all <b>💧 Liquids</b> (for the wash bag / 100 ml rule) or all <b>⚡ Charge</b> items (to round up cables and chargers). Tap a chip to show only those; tap <b>Show all</b> to bring the full list back. Ticking and editing work the same in the filtered view. Mark an item as a liquid or charge item with the 💧 / ⚡ toggles in its editor.</li>
           <li><b>🪨 Heaviest</b> — reorders the list heaviest-first with each item’s weight shown, so when a bag is over its limit you can see at a glance what to leave behind. It uses the real load (weight × quantity, including per-night scaling); items without a weight sit at the bottom. Combine it with a Liquids/Charge filter to rank just those. Add a weight to an item in its editor to make it count.</li>
           <li><b>Tap an item</b> to open a quick editor for this trip’s bits (Qty, Category, Container, When, weight, flags, note). For the item’s deeper settings — conditions, which templates it’s in, storage &amp; maintenance — tap <b>Edit the full item</b> to jump straight into the full item editor, then use Back to return to your trip. If the item was only added to this one trip, the same button offers to <b>add it to a template first</b> (you pick which) so it’s saved for reuse — then opens its full editor.</li>
-          <li>Badges show flags at a glance; quantities marked per-night show the scaled count (e.g. Socks ×6 for a 6-night trip).</li>
+          <li>A small <b>colour dot</b> before each item marks its <b>category</b> (clothing, electronics, toiletries…), so a long list scans by hue. Badges show flags at a glance; quantities marked per-night show the scaled count (e.g. Socks ×6 for a 6-night trip). Ticking an item gives a small pop and a gentle buzz, and the readiness ring fills in as you go.</li>
           <li><b>Regenerate</b> refreshes the Packing List from your templates while keeping your ticks, edits and manually-added items.</li>
         </ul>
 
@@ -3759,6 +3845,12 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v89', '2026-08-17 · 19:00 UTC', false, 'A more polished, satisfying feel',
+      'A visual and tactile polish across the app. <b>(1) Boarding-pass trip cards:</b> your events on Home and the Events tab now look like travel tickets — a coloured stub down the side, the trip name with its <b>destination and length</b> beneath, a <b>countdown badge</b> (highlighted when the trip is within a week), the day’s <b>weather glyph</b> when a forecast has been fetched, and a slim progress rail along the bottom that reads <b>✓ Packed</b> once you’re done. <b>(2) Colour-coded packing rows:</b> every item on a packing list now carries a small <b>dot in its category’s colour</b> — clothing, electronics, toiletries and so on each get their own hue — so a long list is far quicker to scan by eye. <b>(3) Satisfying packing:</b> ticking an item gives a little <b>pop</b> and a gentle <b>haptic tap</b> (on phones that support it), the readiness ring now fills in <b>live</b> as you tick (it previously only refreshed on reopening), and finishing a trip gives the ring a small celebratory <b>bounce</b>. All the motion respects your device’s “reduce motion” setting. Nothing about how packing works changed — it just feels nicer to use.',
+      'The app is more pleasant to look at and to use: trips read like tickets at a glance, lists scan by colour, and packing each thing off gives a small, satisfying bit of feedback.'),
+    v('v88', '2026-08-17 · 17:00 UTC', false, 'A fuller “How it works” guide',
+      'The in-app <b>How it works</b> guide (here in Settings) got a thorough pass so it explains everything the app now does. It opens with a new <b>Quick start</b> — the whole app in four steps — for when you just need reminding of the loop. A new section describes the <b>readiness dashboard</b> that greets you at the top of every trip (the packed ring, days-to-go, weight and open-to-dos). The <b>colour</b> section was rewritten to match how the app actually looks today — the six coloured tabs (Home blue, Events green, Templates purple, Care amber, Actions red, Settings grey) and how each colour flows through its screens — replacing the older description. And the recent additions (<b>presets</b> and <b>laundry-aware quantities</b>) are woven in throughout. Nothing about the app changed — it’s purely a better explanation.',
+      'When you can’t remember how something works, the built-in guide now covers it — start with the new Quick start, then dip into any section for the detail.'),
     v('v87', '2026-08-17 · 16:00 UTC', false, 'Trip presets — spin up a familiar trip in one tap',
       'If you take the same kinds of trips again and again — a weekend dive, a business trip with a run, an RV weekend — you can now save that whole setup as a <b>preset</b> and reuse it. Open any trip and tap <b>⭐ Save as preset</b> (in its toolbar), give it a name, and the app remembers the <b>recipe</b>: the activities you ticked plus every condition — full-trip vs quick, transport, season, WET options, forced weather gear and the laundry setting. It deliberately does <b>not</b> save the dates, destination or the packed items, since those change every trip. Then, on the <b>Home</b> builder, a new <b>⚡ Start from a preset</b> row appears — tap a preset and the whole form fills itself in, ready for you to add this trip’s name and dates and press Create Event. Manage or remove presets under <b>Settings → Trip presets</b>, and they’re included in your backups and automatic snapshots so you won’t lose them. A real time-saver for the trips you take often.',
       'Your regular trips are one tap away: save a trip’s setup once, then start the next one just like it without re-picking every activity and condition.'),

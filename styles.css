@@ -470,32 +470,90 @@ em {
   }
 }
 
-.card.ev {
-  display: block;
-}
-
-.ev-h {
+/* Boarding-pass style event card: a coloured stub down the left, the trip title
+   + destination, a countdown/weather badge, activity chips, then a progress rail. */
+.card.ev.ticket {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+  overflow: hidden;
+  padding-left: 20px;
 }
-
+.card.ev.ticket::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 7px;
+  background: var(--brand);
+}
+.card.ev.ticket.done::before { background: var(--ok); }
+.ev-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ev-title-wrap { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ev-name {
   font-weight: 700;
-  font-size: 1.05rem;
-  flex: 1;
+  font-size: 1.08rem;
+  letter-spacing: -.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-
-.ev-date {
-  color: var(--muted);
-  font-size: .85rem;
-}
-
-.ev-prog {
-  color: var(--muted);
+.ev-sub {
   font-size: .82rem;
-  margin-top: 6px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.ev-badge {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  text-align: right;
+}
+.ev-countdown {
+  font-size: .8rem;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.ev-countdown.soon {
+  color: var(--brand-ink);
+  background: var(--brand);
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+.ev-wx {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.ev-wx svg { width: 15px; height: 15px; }
+.ev-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ev-foot .bar { flex: 1 1 auto; }
+.ev-prog {
+  flex: none;
+  color: var(--muted);
+  font-size: .8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.card.ev.ticket.done .ev-prog { color: var(--ok); }
 
 .card.lst {
   display: flex;
@@ -1129,6 +1187,15 @@ a.rd-stat.rd-link::after {
   .rd-val { font-size: 1.05rem; }
   .rd-stat { padding: 5px 11px; }
 }
+@keyframes rd-celebrate {
+  0% { transform: scale(1); }
+  30% { transform: scale(1.12); }
+  55% { transform: scale(.97); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rd-ring.celebrate { animation: rd-celebrate .55s ease; }
+}
 @media (prefers-reduced-motion: reduce) {
   .rd-ring { transition: none; }
 }
@@ -1641,6 +1708,28 @@ a.rd-stat.rd-link::after {
   border-width: 0 2.5px 2.5px 0;
   transform: rotate(45deg);
 }
+
+/* A satisfying pop when an item is ticked (the row gets .just-packed briefly). */
+@keyframes ck-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .entry.just-packed .ck .box { animation: ck-pop .32s ease; }
+}
+
+/* Category colour dot before an item name — lets a long list scan by hue. */
+.e-cat {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: middle;
+  flex: none;
+}
+.entry.done .e-cat { opacity: .4; }
 
 /* inline editor */
 .editor {
