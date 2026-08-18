@@ -22,6 +22,7 @@ import {
   newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
   newAction, coerceAction, shoppingReason, shoppingSuggestions, openShoppingCount, EXPIRY_SOON_DAYS,
   coercePerson, newPerson, personColor, assignedPeople, PERSON_COLORS,
+  listEmoji, listColor, TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1662,4 +1663,29 @@ test('packer flows onto a trip entry and survives the share bundle', () => {
   ev.entries = [newItem({ name: 'Tent', packer: 'Anna' })];
   const back = parseTripBundle(buildTripBundle(ev));
   assert.equal(back.entries[0].packer, 'Anna');
+});
+
+// --- Template covers (emoji + colour) ---
+test('coerceList: cleans cover emoji and colour, drops junk', () => {
+  const l = coerceList(newList({ name: 'Golf', emoji: '  ⛳ ', color: '#3b82f6' }));
+  assert.equal(l.emoji, '⛳');
+  assert.equal(l.color, '#3b82f6');
+  const bad = coerceList(newList({ name: 'X', emoji: 42, color: 'blue' }));
+  assert.equal(bad.emoji, '');
+  assert.equal(bad.color, '');
+});
+
+test('listEmoji: custom emoji else the default glyph', () => {
+  assert.equal(listEmoji(newList({ name: 'Dive', emoji: '🤿' })), '🤿');
+  assert.equal(listEmoji(newList({ name: 'Plain' })), TEMPLATE_DEFAULT_EMOJI);
+  assert.equal(listEmoji(newList({ name: 'Blankish', emoji: '   ' })), TEMPLATE_DEFAULT_EMOJI);
+});
+
+test('listColor: custom colour wins, else a stable palette pick from the id', () => {
+  assert.equal(listColor(newList({ name: 'Run', color: '#ef4444' })), '#ef4444');
+  const l = newList({ name: 'Auto', id: 'fixed-id' });
+  const c1 = listColor(l);
+  const c2 = listColor(l);
+  assert.equal(c1, c2);                       // stable
+  assert.ok(TEMPLATE_COLORS.includes(c1));     // from the palette
 });

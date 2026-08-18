@@ -1674,6 +1674,122 @@ a.rd-stat.rd-link::after {
   height: 17px;
 }
 
+/* ---- Template covers: the visual Templates grid ---- */
+.tmpl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+.tmpl-card {
+  --cover: var(--sec-templates);
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+  transition: transform .08s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.tmpl-card:hover {
+  border-color: color-mix(in srgb, var(--cover) 55%, var(--line));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--cover) 22%, transparent);
+  transform: translateY(-1px);
+}
+.tmpl-cover {
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--cover) 20%, var(--card));
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--cover) 40%, transparent);
+}
+.tmpl-emoji { font-size: 1.5rem; line-height: 1; }
+.tmpl-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.tmpl-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tmpl-count { color: var(--muted); font-size: .82rem; }
+
+/* Cover toolbar button: a small colour dot with the emoji inside */
+.cover-dot {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  font-size: .82rem;
+  line-height: 1;
+  color: #fff;
+}
+
+/* ---- Cover editor modal ---- */
+.cover-editor .cover-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin: 4px 0 14px;
+}
+.cover-tile {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, #000 12%, transparent);
+}
+.cover-tile-emoji { font-size: 1.9rem; line-height: 1; }
+.cover-tile-name { font-weight: 600; font-size: 1.05rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cover-emoji-f { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.cover-emoji-f span { font-size: .85rem; color: var(--muted); }
+.cover-emoji-f input {
+  width: 90px;
+  font-size: 1.4rem;
+  text-align: center;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+}
+.cover-colors-lbl { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 7px; }
+.cover-swatches { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 6px; }
+.cover-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  cursor: pointer;
+  padding: 0;
+}
+.cover-swatch.on {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 2px var(--card), 0 0 0 4px color-mix(in srgb, var(--ink) 40%, transparent);
+}
+.cover-swatch.cover-auto {
+  width: auto;
+  height: 32px;
+  border-radius: 999px;
+  padding: 0 14px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: .82rem;
+  font-weight: 600;
+}
+
 /* Batch "add several" textarea */
 .batch-ta {
   width: 100%;

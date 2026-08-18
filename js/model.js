@@ -91,6 +91,29 @@ export const GROUP_IDS = GROUPS.map((g) => g.id);
 export function group(id) { return GROUPS.find((g) => g.id === id) || null; }
 export function groupLabel(id) { const g = group(id); return g ? g.label : ''; }
 
+// --- Template covers --------------------------------------------------------
+// A template can carry an emoji + colour that give it a face on the Templates
+// grid. Both are optional: a template with no cover set still gets a default
+// glyph and a stable, name-derived colour, so the grid looks varied out of the
+// box and only needs a tap to personalise.
+export const TEMPLATE_DEFAULT_EMOJI = '📋';
+export const TEMPLATE_COLORS = ['#7c5cd6', '#3b82f6', '#06b6d4', '#22c55e', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6', '#8b5cf6', '#64748b'];
+
+export function listEmoji(list) {
+  return (list && typeof list.emoji === 'string' && list.emoji.trim()) ? list.emoji.trim() : TEMPLATE_DEFAULT_EMOJI;
+}
+
+// The cover colour for a template: its own colour if set, else a stable hashed
+// pick from the palette keyed on the template id (falls back to the name), so
+// every template reads as a distinct colour before anyone customises it.
+export function listColor(list) {
+  if (list && typeof list.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(list.color)) return list.color;
+  const key = (list && (list.id || list.name)) ? String(list.id || list.name) : '';
+  let hsh = 0;
+  for (let i = 0; i < key.length; i++) hsh = (hsh * 31 + key.charCodeAt(i)) >>> 0;
+  return TEMPLATE_COLORS[hsh % TEMPLATE_COLORS.length];
+}
+
 export const SEASONS = ['Summer', 'Winter'];
 export const TRANSPORTS = ['Car', 'Plane', 'RV'];
 
@@ -312,6 +335,11 @@ export function coerceList(l) {
   //  ''          → a normal activity list the user ticks (GA / WET).
   l.role = ['base', 'transport', 'loose', 'container'].includes(l.role) ? l.role : '';
   l.transport = TRANSPORTS.includes(l.transport) ? l.transport : '';  // only meaningful when role === 'transport'
+  // Cover: an optional emoji + colour that give the template a face on the
+  // Templates grid. Both '' = fall back to the default glyph / a stable hashed
+  // colour, so an un-customised template still looks distinct.
+  l.emoji = (typeof l.emoji === 'string' && l.emoji.trim()) ? l.emoji.trim().slice(0, 4) : '';
+  l.color = (typeof l.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(l.color)) ? l.color : '';
   return l;
 }
 export function coerceEvent(e) {
@@ -593,6 +621,8 @@ export function newList(partial = {}) {
   return coerceList({
     id: id(),
     name: '',
+    emoji: '',          // cover glyph ('' = default 📋)
+    color: '',          // cover colour ('' = stable hashed pick from TEMPLATE_COLORS)
     sections: [],       // ordered per-template groupings ({id,name}); [] = ungrouped list
     group: '',          // 'GA' | 'WET' | 'OE' | '' (ungrouped)
     role: '',           // '' (ticked activity) | 'base' (always on) | 'transport' (auto by transport)

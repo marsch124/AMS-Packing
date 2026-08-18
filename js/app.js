@@ -2,6 +2,7 @@
 import {
   CATEGORIES, CONTAINERS, CONTAINER_ROLE, CONTAINER_LIST_NAME, containerNames, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, normName, newItem, newList, newEvent,
+  TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS, listEmoji, listColor,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
@@ -25,7 +26,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v95';
+const APP_VERSION = 'v96';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2414,6 +2415,78 @@ function openModal(node) {
   return close;
 }
 
+// ---------- Template cover editor (emoji + colour) ----------
+// Give a template a face on the Templates grid: pick an emoji and a colour.
+// Both are optional — "Auto" clears the colour back to the stable hashed pick,
+// and a blank emoji falls back to the default glyph. Saves the list and resolves
+// true if anything changed, so the caller can re-render.
+function openCoverEditor(list) {
+  return new Promise((resolve) => {
+    // Draft copy so Cancel/Esc leaves the real template untouched.
+    let draftEmoji = typeof list.emoji === 'string' ? list.emoji : '';
+    let draftColor = typeof list.color === 'string' ? list.color : '';  // '' = Auto (hashed)
+    const swatches = TEMPLATE_COLORS
+      .map((c) => `<button type="button" class="cover-swatch" data-swatch="${esc(c)}" style="background:${esc(c)}" aria-label="${esc(c)}"></button>`)
+      .join('');
+    const modal = h(`<div class="modal cover-editor">
+      <h3>Cover for “${esc(list.name)}”</h3>
+      <p class="modal-sub">Give this template an emoji and a colour so it stands out on the Templates grid. Leave the colour on <b>Auto</b> to let the app pick a consistent one for you.</p>
+      <div class="cover-preview">
+        <span class="cover-tile" data-tile><span class="cover-tile-emoji" data-tile-emoji></span></span>
+        <span class="cover-tile-name">${esc(list.name)}</span>
+      </div>
+      <label class="cover-emoji-f"><span>Emoji</span>
+        <input name="emoji" type="text" maxlength="4" placeholder="${TEMPLATE_DEFAULT_EMOJI}" value="${esc(draftEmoji)}" autocomplete="off">
+      </label>
+      <div class="cover-colors">
+        <span class="cover-colors-lbl">Colour</span>
+        <div class="cover-swatches">
+          <button type="button" class="cover-swatch cover-auto${draftColor ? '' : ' on'}" data-swatch="" title="Auto (a consistent colour picked for you)">Auto</button>
+          ${swatches}
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" data-x="cancel">Cancel</button>
+        <button type="button" class="btn primary" data-x="save">Save cover</button>
+      </div>
+    </div>`);
+
+    const close = openModal(modal);
+    const emojiIn = modal.querySelector('input[name=emoji]');
+    const tile = modal.querySelector('[data-tile]');
+    const tileEmoji = modal.querySelector('[data-tile-emoji]');
+
+    const drawPreview = () => {
+      const previewList = { ...list, emoji: draftEmoji, color: draftColor };
+      tile.style.background = listColor(previewList);
+      tileEmoji.textContent = listEmoji(previewList);
+      modal.querySelectorAll('[data-swatch]').forEach((b) => {
+        b.classList.toggle('on', (b.dataset.swatch || '') === draftColor);
+      });
+    };
+    drawPreview();
+
+    emojiIn.addEventListener('input', () => { draftEmoji = emojiIn.value; drawPreview(); });
+    modal.querySelector('.cover-swatches').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-swatch]'); if (!b) return;
+      draftColor = b.dataset.swatch || '';
+      drawPreview();
+    });
+    modal.querySelector('[data-x="cancel"]').addEventListener('click', () => { close(); resolve(false); });
+    modal.querySelector('[data-x="save"]').addEventListener('click', async () => {
+      const nextEmoji = draftEmoji.trim().slice(0, 4);
+      const changed = nextEmoji !== (list.emoji || '') || draftColor !== (list.color || '');
+      if (changed) {
+        list.emoji = nextEmoji;
+        list.color = draftColor;
+        if (!(await saveGuard(db.saveList(list)))) { resolve(false); return; }
+      }
+      close();
+      resolve(changed);
+    });
+  });
+}
+
 // ---------- Kit editor (create / edit a reusable bundle) ----------
 // Opens a modal to name a kit, give it an emoji, and pick its member items from
 // the catalog (search-driven, since there are ~380 items). Saves to the `kits`
@@ -2842,9 +2915,15 @@ async function renderLists() {
   wrap.appendChild(h(`<div class="topbar"><h1 class="grow">Templates</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a><a class="btn ghost" href="#/refine">Refine</a><button class="btn primary" data-new>${IC.plus}<span>New</span></button></div>`));
   wrap.appendChild(h(`<p class="muted pad">These are your reusable building blocks. An <b>Event</b> combines the ones you pick into a single <b>Packing List</b> to pack from.</p>`));
 
-  const card = (l) => h(`<a class="card lst" href="#/list/${l.id}">
-      <span class="lst-name">${esc(l.name)}${l.items.length ? '' : ' <em>(empty)</em>'}</span>
-      <span class="lst-count">${l.items.length} item${l.items.length === 1 ? '' : 's'}</span>
+  // A visual cover card: a coloured tile with the template's emoji, its name and
+  // an item count. Colour + emoji come from the template's cover (with sensible
+  // hashed/default fallbacks), so the grid reads at a glance and by colour.
+  const card = (l) => h(`<a class="tmpl-card" href="#/list/${l.id}" style="--cover:${esc(listColor(l))}">
+      <span class="tmpl-cover"><span class="tmpl-emoji">${esc(listEmoji(l))}</span></span>
+      <span class="tmpl-body">
+        <span class="tmpl-name">${esc(l.name)}</span>
+        <span class="tmpl-count">${l.items.length ? `${l.items.length} item${l.items.length === 1 ? '' : 's'}` : 'empty'}</span>
+      </span>
     </a>`);
 
   // "Loose items" — the home for things not in any template yet. Always shown,
@@ -2868,13 +2947,13 @@ async function renderLists() {
     const arr = byGroup.get(g.id);
     if (!arr.length) continue;
     wrap.appendChild(h(`<h2 class="section-h">${esc(g.id)} · ${esc(g.label)}</h2>`));
-    const cards = h('<div class="cards"></div>');
+    const cards = h('<div class="tmpl-grid"></div>');
     arr.forEach((l) => cards.appendChild(card(l)));
     wrap.appendChild(cards);
   }
   if (ungrouped.length) {
     wrap.appendChild(h('<h2 class="section-h">Other templates</h2>'));
-    const cards = h('<div class="cards"></div>');
+    const cards = h('<div class="tmpl-grid"></div>');
     ungrouped.forEach((l) => cards.appendChild(card(l)));
     wrap.appendChild(cards);
   }
@@ -2914,6 +2993,7 @@ async function renderList(listId, openItemId) {
   wrap.appendChild(h(`<div class="toolbar">
     ${noTemplateChrome ? '' : `<label class="inline-field"><span>Group</span>${selectHtml('group', groupOpts, list.group)}</label>`}
     <div class="spacer"></div>
+    ${noTemplateChrome ? '' : `<button class="btn ghost" data-cover><span class="cover-dot" style="background:${esc(listColor(list))}">${esc(listEmoji(list))}</span><span>Cover</span></button>`}
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
     ${isLoose ? `<button class="btn ghost" data-batch>${IC.list}<span>Add several</span></button>` : ''}
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-kit>${KIT_DEFAULT_EMOJI}<span>Add a kit</span></button>`}
@@ -2985,6 +3065,10 @@ async function renderList(listId, openItemId) {
   wrap.querySelector('[data-batch]')?.addEventListener('click', () => {
     const added = batchAddItems(list);
     added.then((n) => { if (n > 0) { openItem = null; draw(); } });
+  });
+  wrap.querySelector('[data-cover]')?.addEventListener('click', async () => {
+    const changed = await openCoverEditor(list);
+    if (changed) render();
   });
   wrap.querySelector('[data-sections]')?.addEventListener('click', () => {
     manageSections(list).then((changed) => {
@@ -4048,6 +4132,7 @@ function howtoCard() {
           <li><b>WET — Workout, Exercise &amp; Training:</b> Swim, Bike, Run, Strength, Yoga/Mobility, Breath work.</li>
           <li><b>OE — Other Events:</b> small nice things (a coffee, a winter bath, a walk).</li>
         </ul>
+        <p><b>Covers.</b> Each template shows as a <b>cover card</b> in the grid — a coloured tile with an emoji — so you can pick out Golf, Diving or Travel by look alone. Every template gets a distinct colour automatically; to choose your own, open a template and tap the <b>Cover</b> button in its toolbar, then set an <b>emoji</b> and a <b>colour</b> (or leave the colour on <b>Auto</b>). A live preview shows the card before you save. It’s purely visual — it doesn’t change what the template holds.</p>
         <p>Open a template to add or edit its items. Each item carries a Swedish alias shown as a subtitle, so your original wording is never lost. At the top of a template’s item list sit <b>quick-filter chips</b> — <b>💧 Liquids</b>, <b>⚡ Charging</b>, <b>⚠️ Restricted</b>, <b>🧰 Has care</b>, <b>📷 Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
         <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
 
@@ -4235,6 +4320,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v96', '2026-08-18 · 18:00 UTC', false, 'Template covers — a colourful Templates grid',
+      'The <b>Templates</b> tab just got a face-lift. Instead of a plain list, your templates now appear as a <b>visual grid of cover cards</b>, each with a <b>coloured tile and an emoji</b>, so you can spot <b>Golf</b>, <b>Diving</b> or <b>Travel</b> by look alone. Every template gets a distinct colour automatically, but you can pick your own: open any template and tap the new <b>Cover</b> button in its toolbar to choose an <b>emoji</b> (⛳ 🤿 🏃 🎿…) and a <b>colour</b> — or leave the colour on <b>Auto</b> to let the app keep it consistent for you. A live preview shows exactly how the card will look before you save. The chosen emoji also shows up next to the template in <b>Search</b>. Purely visual — nothing about what a template holds or how trips are built changed; the grid just makes the tab quicker to scan and a lot nicer to look at.',
+      'Your templates are now instantly recognisable at a glance — pick a colour and an emoji for each, and the Templates tab turns from a grey list into a bright, scannable grid.'),
     v('v95', '2026-08-18 · 16:00 UTC', false, 'Who packs what — split a trip between people',
       'Packing with someone? You can now say <b>who packs each thing</b> and see just your own share. Set up your <b>People</b> in <b>Settings → People</b> — each with a name and a colour (Martin &amp; Anna are there to start) — then, on any trip, open an item and pick <b>Packed by</b>. Assigned items show a small <b>colour dot</b>, and a new <b>“Who packs”</b> row of chips at the top of the packing list lets you filter to <b>Everyone</b>, one person, or <b>Unassigned</b> — with a live count each. The same person filter sits at the top of <b>Packing Mode</b>, so each of you can step through only your own items, phase by phase. Best of all, the split <b>travels inside a shared trip</b>: send the trip to Anna and everything you assigned to her arrives already marked as hers. Your <b>Actions</b> and lists are untouched — this is purely about dividing the packing.',
       'No more packing each other’s things twice or forgetting whose is whose: assign items to a person and each of you gets a clean, filtered list — on screen and in Packing Mode — that even survives sharing the trip.'),
@@ -4849,7 +4937,7 @@ async function renderSearch() {
     }
     if (tmplHits.length) {
       html += sectionHead('Templates', tmplHits.length) + '<div class="search-list">';
-      for (const l of tmplHits) html += row(`#/list/${encodeURIComponent(l.id)}`, '📋', esc(l.name), `${(l.items || []).length} item${(l.items || []).length === 1 ? '' : 's'}`);
+      for (const l of tmplHits) html += row(`#/list/${encodeURIComponent(l.id)}`, listEmoji(l), esc(l.name), `${(l.items || []).length} item${(l.items || []).length === 1 ? '' : 's'}`);
       html += '</div>';
     }
     if (eventHits.length) {
