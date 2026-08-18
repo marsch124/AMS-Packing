@@ -218,6 +218,10 @@ export function coerceItem(it) {
   // (resolved from the source template, so same-named sections merge across lists).
   // '' = no section. It is contextual (per membership), never intrinsic to the item.
   it.section = typeof it.section === 'string' ? it.section : '';
+  // Kit membership — the NAME of the kit this item is packed as part of on a trip
+  // (e.g. "Charging kit"). Contextual, never a catalog default: it flows onto the
+  // trip line so the packing list can cluster kit-mates together. '' = not in a kit.
+  it.kit = typeof it.kit === 'string' ? it.kit : '';
   it.storage = typeof it.storage === 'string' ? it.storage : '';   // where it lives at home (free text)
   // Pictures of the item, as resized data URLs. Canonical field is `photos`;
   // a legacy single `photo` string is folded in and then dropped.
@@ -395,6 +399,59 @@ export function newAction(partial = {}) {
   });
 }
 
+// --- Kits (reusable bundles of items always packed together) ---
+// A kit groups small catalog items you never want to pack separately — a charging
+// kit, a wash bag, a first-aid pouch. It references its members by their stable
+// catalog id, so a kit stays in sync as items are renamed. Adding a kit (to a
+// template or a trip) drops in all its members at once, tagged with the kit's NAME
+// so the packing list can cluster them under one "pack the whole kit" header.
+export const KIT_DEFAULT_EMOJI = '🧰';
+
+export function coerceKit(k) {
+  if (!k || typeof k !== 'object') return k;
+  k.name = typeof k.name === 'string' ? k.name : '';
+  k.emoji = (typeof k.emoji === 'string' && k.emoji.trim()) ? k.emoji.trim() : '';
+  k.note = typeof k.note === 'string' ? k.note : '';
+  // Member catalog-item ids, de-duplicated, order preserved.
+  const seen = new Set();
+  k.itemIds = asArray(k.itemIds).filter((iid) => typeof iid === 'string' && iid && !seen.has(iid) && seen.add(iid));
+  if (typeof k.createdAt !== 'string') k.createdAt = '';
+  if (typeof k.updatedAt !== 'string') k.updatedAt = '';
+  return k;
+}
+
+export function newKit(partial = {}) {
+  return coerceKit({
+    id: id(),
+    name: '', emoji: '', note: '', itemIds: [],
+    createdAt: nowISO(), updatedAt: nowISO(),
+    ...partial,
+  });
+}
+
+// The glyph shown for a kit on the packing list — its own emoji, or a default.
+export function kitEmoji(kit) {
+  return (kit && typeof kit.emoji === 'string' && kit.emoji.trim()) ? kit.emoji.trim() : KIT_DEFAULT_EMOJI;
+}
+
+// Split a flat list of entries into kit clusters + loose entries, preserving the
+// original order: a loose entry stays where it is; the first time a kit is seen,
+// its whole run (every entry in THIS list carrying that kit name) is emitted as one
+// cluster at that position. Used to render "🧰 Charging kit" groups on the packing
+// list. Returns [{ kit: name|'', entries: [...] }] — kit === '' means a loose entry.
+export function clusterByKit(entries) {
+  const out = [];
+  const done = new Set();
+  for (const e of asArray(entries)) {
+    const k = (e && typeof e.kit === 'string' ? e.kit : '').trim();
+    if (!k) { out.push({ kit: '', entries: [e] }); continue; }
+    if (done.has(k)) continue;
+    done.add(k);
+    out.push({ kit: k, entries: asArray(entries).filter((x) => (x && typeof x.kit === 'string' ? x.kit : '').trim() === k) });
+  }
+  return out;
+}
+
 export function newItem(partial = {}) {
   return coerceItem({
     id: id(),
@@ -420,6 +477,7 @@ export function newItem(partial = {}) {
     restricted: false, // battery / restricted (carry-on)
     perNight: false, // quantity scales with trip nights
     section: '',     // per-template section (a section id, resolved from the membership)
+    kit: '',         // kit name this item is packed as part of ('' = none; contextual, like section)
     storage: '',     // where the physical item is kept at home (free text)
     photos: [],      // pictures of the item, as resized data URLs (max MAX_PHOTOS)
     maintenance: null, // care record (notes/link/schedule/log) — see normalizeMaintenance
@@ -531,6 +589,7 @@ function entryFromItem(item, list) {
     restricted: !!item.restricted,
     perNight: !!item.perNight,
     section: sectionName(list, item.section), // resolved to the DISPLAY NAME so sections merge by name across templates
+    kit: item.kit || '',         // kit name carried onto the trip so the packing list can cluster kit-mates
     storage: item.storage || '', // carried onto the trip so packing shows where to grab it
     sub: asArray(item.sub).slice(),
     note: item.note || '',
@@ -1414,6 +1473,7 @@ export function coerceMembership(m) {
   m.weather = asArray(m.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w)); // conditional-gear tags (contextual, per template)
   m.container = typeof m.container === 'string' ? m.container : '';      // '' = use item default
   m.section = typeof m.section === 'string' ? m.section : '';            // section id within THIS template ('' = none)
+  m.kit = typeof m.kit === 'string' ? m.kit : '';                        // kit NAME this item is packed as part of ('' = none); contextual per template
   m.phase = PHASE_IDS.includes(m.phase) ? m.phase : '';                  // '' = use item default
   m.itemType = (m.itemType === 'item' || m.itemType === 'reminder') ? m.itemType : ''; // '' = use item default
   m.qty = typeof m.qty === 'string' ? m.qty : (m.qty ? String(m.qty) : '');
@@ -1428,7 +1488,7 @@ export function newMembership(partial = {}) {
     itemId: '',
     templateId: '',
     seasons: [], contexts: [], transports: [], catering: [], weather: [],
-    container: '', section: '', phase: '', itemType: '', qty: '', note: '', order: 0,
+    container: '', section: '', kit: '', phase: '', itemType: '', qty: '', note: '', order: 0,
     ...partial,
   });
 }
@@ -1512,6 +1572,7 @@ export function membershipFromResolved(cat, templateId, it, order = 0, existing 
   m.weather = asArray(it.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w));
   m.container = it.container !== cat.container ? it.container : '';
   m.section = it.section || '';   // purely per-template — always stored, no catalog default
+  m.kit = it.kit || '';           // kit name — contextual per template, always stored, no catalog default
   m.phase = it.phase !== cat.phase ? it.phase : '';
   m.itemType = it.itemType !== cat.itemType ? it.itemType : '';
   m.qty = it.qty || '';
@@ -1536,6 +1597,7 @@ export function resolveMembership(item, m) {
     weather: mm.weather.slice(),
     container: mm.container || base.container,
     section: mm.section || '',   // per-template section id ('' = none); not an item default
+    kit: mm.kit || '',           // per-template kit name ('' = none); not an item default
     phase: mm.phase || base.phase,
     itemType: mm.itemType || base.itemType,
     qty: mm.qty || base.qty || '',

@@ -1,7 +1,7 @@
 // app.js — screens, navigation and wiring for AMS Packing List.
 import {
   CATEGORIES, CONTAINERS, CONTAINER_ROLE, CONTAINER_LIST_NAME, containerNames, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
-  CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, newItem, newList, newEvent,
+  CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, normName, newItem, newList, newEvent,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
@@ -11,6 +11,7 @@ import {
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
   maintenanceList, maintenanceSummary, maintenanceByDate, logMaintenance, addDays, daysBetween,
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
+  newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
 } from './model.js';
@@ -22,7 +23,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v91';
+const APP_VERSION = 'v93';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -267,6 +268,11 @@ let ALL_LISTS = [];
 let ALL_ACTIONS = [];
 async function refreshActions() { ALL_ACTIONS = await db.getActions(); return ALL_ACTIONS; }
 const openActionsForItem = (itemId) => (itemId ? ALL_ACTIONS.filter((a) => a.itemId === itemId && !a.done).length : 0);
+
+// Every stored kit, cached so the "Add a kit" pickers (template + trip) and the
+// packing-list kit clusters can read them synchronously. Refreshed on each render.
+let ALL_KITS = [];
+async function refreshKits() { ALL_KITS = await db.getKits(); return ALL_KITS; }
 
 // The "Loose items" bin — where items live before they belong to any template.
 // It's a real list under the hood (so the editor, care, matrix all work) but
@@ -628,6 +634,7 @@ function copyItemForTemplate(src, name) {
     weather: (src.weather || []).slice(),
     sub: (src.sub || []).slice(),
     note: src.note || '',
+    kit: src.kit || '',
     weight: src.weight || 0,
     liquid: src.liquid, restricted: src.restricted, perNight: src.perNight,
     storage: src.storage || '',
@@ -812,7 +819,7 @@ async function renderHome() {
   const [events, lists, actions] = await Promise.all([db.getEvents(), db.getLists(), db.getActions()]);
   ALL_ACTIONS = actions; // keep the module cache warm for item to-do badges
   const wrap = h('<section class="screen"></section>');
-  wrap.appendChild(h('<div class="topbar"><h1>AMS Packing List</h1></div>'));
+  wrap.appendChild(h(`<div class="topbar"><h1 class="grow">AMS Packing List</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a></div>`));
 
   // On-open reminder: the soonest trip that has items due to pack now.
   const nudges = events.map((e) => ({ e, n: tripNudge(e) })).filter((x) => x.n && x.n.dueCount > 0);
@@ -936,7 +943,7 @@ function eventCardHTML(e) {
 async function renderEvents() {
   const events = await db.getEvents();
   const wrap = h('<section class="screen"></section>');
-  wrap.appendChild(h('<div class="topbar"><h1>Events</h1><a class="btn ghost" href="#/map">' + IC.globe + '<span>Map</span></a><a class="btn primary" href="#/">' + IC.plus + '<span>New</span></a></div>'));
+  wrap.appendChild(h('<div class="topbar"><h1 class="grow">Events</h1><a class="iconbtn" href="#/search" aria-label="Search">' + IC.search + '</a><a class="btn ghost" href="#/map">' + IC.globe + '<span>Map</span></a><a class="btn primary" href="#/">' + IC.plus + '<span>New</span></a></div>'));
   if (!events.length) {
     wrap.appendChild(h('<div class="empty"><p class="empty-t">No events yet</p><p class="empty-s">Head to Home to build your first trip’s combined Packing List.</p></div>'));
     return wrap;
@@ -1508,6 +1515,7 @@ async function renderEvent(eventId) {
     </div>
     <div class="spacer"></div>
     <button class="btn ghost" data-act="add">${IC.plus}<span>Item</span></button>
+    <button class="btn ghost" data-act="kit">${KIT_DEFAULT_EMOJI}<span>Kit</span></button>
     <button class="btn ghost" data-act="regen">${IC.refresh}<span>Regenerate</span></button>
     <button class="btn ghost" data-act="preset">${IC.star || '⭐'}<span>Save as preset</span></button>
     <button class="btn ghost" data-act="review">${IC.check}<span>Trip review</span></button>
@@ -1570,6 +1578,17 @@ async function renderEvent(eventId) {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
     if (act === 'add') { addEntry(ev, body); }
+    else if (act === 'kit') {
+      const kit = await pickKit('Add a kit to this trip');
+      if (!kit) return;
+      const members = await kitCatalogItems(kit);
+      if (!members.length) { alert(`“${kit.name}” has no items yet. Add some in Settings → Kits.`); return; }
+      const { added, total } = addKitToTrip(ev, kit, members);
+      if (await saveGuard(db.saveEvent(ev))) {
+        showToast(added ? `Added ${kitEmoji(kit)} ${kit.name} — ${added} item${added === 1 ? '' : 's'}${added < total ? ` (${total - added} already on the list)` : ''}` : `All of ${kit.name} was already on the list — grouped it into the kit`);
+        render();
+      }
+    }
     else if (act === 'regen') {
       if (!confirm('Regenerate from your packing lists? Your manual additions, edits and ticks are kept; new matching items are added.')) return;
       const lists = await db.getLists();
@@ -1905,7 +1924,7 @@ function renderTotalBody(body, ev) {
     const showSub = subs.length > 1; // only show sub-headers when they actually split the group
     for (const s of subs) {
       if (showSub) gb.appendChild(h(`<div class="sub">${groupIcon(s.label) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(s.label)}</span>` : ''}${esc(s.label)}</div>`));
-      for (const entry of s.entries) gb.appendChild(entryRow(ev, entry, body));
+      appendEntriesWithKits(gb, ev, s.entries, body);
     }
     const head = $('.group-h', sec);
     const toggle = () => {
@@ -1988,6 +2007,7 @@ function entryRow(ev, entry, body, showWeight = false) {
   if (mode !== 'container' && entry.container) subBits.push(esc(entry.container));
   if (mode !== 'category' && entry.category) subBits.push(esc(entry.category));
   if (mode !== 'when') subBits.push(esc(phaseLabel(entry.phase)));
+  if (showWeight && entry.kit) subBits.push(`🧰 ${esc(entry.kit)}`); // flat views have no kit header
   if (entry.note) subBits.push(esc(entry.note));
   if (entry.custom) subBits.push('added');
   const subLine = entry.swedish ? `<span class="e-sv">${esc(entry.swedish)}</span> · ` : '';
@@ -2042,6 +2062,41 @@ function entryRow(ev, entry, body, showWeight = false) {
     return holder;
   }
   return row;
+}
+
+// Render a list of entries into `gb`, clustering kit-mates under a "🧰 Kit name"
+// header with a one-tap "pack the whole kit" toggle. Loose (kit-less) entries
+// render as normal rows in place. A kit's own emoji is used when the kit still
+// exists; otherwise the default bundle glyph.
+function appendEntriesWithKits(gb, ev, entries, body) {
+  for (const cl of clusterByKit(entries)) {
+    if (!cl.kit) { gb.appendChild(entryRow(ev, cl.entries[0], body)); continue; }
+    const kitDef = (ALL_KITS || []).find((k) => k.name === cl.kit);
+    const emoji = kitDef ? kitEmoji(kitDef) : KIT_DEFAULT_EMOJI;
+    const done = cl.entries.filter((e) => e.checked).length;
+    const allPacked = cl.entries.length > 0 && done >= cl.entries.length;
+    const box = h(`<div class="kit-cluster${allPacked ? ' done' : ''}">
+      <div class="kit-cluster-h">
+        <span class="kit-cluster-ic" aria-hidden="true">${esc(emoji)}</span>
+        <span class="kit-cluster-name">${esc(cl.kit)}</span>
+        <span class="kit-cluster-count">${done}/${cl.entries.length}</span>
+        <button type="button" class="kit-packall">${allPacked ? 'Unpack' : 'Pack all'}</button>
+      </div>
+      <div class="kit-cluster-body"></div>
+    </div>`);
+    const cbody = box.querySelector('.kit-cluster-body');
+    for (const entry of cl.entries) cbody.appendChild(entryRow(ev, entry, body));
+    box.querySelector('.kit-packall').addEventListener('click', async () => {
+      const wasComplete = (() => { const p = progress(ev.entries); return p.total > 0 && p.done >= p.total; })();
+      const target = !allPacked;
+      for (const e of cl.entries) e.checked = target;
+      if (await saveGuard(db.saveEvent(ev))) {
+        renderTotalBody(body, ev);
+        updateReadinessProgress(ev, wasComplete);
+      }
+    });
+    gb.appendChild(box);
+  }
 }
 
 // From a trip entry, find the template item it was built from — or, failing that,
@@ -2124,6 +2179,7 @@ function entryEditor(ev, entry, body) {
       <label class="field"><span>When</span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), entry.phase)}</label>
     </div>
     <label class="field"><span>Section <em>groups this item on the list</em></span><input name="section" value="${esc(entry.section)}" list="entry-sections" placeholder="optional" autocomplete="off"><datalist id="entry-sections">${tripSecNames.map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></label>
+    <label class="field"><span>Kit <em>pack this together as a unit</em></span><input name="kit" value="${esc(entry.kit)}" list="entry-kits" placeholder="optional — e.g. Charging kit" autocomplete="off"><datalist id="entry-kits">${[...new Set([...(ALL_KITS || []).map((k) => k.name), ...(ev.entries || []).map((e) => (e.kit || '').trim())].filter(Boolean))].map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></label>
     <div class="row2">
       <label class="field"><span>Weight (g)</span><input type="number" name="weight" min="0" inputmode="numeric" value="${entry.weight || ''}" placeholder="0"></label>
       <div class="checks">
@@ -2155,6 +2211,7 @@ function entryEditor(ev, entry, body) {
     entry.category = $('select[name=category]', ed).value;
     entry.container = $('select[name=container]', ed).value;
     entry.section = ($('input[name=section]', ed).value || '').trim();
+    entry.kit = ($('input[name=kit]', ed).value || '').trim();
     entry.phase = $('select[name=phase]', ed).value;
     entry.weight = Math.max(0, parseInt($('input[name=weight]', ed).value, 10) || 0);
     entry.perNight = $('input[name=perNight]', ed).checked;
@@ -2283,6 +2340,183 @@ function openModal(node) {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   document.addEventListener('keydown', onKey);
   return close;
+}
+
+// ---------- Kit editor (create / edit a reusable bundle) ----------
+// Opens a modal to name a kit, give it an emoji, and pick its member items from
+// the catalog (search-driven, since there are ~380 items). Saves to the `kits`
+// store and calls onSaved(kit). Cancel / Esc / backdrop just closes.
+async function openKitEditor(existing, onSaved) {
+  const catalog = await db.getCatalogItems();
+  const catById = new Map(catalog.map((i) => [i.id, i]));
+  const kit = existing ? coerceKit({ ...existing, itemIds: existing.itemIds.slice() }) : newKit();
+  // Ordered set of chosen catalog-item ids (only ones that still exist).
+  const chosen = kit.itemIds.filter((iid) => catById.has(iid));
+
+  const modal = h(`<div class="modal kit-editor">
+    <h3>${existing ? 'Edit kit' : 'New kit'}</h3>
+    <p class="modal-sub">A bundle of small things you always pack together — a charging kit, a wash bag, a first-aid pouch. Add it to a template or a trip and every item comes in at once, grouped so you can pack the whole kit in one go.</p>
+    <div class="kit-meta">
+      <label class="kit-emoji-f"><span>Icon</span><input name="emoji" type="text" maxlength="2" placeholder="${KIT_DEFAULT_EMOJI}" value="${esc(kit.emoji)}"></label>
+      <label class="kit-name-f"><span>Name</span><input name="name" type="text" placeholder="e.g. Charging kit" value="${esc(kit.name)}"></label>
+    </div>
+    <label class="kit-note-f"><span>Note (optional)</span><input name="note" type="text" placeholder="anything worth remembering" value="${esc(kit.note)}"></label>
+    <div class="kit-members">
+      <div class="kit-chosen" data-chosen></div>
+      <input class="kit-search" type="search" placeholder="Search items to add…" aria-label="Search items to add to the kit">
+      <div class="kit-results" data-results></div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn" data-x="cancel">Cancel</button>
+      <button type="button" class="btn primary" data-x="save">${existing ? 'Save kit' : 'Create kit'}</button>
+    </div>
+  </div>`);
+
+  const close = openModal(modal);
+  const chosenBox = modal.querySelector('[data-chosen]');
+  const resultsBox = modal.querySelector('[data-results]');
+  const search = modal.querySelector('.kit-search');
+
+  const itemLabel = (it) => `${esc(it.name)}${it.swedish ? ` · <span class="kit-sv">${esc(it.swedish)}</span>` : ''}`;
+  const drawChosen = () => {
+    chosenBox.innerHTML = chosen.length
+      ? chosen.map((iid) => {
+        const it = catById.get(iid);
+        return `<button type="button" class="kit-chip" data-remove="${esc(iid)}" title="Remove">${itemLabel(it)} <span class="kit-chip-x" aria-hidden="true">×</span></button>`;
+      }).join('')
+      : '<p class="muted kit-empty">No items yet — search below and tap to add them.</p>';
+  };
+  const drawResults = () => {
+    const q = normName(search.value);
+    if (!q) { resultsBox.innerHTML = '<p class="muted kit-hint">Type to find items to add.</p>'; return; }
+    const hits = catalog
+      .filter((it) => normName(it.name).includes(q) || normName(it.swedish).includes(q))
+      .slice(0, 40);
+    resultsBox.innerHTML = hits.length
+      ? hits.map((it) => {
+        const on = chosen.includes(it.id);
+        return `<button type="button" class="kit-hit${on ? ' on' : ''}" data-add="${esc(it.id)}">
+          <span class="kit-hit-tick" aria-hidden="true">${on ? '✓' : '+'}</span>${itemLabel(it)}</button>`;
+      }).join('')
+      : '<p class="muted kit-hint">No items match — an item must exist in the catalog before it can join a kit.</p>';
+  };
+  drawChosen(); drawResults();
+
+  search.addEventListener('input', drawResults);
+  resultsBox.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-add]'); if (!b) return;
+    const iid = b.dataset.add;
+    const i = chosen.indexOf(iid);
+    if (i >= 0) chosen.splice(i, 1); else chosen.push(iid);
+    drawChosen(); drawResults();
+  });
+  chosenBox.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-remove]'); if (!b) return;
+    const i = chosen.indexOf(b.dataset.remove);
+    if (i >= 0) chosen.splice(i, 1);
+    drawChosen(); drawResults();
+  });
+
+  modal.querySelector('[data-x="cancel"]').addEventListener('click', close);
+  modal.querySelector('[data-x="save"]').addEventListener('click', async () => {
+    const name = modal.querySelector('input[name=name]').value.trim();
+    if (!name) { alert('Give the kit a name first.'); return; }
+    if (!chosen.length && !confirm('This kit has no items yet. Save it anyway?')) return;
+    kit.name = name;
+    kit.emoji = modal.querySelector('input[name=emoji]').value.trim();
+    kit.note = modal.querySelector('input[name=note]').value.trim();
+    kit.itemIds = chosen.slice();
+    await db.saveKit(kit);
+    await refreshKits();
+    close();
+    if (onSaved) onSaved(kit);
+  });
+  setTimeout(() => modal.querySelector('input[name=name]').focus(), 30);
+}
+
+// Let the user pick one of their kits (to add to a template or a trip). Resolves to
+// a kit or null. Points them at Settings → Kits when they have none yet.
+function pickKit(title = 'Add a kit') {
+  return new Promise((resolve) => {
+    const kits = (ALL_KITS || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (!kits.length) {
+      alert('You don’t have any kits yet.\n\nBuild one first in Settings → Kits — a bundle of items you always pack together — then add it here as one unit.');
+      resolve(null); return;
+    }
+    const modal = h(`<div class="modal kit-pick">
+      <h3>${esc(title)}</h3>
+      <p class="modal-sub">Adds every item in the kit at once, grouped under the kit so you can pack it as one.</p>
+      <div class="kit-pick-list">
+        ${kits.map((k) => `<button type="button" class="kit-pick-row" data-kit="${esc(k.id)}">
+          <span class="kit-row-ic" aria-hidden="true">${esc(kitEmoji(k))}</span>
+          <span class="kit-row-info"><b class="kit-row-name">${esc(k.name)}</b><span class="kit-row-sub">${k.itemIds.length} item${k.itemIds.length === 1 ? '' : 's'}${k.note ? ` · ${esc(k.note)}` : ''}</span></span>
+        </button>`).join('')}
+      </div>
+      <div class="modal-actions"><button type="button" class="btn" data-x="cancel">Cancel</button></div>
+    </div>`);
+    const close = openModal(modal);
+    let picked = null;
+    modal.addEventListener('click', (e) => {
+      const row = e.target.closest('[data-kit]');
+      const cancel = e.target.closest('[data-x="cancel"]');
+      if (row) { picked = kits.find((k) => k.id === row.dataset.kit) || null; close(); resolve(picked); }
+      else if (cancel) { close(); resolve(null); }
+    });
+  });
+}
+
+// Resolve a kit's members to fresh catalog items (dropping any that were deleted),
+// in the kit's own order. Shared by the template + trip add paths.
+async function kitCatalogItems(kit) {
+  const catalog = await db.getCatalogItems();
+  const byId = new Map(catalog.map((i) => [i.id, i]));
+  return kit.itemIds.map((iid) => byId.get(iid)).filter(Boolean);
+}
+
+// Add a whole kit into a template: every member item joins the template (or, if
+// already there, is tagged with the kit) so it packs as a unit. Returns how many
+// were newly added.
+async function addKitToTemplate(list, kit) {
+  const members = await kitCatalogItems(kit);
+  let added = 0;
+  for (const cat of members) {
+    const existing = (list.items || []).find((it) => (it._itemId && it._itemId === cat.id) || normName(it.name) === normName(cat.name));
+    if (existing) { existing.kit = kit.name; }
+    else {
+      const copy = copyItemForTemplate(cat, cat.name);
+      copy.kit = kit.name;
+      copy._itemId = cat.id;   // link so saveList reuses the shared catalog item, no duplicate
+      list.items.unshift(copy);
+      added++;
+    }
+  }
+  await db.saveList(list);
+  return { added, total: members.length };
+}
+
+// Add a whole kit onto a specific trip: each member becomes a trip entry tagged
+// with the kit (or an existing matching entry is tagged), so it clusters on the
+// packing list. Returns how many were newly added.
+function addKitToTrip(ev, kit, members) {
+  let added = 0;
+  for (const cat of members) {
+    const existing = ev.entries.find((e) => normName(e.name) === normName(cat.name) && e.container === cat.container);
+    if (existing) { existing.kit = kit.name; existing._edited = true; }
+    else {
+      const entry = newItem({
+        name: cat.name, swedish: cat.swedish || '', qty: cat.qty || '',
+        category: cat.category, container: cat.container, phase: cat.phase, itemType: cat.itemType,
+        charging: cat.charging, chargeType: cat.chargeType, shortList: cat.shortList,
+        weight: cat.weight || 0, liquid: cat.liquid, restricted: cat.restricted, perNight: cat.perNight,
+        storage: cat.storage || '', sub: (cat.sub || []).slice(), note: cat.note || '',
+        kit: kit.name, custom: true, checked: false,
+        sourceListId: null, sourceItemId: cat.id,
+      });
+      ev.entries.unshift(entry);
+      added++;
+    }
+  }
+  return { added, total: members.length };
 }
 
 // ============================================================
@@ -2510,7 +2744,7 @@ async function renderRefine() {
 async function renderLists() {
   const lists = await db.getLists();
   const wrap = h('<section class="screen"></section>');
-  wrap.appendChild(h(`<div class="topbar"><h1>Templates</h1><a class="btn ghost" href="#/refine">Refine</a><button class="btn primary" data-new>${IC.plus}<span>New</span></button></div>`));
+  wrap.appendChild(h(`<div class="topbar"><h1 class="grow">Templates</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a><a class="btn ghost" href="#/refine">Refine</a><button class="btn primary" data-new>${IC.plus}<span>New</span></button></div>`));
   wrap.appendChild(h(`<p class="muted pad">These are your reusable building blocks. An <b>Event</b> combines the ones you pick into a single <b>Packing List</b> to pack from.</p>`));
 
   const card = (l) => h(`<a class="card lst" href="#/list/${l.id}">
@@ -2587,6 +2821,7 @@ async function renderList(listId, openItemId) {
     <div class="spacer"></div>
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
     ${isLoose ? `<button class="btn ghost" data-batch>${IC.list}<span>Add several</span></button>` : ''}
+    ${noTemplateChrome ? '' : `<button class="btn ghost" data-kit>${KIT_DEFAULT_EMOJI}<span>Add a kit</span></button>`}
     <button class="btn ghost" data-add>${IC.plus}<span>${isContainer ? 'Add container' : 'Add item'}</span></button>
   </div>`));
 
@@ -2642,6 +2877,15 @@ async function renderList(listId, openItemId) {
     const it = newItem({ name: '' });
     list.items.unshift(it); openItem = it.id; draw();
     const inp = $('.item-editor input[name=name]', body); if (inp) inp.focus();
+  });
+  wrap.querySelector('[data-kit]')?.addEventListener('click', async () => {
+    const kit = await pickKit(`Add a kit to ${list.name}`);
+    if (!kit) return;
+    const members = await kitCatalogItems(kit);
+    if (!members.length) { alert(`“${kit.name}” has no items yet. Add some in Settings → Kits.`); return; }
+    const { added, total } = await addKitToTemplate(list, kit);
+    showToast(added ? `Added ${kitEmoji(kit)} ${kit.name} — ${added} item${added === 1 ? '' : 's'}${added < total ? ` (${total - added} already here)` : ''}` : `All of ${kit.name} was already in this template — grouped it into the kit`);
+    render();
   });
   wrap.querySelector('[data-batch]')?.addEventListener('click', () => {
     const added = batchAddItems(list);
@@ -3337,7 +3581,7 @@ const monthOf = (ymd) => ymd.slice(0, 7);
 
 async function renderMaintenance() {
   const wrap = h('<section class="screen"></section>');
-  wrap.appendChild(h('<div class="topbar"><h1>Care &amp; maintenance</h1></div>'));
+  wrap.appendChild(h(`<div class="topbar"><h1 class="grow">Care &amp; maintenance</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a></div>`));
 
   const lists = await db.getLists();
   // Entry point to the Containers catalogue (bags/duffels/backpacks as objects).
@@ -3737,6 +3981,7 @@ function howtoCard() {
           <li><b>Actions</b> — your to-do list (the red tab): everything you need to <em>do</em>, not just pack, whether it belongs to a specific item or stands on its own (see <b>Actions — your to-do list</b> below).</li>
           <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip import, this guide and the version history.</li>
         </ul>
+        <p><b>Search.</b> A <b>🔍</b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name or Swedish), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
 
         <h3>Colour tells you where you are</h3>
         <p>Each of the six tabs has its <b>own colour</b>, and that colour flows through the whole screen — the page heading, the buttons, the chips and progress bars, the back/edit icons, and the tab itself. In the bottom bar <b>every tab always shows its colour</b>, and the one you're currently on fills in solid and goes bold — so a single glance tells you which part of the app you're in:</p>
@@ -3753,6 +3998,7 @@ function howtoCard() {
         <h3>Creating a trip</h3>
         <p>The <b>Home</b> tab is the builder. Set the trip's conditions, tick any <b>extra activities</b> you're doing, and press <b>Create Event</b> — it generates an editable Event (with its own Packing List) that then lives under the <b>Events</b> tab.</p>
         <p><b>Presets.</b> For trips you take often, save the whole setup and reuse it. On any trip, tap <b>⭐ Save as preset</b> to remember its recipe — the activities plus all the conditions (trip/quick, transport, season, WET options, forced weather gear, laundry), but not the dates, destination or packed items. Back on <b>Home</b>, a <b>⚡ Start from a preset</b> row lets you fill the whole builder in one tap, then just add this trip's name and dates. Manage them under <b>Settings → Trip presets</b>; they ride along in your backups.</p>
+        <p><b>Kits.</b> A <b>kit</b> is a bundle of small things you always pack together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Build your kits under <b>Settings → Kits</b>: give each a name and an emoji, then search your catalogue to pick its members. Once a kit exists you can add it <b>as one unit</b> in two places — from a <b>template</b> (its <b>🧰 Add a kit</b> button, so every trip built from that template includes the whole bundle) or straight onto a single <b>trip</b> (the <b>🧰 Kit</b> button on the trip’s toolbar). On the Packing List the kit’s items <b>cluster together</b> under a <b>🧰 kit header</b> with a <b>Pack all</b> button, so you tick the whole pouch off in one tap. Need to tweak one trip? Open any item on a trip and use its <b>Kit</b> field to add it to, move it between, or clear it from a kit just for that trip. Kits are included in your backups and automatic snapshots. (Deleting a kit only removes the bundle — items you already added to templates or trips stay put.)</p>
         <ul>
           <li><b>Name, start date, end date, destination</b> (end date and destination are optional). You give the <b>end date</b> — the return day — rather than counting nights yourself; the app works out the nights and shows them live below the dates.</li>
           <li><b>Time of year, catering, context</b> narrow the list; the <b>nights between your start and end date</b> drive per-night quantities (e.g. socks ×6 for six nights). Tick <b>🧺 Laundry available</b> to cap those per-night items at ${LAUNDRY_CAP_NIGHTS} — so a long trip doesn’t demand a dozen (short trips are unaffected); capped items show a small 🧺 by their ×count.</li>
@@ -3875,6 +4121,12 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v93', '2026-08-18 · 12:00 UTC', false, 'Kits — bundle the things you always pack together',
+      'You can now build a <b>Kit</b>: a reusable bundle of small things that always travel together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Create and name your kits (each gets its own emoji) under <b>Settings → Kits</b>, picking their members from your item catalogue. Then add a whole kit <b>as one unit</b>: from a <b>template</b> (tap <b>🧰 Add a kit</b> — every item joins, and every trip using that template gets them), or straight onto a <b>trip</b> (the 🧰 <b>Kit</b> button on a trip’s toolbar). On the packing list the kit’s items <b>cluster together</b> under a <b>🧰 kit header</b> with a <b>Pack all</b> button, so you can tick the whole pouch packed in one tap instead of hunting its pieces one by one. You can also set or clear an item’s kit for a single trip from its editor’s new <b>Kit</b> field. Kits are saved in your backups and automatic snapshots.',
+      'Stop re-adding and re-finding the same little clusters of gear: define a kit once, drop it in as a unit, and pack it as one — nothing in the bundle gets forgotten.'),
+    v('v92', '2026-08-17 · 22:00 UTC', false, 'Search — find anything from one box',
+      'A new <b>🔍 Search</b> button now sits in the top bar of <b>Home, Events, Templates, Care and Actions</b>, opening one search box that looks <b>across everything at once</b> — your <b>items</b> (by name or Swedish wording), your <b>templates</b>, your <b>trips</b> (by name or destination) and your <b>to-dos</b>. Results appear grouped and update as you type; tap any result to jump straight to it — an item opens in its editor, a template or trip opens itself, a to-do opens the Actions tab. As your catalogue grows past a few hundred items, this is the fastest way to reach a specific thing without remembering which template it’s in. Everything is searched <b>on your device</b>, instantly, offline.',
+      'No more hunting through templates: type a few letters and jump straight to any item, list, trip or to-do in the whole app.'),
     v('v91', '2026-08-17 · 21:00 UTC', false, 'Diagnostics — see what went wrong',
       'A quiet safety-and-support feature: the app now keeps a small, private <b>Diagnostics</b> log of any errors it runs into, <b>on your device</b>. Find it at the bottom of <b>Settings → Diagnostics</b>. If something ever misbehaves — a screen fails to load, a save doesn’t go through — the details are recorded there instead of vanishing, so you (or I) can see the real cause rather than guessing. You can <b>Copy log</b> to share it, or <b>Clear</b> it any time, and it shows “all healthy” when there’s nothing to report. The log never leaves your device unless you copy and send it yourself. Most of the time you’ll never need it — it’s there for the rare occasion when you do.',
       'If the app ever hiccups on your phone, there’s now a real record of what happened — easy to copy and share for a quick fix, instead of an error that disappears.'),
@@ -4167,7 +4419,7 @@ let actionShowDone = false;    // whether the collapsed "Done" group is expanded
 
 async function renderActions() {
   const wrap = h('<section class="screen"></section>');
-  wrap.appendChild(h(`<div class="topbar"><h1>Actions</h1><button class="btn primary" data-new>${IC.plus}<span>New</span></button></div>`));
+  wrap.appendChild(h(`<div class="topbar"><h1 class="grow">Actions</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a><button class="btn primary" data-new>${IC.plus}<span>New</span></button></div>`));
   wrap.appendChild(h('<p class="screen-intro">Your to-do list. An action tied to an item also shows on that item; “General” ones live only here.</p>'));
 
   const [actionsAll, catalog] = await Promise.all([db.getActions(), db.getCatalogItems()]);
@@ -4272,6 +4524,95 @@ async function renderActions() {
 
   $('[data-new]', wrap).addEventListener('click', () => { actionEditId = '__new__'; draw(); });
   draw();
+  return wrap;
+}
+
+// ============================================================
+// Global search — find any item, template, trip or to-do from one box
+// ============================================================
+let searchQuery = '';
+async function renderSearch() {
+  const [items, lists, events, actions] = await Promise.all([
+    db.getCatalogItems(), db.getLists(), db.getEvents(), db.getActions(),
+  ]);
+  // Map each catalog item to a template it lives in, so a hit can open its editor.
+  const itemToList = new Map();
+  for (const l of lists) {
+    if (l.role === CONTAINER_ROLE) continue;
+    for (const it of (l.items || [])) if (it._itemId && !itemToList.has(it._itemId)) itemToList.set(it._itemId, l.id);
+  }
+
+  const wrap = h('<section class="screen"></section>');
+  wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a><h1>Search</h1></div>`));
+  const boxEl = h(`<div class="search-box">${IC.search}<input type="search" placeholder="Search items, templates, trips, to-dos…" autocomplete="off" spellcheck="false" value="${esc(searchQuery)}"></div>`);
+  wrap.appendChild(boxEl);
+  const results = h('<div class="search-results"></div>');
+  wrap.appendChild(results);
+  const input = boxEl.querySelector('input');
+
+  const sectionHead = (title, n) => `<h2 class="section-h">${esc(title)} · ${n}</h2>`;
+  const row = (href, icon, main, sub) => `<a class="search-row" href="${href}">
+    <span class="sr-ic">${icon}</span>
+    <span class="sr-body"><span class="sr-main">${main}</span>${sub ? `<span class="sr-sub">${sub}</span>` : ''}</span>
+    <span class="sr-go">${IC.fwd}</span></a>`;
+
+  const draw = () => {
+    const raw = searchQuery.trim();
+    const q = raw.toLowerCase();
+    results.innerHTML = '';
+    if (!q) { results.appendChild(h('<p class="muted pad">Type to search across everything — your items, templates, trips and to-dos.</p>')); return; }
+    const has = (s) => String(s || '').toLowerCase().includes(q);
+
+    const itemHits = items.filter((it) => has(it.name) || has(it.swedish)).slice(0, 30);
+    const tmplHits = lists.filter((l) => l.role !== CONTAINER_ROLE && l.role !== 'loose' && has(l.name));
+    const eventHits = events.filter((e) => has(e.name) || has(e.destination));
+    const actionHits = actions.filter((a) => has(a.text) || has(a.itemName));
+
+    if (!(itemHits.length + tmplHits.length + eventHits.length + actionHits.length)) {
+      results.appendChild(h(`<p class="muted pad">No matches for “${esc(raw)}”.</p>`));
+      return;
+    }
+
+    let html = '';
+    if (itemHits.length) {
+      html += sectionHead('Items', itemHits.length) + '<div class="search-list">';
+      for (const it of itemHits) {
+        const tid = itemToList.get(it.id);
+        const href = tid ? `#/list/${encodeURIComponent(tid)}/item/${encodeURIComponent(it.id)}` : '#/maintenance';
+        const dot = `<span class="e-cat" style="background:${categoryColor(it.category)}"></span>`;
+        const sub = [it.category, it.swedish].filter(Boolean).map(esc).join(' · ');
+        html += row(href, CATEGORY_ICON[it.category] || '📦', dot + esc(it.name), sub);
+      }
+      html += '</div>';
+    }
+    if (tmplHits.length) {
+      html += sectionHead('Templates', tmplHits.length) + '<div class="search-list">';
+      for (const l of tmplHits) html += row(`#/list/${encodeURIComponent(l.id)}`, '📋', esc(l.name), `${(l.items || []).length} item${(l.items || []).length === 1 ? '' : 's'}`);
+      html += '</div>';
+    }
+    if (eventHits.length) {
+      html += sectionHead('Trips', eventHits.length) + '<div class="search-list">';
+      for (const e of eventHits) {
+        const d = daysUntil(e.startDate);
+        const sub = [e.destination ? esc(e.destination) : '', d != null ? esc(countdownLabel(d)) : ''].filter(Boolean).join(' · ');
+        html += row(`#/event/${encodeURIComponent(e.id)}`, '🧳', esc(e.name || 'Untitled trip'), sub);
+      }
+      html += '</div>';
+    }
+    if (actionHits.length) {
+      html += sectionHead('To-dos', actionHits.length) + '<div class="search-list">';
+      for (const a of actionHits) {
+        const sub = [a.done ? 'done' : 'open', a.itemName ? esc(a.itemName) : 'General'].filter(Boolean).join(' · ');
+        html += row('#/actions', '🗒️', esc(a.text || '(untitled)'), sub);
+      }
+      html += '</div>';
+    }
+    results.innerHTML = html;
+  };
+
+  input.addEventListener('input', () => { searchQuery = input.value; draw(); });
+  draw();
+  setTimeout(() => { input.focus(); }, 40);
   return wrap;
 }
 
@@ -4449,6 +4790,48 @@ async function renderSettings() {
     if (p && confirm(`Delete the preset “${p.name}”? This won’t affect any trips you already made from it.`)) {
       deletePreset(p.id);
       drawPresets();
+    }
+  });
+
+  // Kits — reusable bundles of items always packed together. Build them here; add
+  // a whole kit as one unit from a template's or a trip's "Kit" button.
+  const kitCard = h(`<div class="card block">
+    <h2>Kits</h2>
+    <p class="muted">Bundles of small things you always pack together — a charging kit, a wash bag, a first-aid pouch. Build one here, then add the whole kit as a single unit from any <b>template</b> or <b>trip</b>. On the packing list its items cluster under the kit so you can pack it all in one go.</p>
+    <div class="kit-list" data-kits></div>
+    <div class="btnrow"><button class="btn" data-kit="add">${IC.plus}<span>New kit</span></button></div>
+  </div>`);
+  wrap.appendChild(kitCard);
+  const drawKits = () => {
+    const box = kitCard.querySelector('[data-kits]');
+    const kits = (ALL_KITS || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    box.innerHTML = kits.length
+      ? kits.map((k) => `<div class="kit-row">
+          <span class="kit-row-ic" aria-hidden="true">${esc(kitEmoji(k))}</span>
+          <span class="kit-row-info"><b class="kit-row-name">${esc(k.name)}</b><span class="kit-row-sub">${k.itemIds.length} item${k.itemIds.length === 1 ? '' : 's'}${k.note ? ` · ${esc(k.note)}` : ''}</span></span>
+          <span class="kit-row-acts">
+            <button type="button" class="iconbtn sm" data-kit-edit="${esc(k.id)}" aria-label="Edit ${esc(k.name)}" title="Edit">${IC.edit}</button>
+            <button type="button" class="iconbtn sm" data-kit-del="${esc(k.id)}" aria-label="Delete ${esc(k.name)}" title="Delete">${IC.trash}</button>
+          </span></div>`).join('')
+      : '<p class="muted">No kits yet — tap <b>New kit</b> to build your first bundle.</p>';
+  };
+  drawKits();
+  kitCard.addEventListener('click', async (e) => {
+    const add = e.target.closest('[data-kit="add"]');
+    const edit = e.target.closest('[data-kit-edit]');
+    const del = e.target.closest('[data-kit-del]');
+    if (add) {
+      await openKitEditor(null, () => drawKits());
+    } else if (edit) {
+      const k = ALL_KITS.find((x) => x.id === edit.dataset.kitEdit);
+      if (k) await openKitEditor(k, () => drawKits());
+    } else if (del) {
+      const k = ALL_KITS.find((x) => x.id === del.dataset.kitDel);
+      if (!k) return;
+      if (!confirm(`Delete the kit “${k.name}”?\n\nThis only removes the bundle. Items already added to a template or trip from it stay put.`)) return;
+      await db.deleteKit(k.id);
+      await refreshKits();
+      drawKits();
     }
   });
 
@@ -4930,6 +5313,7 @@ async function renderRoute() {
   if (hash === '#/containers') return renderContainers();
   if (hash === '#/items') return renderItemsGrid();
   if (hash === '#/actions') return renderActions();
+  if (hash === '#/search') return renderSearch();
   if (hash === '#/refine') return renderRefine();
   if (hash === '#/settings') return renderSettings();
   if (hash === '#/overview') return renderOverview();
@@ -4955,6 +5339,7 @@ async function render() {
   if (rendering) return; rendering = true;
   try {
     await refreshActions();     // fresh action data for badges, the editor buffer & the Actions screen
+    await refreshKits();        // fresh kits for the add-a-kit pickers & packing-list clusters
     const node = await renderRoute();
     app.innerHTML = '';
     app.appendChild(node);
@@ -5001,6 +5386,21 @@ window.addEventListener('hashchange', render);
 // refresh instead of silently leaving the app on the old copy. We only prompt on
 // an actual UPDATE (a controller already exists — not the very first install),
 // and never auto-reload; the user taps when they're ready.
+// A small, transient confirmation banner (non-blocking). Auto-dismisses; a new
+// toast replaces any showing one.
+let toastTimer = null;
+function showToast(msg, ms = 2800) {
+  document.querySelector('.ams-toast')?.remove();
+  clearTimeout(toastTimer);
+  const toast = h(`<div class="ams-toast" role="status">${esc(msg)}</div>`);
+  document.body.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('in'));
+  toastTimer = setTimeout(() => {
+    toast.classList.remove('in');
+    setTimeout(() => toast.remove(), 260);
+  }, ms);
+}
+
 let updateToastShown = false;
 function showUpdateToast() {
   if (updateToastShown) return;

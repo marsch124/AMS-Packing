@@ -14,19 +14,20 @@
 // rest of the app keeps working exactly as before while the storage underneath is
 // relational. All data stays on this device; export/import moves it as JSON/CSV/Excel.
 import {
-  coerceList, coerceEvent, coerceItem, coerceMembership, coerceAction, normName,
+  coerceList, coerceEvent, coerceItem, coerceMembership, coerceAction, coerceKit, normName,
   resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
 } from './model.js';
 import { seedLists } from './seed.js';
 
 const DB_NAME = 'ams-packing-list';
-const DB_VERSION = 4;               // v4: adds the `snapshots` store (automatic safety-net backups); v3: `actions`; v2: relational stores
+const DB_VERSION = 5;               // v5: adds the `kits` store (reusable bundles); v4: `snapshots`; v3: `actions`; v2: relational stores
 const ITEMS = 'items';
 const MEMBERSHIPS = 'memberships';
 const TEMPLATES = 'templates';
 const EVENTS = 'events';
 const ACTIONS = 'actions';          // standalone to-do store (tied-to-item or loose)
+const KITS = 'kits';                // reusable bundles of items always packed together
 const SNAPSHOTS = 'snapshots';      // automatic on-device backup snapshots (a ring buffer)
 const LISTS = 'lists';              // legacy v1 store — read once to migrate, then ignored
 const MAX_SNAPSHOTS = 8;            // how many automatic snapshots to keep (plus the richest is never evicted)
@@ -46,6 +47,7 @@ function open() {
       if (!db.objectStoreNames.contains(MEMBERSHIPS)) db.createObjectStore(MEMBERSHIPS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(TEMPLATES)) db.createObjectStore(TEMPLATES, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(ACTIONS)) db.createObjectStore(ACTIONS, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(KITS)) db.createObjectStore(KITS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(SNAPSHOTS)) db.createObjectStore(SNAPSHOTS, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
@@ -251,6 +253,19 @@ export async function replaceItemActions(itemId, itemName, wanted) {
   await writeBatch(puts, dels);
 }
 
+// --- Kits (reusable bundles) — a flat store, like events + actions ---
+
+export async function getKits() {
+  const raw = await getAllRaw(KITS);
+  return (raw || []).map(coerceKit).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+export function saveKit(kit) {
+  const k = coerceKit({ ...kit });
+  k.updatedAt = new Date().toISOString();
+  return putOne(KITS, k);
+}
+export function deleteKit(id) { return delOne(KITS, id); }
+
 // The raw catalog items (the shared "thing itself" records), for screens that
 // need every item once — e.g. the central Actions list resolving item names,
 // and its "tie to an item" picker.
@@ -317,9 +332,9 @@ export async function ensureSeeded() {
 // is a complete restore point. Photos/care/all item detail are already inside
 // `lists` because getLists() resolves the full item shape.
 export async function exportJSON(extra = {}) {
-  const [lists, events, actions] = await Promise.all([getLists(), getEvents(), getActions()]);
+  const [lists, events, actions, kits] = await Promise.all([getLists(), getEvents(), getActions(), getKits()]);
   return JSON.stringify(
-    { app: 'ams-packing-list', version: 1, exportedAt: new Date().toISOString(), lists, events, actions, ...extra },
+    { app: 'ams-packing-list', version: 1, exportedAt: new Date().toISOString(), lists, events, actions, kits, ...extra },
     null, 2,
   );
 }
@@ -340,6 +355,7 @@ export function inspectBackup(text) {
   const lists = Array.isArray(data.lists) ? data.lists.map(coerceList) : [];
   const events = Array.isArray(data.events) ? data.events.map(coerceEvent) : [];
   const actions = Array.isArray(data.actions) ? data.actions.map(coerceAction) : [];
+  const kits = Array.isArray(data.kits) ? data.kits.map(coerceKit) : [];
   const prefs = (data.prefs && typeof data.prefs === 'object') ? data.prefs : null;
   let photos = 0;
   for (const l of lists) for (const it of (l.items || [])) photos += (it.photos || []).length;
@@ -347,45 +363,49 @@ export function inspectBackup(text) {
     counts: backupCounts({ lists, events, actions }),
     exportedAt: typeof data.exportedAt === 'string' ? data.exportedAt : '',
     photos,
-    data: { lists, events, actions, prefs },
+    data: { lists, events, actions, kits, prefs },
   };
 }
 
 // Live counts of what's currently stored, for the "you'd be replacing …" guard.
 export async function currentCounts() {
-  const [items, tmpls, events, actions] = await Promise.all([
-    getAllRaw(ITEMS), getAllRaw(TEMPLATES), getAllRaw(EVENTS), getAllRaw(ACTIONS),
+  const [items, tmpls, events, actions, kits] = await Promise.all([
+    getAllRaw(ITEMS), getAllRaw(TEMPLATES), getAllRaw(EVENTS), getAllRaw(ACTIONS), getAllRaw(KITS),
   ]);
-  return { items: (items || []).length, templates: (tmpls || []).length, events: (events || []).length, actions: (actions || []).length };
+  return { items: (items || []).length, templates: (tmpls || []).length, events: (events || []).length, actions: (actions || []).length, kits: (kits || []).length };
 }
 
 // Write an already-parsed backup payload into the stores. Shared by file import
 // and snapshot restore. Never called without the caller having taken (or chosen
 // to skip) a safety snapshot first.
-async function applyBackup({ lists = [], events = [], actions = [] }, { merge = false } = {}) {
+async function applyBackup({ lists = [], events = [], actions = [], kits = [] }, { merge = false } = {}) {
   const L = lists.map(coerceList);
   const E = events.map(coerceEvent);
   const A = actions.map(coerceAction);
+  const K = kits.map(coerceKit);
   if (!merge) {
     await replaceCatalog(buildCatalog(L));
     const db = await open();
-    const tx = db.transaction([EVENTS, ACTIONS], 'readwrite');
+    const tx = db.transaction([EVENTS, ACTIONS, KITS], 'readwrite');
     tx.objectStore(EVENTS).clear();
     for (const e of E) tx.objectStore(EVENTS).put(e);
     tx.objectStore(ACTIONS).clear();
     for (const a of A) tx.objectStore(ACTIONS).put(a);
+    tx.objectStore(KITS).clear();
+    for (const k of K) tx.objectStore(KITS).put(k);
     await txP(tx);
   } else {
     for (const l of L) await saveList(l);
-    if (E.length || A.length) {
+    if (E.length || A.length || K.length) {
       const db = await open();
-      const tx = db.transaction([EVENTS, ACTIONS], 'readwrite');
+      const tx = db.transaction([EVENTS, ACTIONS, KITS], 'readwrite');
       for (const e of E) tx.objectStore(EVENTS).put(e);
       for (const a of A) tx.objectStore(ACTIONS).put(a);
+      for (const k of K) tx.objectStore(KITS).put(k);
       await txP(tx);
     }
   }
-  return { lists: L.length, events: E.length, actions: A.length };
+  return { lists: L.length, events: E.length, actions: A.length, kits: K.length };
 }
 
 export async function importJSON(text, { merge = false } = {}) {
@@ -408,8 +428,8 @@ export async function importJSON(text, { merge = false } = {}) {
 //     if it still can't save it skips silently rather than breaking anything.
 
 async function snapshotData(prefs) {
-  const [lists, events, actions] = await Promise.all([getLists(), getEvents(), getActions()]);
-  return { lists, events, actions, prefs: prefs || null };
+  const [lists, events, actions, kits] = await Promise.all([getLists(), getEvents(), getActions(), getKits()]);
+  return { lists, events, actions, kits, prefs: prefs || null };
 }
 
 export async function listSnapshots() {

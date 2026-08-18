@@ -19,6 +19,7 @@ import {
   coerceGeo, eventCoords, eventsNeedingCoords, placesVisited, tripPath, mostVisited,
   backupCounts, backupShrinks, qtyNights, LAUNDRY_CAP_NIGHTS,
   presetConfigFromEvent, applyPresetConfig,
+  newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1517,4 +1518,62 @@ test('preset round-trip: config from an event re-applies to an identical config'
   const config = presetConfigFromEvent(src);
   const target = applyPresetConfig(newEvent({ name: 'New', startDate: '2026-01-01' }), config);
   assert.deepEqual(presetConfigFromEvent(target), config);
+});
+
+// ---- Kits (reusable bundles) ----
+
+test('coerceKit: de-dups member ids (order preserved) and normalises fields', () => {
+  const k = coerceKit({ id: 'k1', name: 'Charging kit', emoji: ' 🔌 ', note: 5, itemIds: ['a', 'b', 'a', '', 'c', 'b'] });
+  assert.deepEqual(k.itemIds, ['a', 'b', 'c']);
+  assert.equal(k.emoji, '🔌');
+  assert.equal(k.note, ''); // non-string note coerced away
+});
+
+test('newKit: sane defaults + timestamps', () => {
+  const k = newKit({ name: 'Wash bag' });
+  assert.equal(k.name, 'Wash bag');
+  assert.deepEqual(k.itemIds, []);
+  assert.equal(k.emoji, '');
+  assert.ok(k.id && k.createdAt && k.updatedAt);
+});
+
+test('kitEmoji: own emoji wins, else the default bundle glyph', () => {
+  assert.equal(kitEmoji(newKit({ emoji: '🩹' })), '🩹');
+  assert.equal(kitEmoji(newKit({})), KIT_DEFAULT_EMOJI);
+});
+
+test('clusterByKit: loose entries stay in place; a kit emits its whole run once', () => {
+  const e = [
+    { name: 'A', kit: 'Charging kit' },
+    { name: 'B', kit: '' },
+    { name: 'C', kit: 'Charging kit' },
+    { name: 'D', kit: 'Wash bag' },
+  ];
+  const cl = clusterByKit(e);
+  assert.deepEqual(cl.map((c) => [c.kit, c.entries.length]), [['Charging kit', 2], ['', 1], ['Wash bag', 1]]);
+  assert.deepEqual(cl[0].entries.map((x) => x.name), ['A', 'C']);
+});
+
+test('kit name flows catalog item -> membership -> resolved item', () => {
+  const item = newItem({ name: 'USB-C cable' });
+  const m = newMembership({ itemId: item.id, templateId: 't1', kit: 'Charging kit' });
+  const resolved = resolveMembership(item, m);
+  assert.equal(resolved.kit, 'Charging kit');
+});
+
+test('kit is a membership override, not a catalog default', () => {
+  const resolved = newItem({ name: 'Plug', kit: 'Charging kit' });
+  const cat = catalogItemFromResolved(resolved);
+  assert.equal(cat.kit, ''); // never sticks to the shared item
+  const m = membershipFromResolved(cat, 't1', resolved, 0);
+  assert.equal(m.kit, 'Charging kit'); // it lives on the membership
+});
+
+test('a kit-tagged item carries its kit onto a built trip entry', () => {
+  const list = coerceList(newList({ name: 'Travel', role: 'base', items: [newItem({ name: 'Power bank', kit: 'Charging kit' })] }));
+  const ev = newEvent({ mode: 'trip' });
+  const entries = buildTotalEntries(ev, [list]);
+  const e = entries.find((x) => x.name === 'Power bank');
+  assert.ok(e);
+  assert.equal(e.kit, 'Charging kit');
 });
