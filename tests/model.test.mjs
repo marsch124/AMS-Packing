@@ -20,6 +20,7 @@ import {
   backupCounts, backupShrinks, qtyNights, LAUNDRY_CAP_NIGHTS,
   presetConfigFromEvent, applyPresetConfig,
   newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
+  newAction, coerceAction, shoppingReason, shoppingSuggestions, openShoppingCount, EXPIRY_SOON_DAYS,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1576,4 +1577,56 @@ test('a kit-tagged item carries its kit onto a built trip entry', () => {
   const e = entries.find((x) => x.name === 'Power bank');
   assert.ok(e);
   assert.equal(e.kit, 'Charging kit');
+});
+
+// ---- Shopping list (pre-trip restock & replace) ----
+
+const SHOP_TODAY = '2026-08-18T00:00:00Z';
+
+test('action kind: defaults to todo, keeps a valid shopping kind', () => {
+  assert.equal(newAction().kind, 'todo');
+  assert.equal(coerceAction({ kind: 'shopping' }).kind, 'shopping');
+  assert.equal(coerceAction({ kind: 'nonsense' }).kind, 'todo');
+});
+
+test('consumable flag survives coerceItem/newItem', () => {
+  assert.equal(newItem({ name: 'Toothpaste', consumable: true }).consumable, true);
+  assert.equal(newItem({ name: 'Phone' }).consumable, false);
+});
+
+test('shoppingReason: most-urgent reason wins', () => {
+  assert.equal(shoppingReason(newItem({ condition: 'retire', consumable: true }), SHOP_TODAY), 'Needs replacing');
+  assert.equal(shoppingReason(newItem({ expiry: '2026-01-01' }), SHOP_TODAY), 'Expired');
+  assert.equal(shoppingReason(newItem({ expiry: '2026-09-01' }), SHOP_TODAY), 'Replace soon'); // within 30d
+  assert.equal(shoppingReason(newItem({ consumable: true }), SHOP_TODAY), 'Restock');
+  assert.equal(shoppingReason(newItem({ expiry: '2027-01-01' }), SHOP_TODAY), ''); // far future, nothing
+  assert.equal(shoppingReason(newItem({ name: 'Phone' }), SHOP_TODAY), '');
+});
+
+test('shoppingSuggestions: skips retired + already-listed, sorts by urgency', () => {
+  const items = [
+    newItem({ id: 'a', name: 'Sunscreen', expiry: '2026-01-01' }),
+    newItem({ id: 'b', name: 'Energy gels', consumable: true }),
+    newItem({ id: 'c', name: 'Running shoes', condition: 'retire' }),
+    newItem({ id: 'd', name: 'Rope', expiry: '2026-09-01' }),
+    newItem({ id: 'e', name: 'Phone' }),
+    newItem({ id: 'f', name: 'Old tent', consumable: true, retired: true }),
+  ];
+  const actions = [coerceAction({ kind: 'shopping', done: false, itemId: 'b' })]; // gels already on the list
+  const sug = shoppingSuggestions(items, actions, SHOP_TODAY);
+  assert.deepEqual(sug.map((s) => [s.item.name, s.reason]), [
+    ['Running shoes', 'Needs replacing'],
+    ['Sunscreen', 'Expired'],
+    ['Rope', 'Replace soon'],
+  ]);
+});
+
+test('openShoppingCount counts only open shopping-kind actions', () => {
+  const actions = [
+    coerceAction({ kind: 'shopping', done: false }),
+    coerceAction({ kind: 'shopping', done: true }),
+    coerceAction({ kind: 'todo', done: false }),
+  ];
+  assert.equal(openShoppingCount(actions), 1);
+  assert.ok(EXPIRY_SOON_DAYS > 0);
 });

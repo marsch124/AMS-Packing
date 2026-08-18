@@ -4502,3 +4502,38 @@ table.grid {
 }
 .ams-toast.in { opacity: 1; transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) { .ams-toast { transition: none; } }
+
+/* ============================================================
+   Shopping list — pre-trip restock & replace
+   ============================================================ */
+
+/* Home nudge — a warm amber tint, distinct from the red to-do nudge. */
+.nudge.shop {
+  background: color-mix(in srgb, var(--warn) 11%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 38%, var(--line));
+}
+.nudge.shop .nudge-go { color: var(--warn); }
+
+/* Consumable item badge — just the glyph, like 💧 / ⚠️. */
+.badge.consumable { background: transparent; padding: 0 2px; }
+
+/* Why an item is on the buy-list — a small coloured reason chip. */
+.shop-reason {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: .72rem; font-weight: 600; white-space: nowrap;
+}
+.shop-reason.replace,
+.shop-reason.expired { color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
+.shop-reason.soon    { color: #b8860b; background: color-mix(in srgb, #e0a800 20%, transparent); }
+.shop-reason.restock { color: var(--brand-2); background: color-mix(in srgb, var(--brand) 16%, transparent); }
+
+/* Suggestions block on the shopping screen. */
+.shop-suggest { margin-top: 18px; }
+.shop-sug-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 8px 8px 12px; border: 1px solid var(--line); border-radius: 10px;
+  margin-bottom: 8px;
+}
+.shop-sug-body { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.shop-sug-name { font-size: .95rem; overflow: hidden; text-overflow: ellipsis; }
+.shop-sug-row .btn.sm { flex: none; }

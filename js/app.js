@@ -12,6 +12,7 @@ import {
   maintenanceList, maintenanceSummary, maintenanceByDate, logMaintenance, addDays, daysBetween,
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
   newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
+  shoppingReason, shoppingSuggestions, openShoppingCount,
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
 } from './model.js';
@@ -23,7 +24,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v93';
+const APP_VERSION = 'v94';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -586,6 +587,7 @@ const ITEM_FILTER_CATS = [
   { key: 'liquid',     label: '💧 Liquids',     test: (it) => !!it.liquid },
   { key: 'charge',     label: '⚡ Charging',     test: (it) => !!it.charging },
   { key: 'restricted', label: '⚠️ Restricted',  test: (it) => !!it.restricted },
+  { key: 'consumable', label: '🛒 Consumable',  test: (it) => !!it.consumable },
   { key: 'care',       label: '🧰 Has care',    test: (it) => hasCare(it) },
   { key: 'photo',      label: '📷 Photo',        test: (it) => (it.photos || []).length > 0 },
   { key: 'retired',    label: '🚫 Not in use',   test: (it) => !!it.retired },
@@ -636,7 +638,7 @@ function copyItemForTemplate(src, name) {
     note: src.note || '',
     kit: src.kit || '',
     weight: src.weight || 0,
-    liquid: src.liquid, restricted: src.restricted, perNight: src.perNight,
+    liquid: src.liquid, restricted: src.restricted, perNight: src.perNight, consumable: src.consumable,
     storage: src.storage || '',
   });
 }
@@ -844,9 +846,20 @@ async function renderHome() {
     </a>`));
   }
 
+  // Shopping reminder: things to buy / restock before a trip (built on the actions
+  // store, kind 'shopping'), surfaced with the Care-side nudges.
+  const openShopping = openShoppingCount(actions);
+  if (openShopping) {
+    wrap.appendChild(h(`<a class="nudge shop" href="#/shopping">
+      <span class="nudge-ic">🛒</span>
+      <span class="nudge-body"><b>Shopping list</b> — ${openShopping} to buy<span class="nudge-sub">Restocks &amp; replacements before your trip</span></span>
+      <span class="nudge-go">${IC.fwd}</span>
+    </a>`));
+  }
+
   // To-do reminder: open actions waiting on the Actions tab — a glanceable count
   // up here with the other nudges, rather than the full list buried down-page.
-  const openActions = actions.filter((a) => !a.done);
+  const openActions = actions.filter((a) => !a.done && a.kind !== 'shopping');
   if (openActions.length) {
     const high = openActions.filter((a) => a.priority === 'high').length;
     const detail = `${openActions.length} open${high ? ` · ${high} high-priority` : ''}`;
@@ -1484,7 +1497,7 @@ async function renderEvent(eventId) {
   });
   wrap.appendChild(topbar);
 
-  const openTodos = (await db.getActions()).filter((a) => !a.done).length;
+  const openTodos = (await db.getActions()).filter((a) => !a.done && a.kind !== 'shopping').length;
   const summary = h('<div class="ev-summary"></div>');
   summary.appendChild(readinessDashboard(ev, openTodos));
   wrap.appendChild(summary);
@@ -3053,6 +3066,7 @@ function listItemRow(list, it, getOpen, setOpen, draw) {
     + `${it.charging ? `<span class="badge charge" title="${esc('Needs charging' + (chShort ? ` — ${chargeTypeLabel(it.chargeType)}` : ''))}">⚡${chShort ? ` ${esc(chShort)}` : ''}</span>` : ''}`
     + `${it.liquid ? '<span class="badge liquid" title="Liquid / 100 ml rule">💧</span>' : ''}`
     + `${it.restricted ? '<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">⚠️</span>' : ''}`
+    + `${it.consumable ? '<span class="badge consumable" title="Consumable — offered for restocking on the shopping list">🛒</span>' : ''}`
     + `${(it.photos || []).length ? `<span class="badge photo" title="${esc((it.photos.length === 1 ? 'Has a photo' : `${it.photos.length} photos`))}">📷${it.photos.length > 1 ? ` ${it.photos.length}` : ''}</span>` : ''}`
     + `${care ? `<span class="badge maint ${care.state}" title="${esc(`Maintenance: ${dueLabel(care)}`)}">${CARE_EMOJI[care.state]}</span>` : ''}`
     + `${openActionsForItem(it._itemId) ? `<span class="badge act" title="${esc(`${openActionsForItem(it._itemId)} open to-do${openActionsForItem(it._itemId) === 1 ? '' : 's'}`)}">☑ ${openActionsForItem(it._itemId)}</span>` : ''}`
@@ -3198,6 +3212,7 @@ function itemEditor(list, it, setOpen, draw) {
         <label class="check${it.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${it.charging ? 'checked' : ''}>⚡ Charging</label>
         <label class="check${it.liquid ? ' on' : ''}"><input type="checkbox" name="liquid" ${it.liquid ? 'checked' : ''}>💧 Liquid</label>
         <label class="check${it.restricted ? ' on' : ''}"><input type="checkbox" name="restricted" ${it.restricted ? 'checked' : ''}>⚠️ Restricted</label>
+        <label class="check${it.consumable ? ' on' : ''}" title="Something you use up — offered for restocking on the pre-trip shopping list"><input type="checkbox" name="consumable" ${it.consumable ? 'checked' : ''}>🛒 Consumable</label>
       </div>
       <label class="field charge-type-field${it.charging ? '' : ' hidden'}"><span>Charge type</span>${selectHtml('chargeType', CHARGE_TYPES.map((c) => ({ value: c.id, label: c.label })), it.chargeType)}</label>`}
 
@@ -3466,6 +3481,7 @@ function itemEditor(list, it, setOpen, draw) {
         it.chargeType = $('select[name=chargeType]', ed).value;
         it.liquid = $('input[name=liquid]', ed).checked;
         it.restricted = $('input[name=restricted]', ed).checked;
+        it.consumable = $('input[name=consumable]', ed).checked;
         it.note = ($('input[name=note]', ed).value || '').trim();
         it.seasons = $$('input[name=seasons]:checked', ed).map((n) => n.value);
         it.contexts = $$('input[name=contexts]:checked', ed).map((n) => n.value);
@@ -3594,6 +3610,16 @@ async function renderMaintenance() {
   wrap.appendChild(h(`<a class="care-link" href="#/items">
     <span class="care-link-ic">▦</span>
     <span class="care-link-body"><b>All items · table</b><span class="care-link-sub">Every item as a spreadsheet — edit weight, storage, flags &amp; template membership in bulk</span></span>
+    <span class="care-link-go">${IC.fwd}</span>
+  </a>`));
+  // Shopping list — consumables to restock + gear that needs replacing before a trip.
+  const [shopActions, shopCatalog] = await Promise.all([db.getActions(), db.getCatalogItems()]);
+  const buyCount = openShoppingCount(shopActions);
+  const sugCount = shoppingSuggestions(shopCatalog, shopActions, todayISO()).length;
+  const shopSub = ['Restock &amp; replace before a trip', buyCount ? `${buyCount} to buy` : '', sugCount ? `${sugCount} suggested` : ''].filter(Boolean).join(' · ');
+  wrap.appendChild(h(`<a class="care-link" href="#/shopping">
+    <span class="care-link-ic">🛒</span>
+    <span class="care-link-body"><b>Shopping list</b><span class="care-link-sub">${shopSub}</span></span>
     <span class="care-link-go">${IC.fwd}</span>
   </a>`));
   ALL_LISTS = lists; // so isUnfiled() in the All-items rows reflects the current data
@@ -4072,8 +4098,11 @@ function howtoCard() {
         </ul>
         <p>Every action can carry a <b>priority</b> (High / Normal), a <b>when</b> (a trip phase like “≥1 week ahead”, or a specific <b>date</b>), and a tick to mark it <b>done</b>. The Actions tab gathers them all in one place — open ones first (High before Normal, soonest first) — with completed ones tucked into a collapsible <b>Done</b> group. Ticking an item’s action done is <b>permanent on that item</b>; it doesn’t reset each trip. Actions live on-device and travel in your <b>JSON backup</b>, and whenever anything is open a <b>🗒️ “To-dos to tackle”</b> card appears on the <b>Home</b> screen.</p>
 
+        <h3>Shopping list</h3>
+        <p>A separate <b>🛒 Shopping list</b> (on the <b>Care</b> tab) rounds up what to <b>buy or restock before a trip</b>. It suggests three kinds of thing automatically: items you flag as a <b>🛒 Consumable</b> in their editor (things you use up — sunscreen, toothpaste, energy gels, a gas canister), items whose <b>Condition</b> you’ve set to <b>Needs replacing</b>, and anything past or within a month of its <b>replace-by / expiry date</b>. Tap <b>＋ Add</b> beside a suggestion to move it onto your buy-list, or the <b>Add</b> button for a one-off like “travel adapter”. <b>Tick</b> a line once you’ve bought it — bought things drop into a collapsible group. It’s built on the same store as your to-dos (so it’s in every backup), and a <b>🛒 “Shopping list — N to buy”</b> nudge shows on <b>Home</b> whenever something’s waiting. Your <b>Actions</b> tab stays purely to-dos; shopping keeps its own screen.</p>
+
         <h3>Countdown &amp; “pack now” nudges</h3>
-        <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b>🧰</b> maintenance nudge when gear is overdue or due soon, a <b>🗒️ “To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), and a <b>💾</b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
+        <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b>🧰</b> maintenance nudge when gear is overdue or due soon, a <b>🛒 shopping</b> nudge when you’ve things to buy, a <b>🗒️ “To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), and a <b>💾</b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
 
         <h3>Packing Mode</h3>
         <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed 🎒” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List.</p>
@@ -4121,6 +4150,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v94', '2026-08-18 · 14:00 UTC', false, 'Shopping list — know what to buy before you go',
+      'A new <b>🛒 Shopping list</b> gathers everything worth buying or restocking before a trip, in one place on the <b>Care</b> tab. Three kinds of thing show up as <b>suggestions</b> automatically: items you tick as a <b>🛒 Consumable</b> in their editor (things you use up — sunscreen, toothpaste, energy gels), items whose <b>Condition</b> is set to <b>Needs replacing</b>, and anything past (or within a month of) its <b>replace-by / expiry date</b>. Tap <b>＋ Add</b> on a suggestion to drop it onto your buy-list — or add a one-off (“Buy travel adapter”) with the <b>Add</b> button. Tick an item once you’ve <b>bought</b> it; bought things tuck into a collapsible group. The buy-list is built on the same store as your to-dos, so it’s backed up with everything else, and whenever anything’s waiting a <b>🛒 “Shopping list — N to buy”</b> nudge appears on <b>Home</b>. Your <b>Actions</b> tab stays just your to-dos — shopping lives on its own screen. Find it under <b>Care → 🛒 Shopping list</b>.',
+      'No more realising at the airport that the sunscreen ran out: the app quietly rounds up what needs restocking or replacing, so your pre-trip shopping is a ready-made list.'),
     v('v93', '2026-08-18 · 12:00 UTC', false, 'Kits — bundle the things you always pack together',
       'You can now build a <b>Kit</b>: a reusable bundle of small things that always travel together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Create and name your kits (each gets its own emoji) under <b>Settings → Kits</b>, picking their members from your item catalogue. Then add a whole kit <b>as one unit</b>: from a <b>template</b> (tap <b>🧰 Add a kit</b> — every item joins, and every trip using that template gets them), or straight onto a <b>trip</b> (the 🧰 <b>Kit</b> button on a trip’s toolbar). On the packing list the kit’s items <b>cluster together</b> under a <b>🧰 kit header</b> with a <b>Pack all</b> button, so you can tick the whole pouch packed in one tap instead of hunting its pieces one by one. You can also set or clear an item’s kit for a single trip from its editor’s new <b>Kit</b> field. Kits are saved in your backups and automatic snapshots.',
       'Stop re-adding and re-finding the same little clusters of gear: define a kit once, drop it in as a unit, and pack it as one — nothing in the bundle gets forgotten.'),
@@ -4496,7 +4528,7 @@ async function renderActions() {
   }
 
   function draw() {
-    const list = ALL_ACTIONS.slice().sort(compareActions);
+    const list = ALL_ACTIONS.filter((a) => a.kind !== 'shopping').slice().sort(compareActions);
     const open = list.filter((a) => !a.done);
     const done = list.filter((a) => a.done);
     body.innerHTML = '';
@@ -4525,6 +4557,146 @@ async function renderActions() {
   $('[data-new]', wrap).addEventListener('click', () => { actionEditId = '__new__'; draw(); });
   draw();
   return wrap;
+}
+
+// ============================================================
+// Shopping list — pre-trip restock & replace, built on the actions store
+// (kind 'shopping'). Reached from the Care tab and the Home 🛒 nudge.
+// ============================================================
+let shopEditId = null;      // id of the buy-item being edited inline, or '__new__'
+let shopShowDone = false;   // whether the "Bought" group is expanded
+
+async function renderShopping() {
+  const wrap = h('<section class="screen"></section>');
+  wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">Shopping list</h1><button class="btn primary" data-new>${IC.plus}<span>Add</span></button></div>`));
+  wrap.appendChild(h('<p class="screen-intro">Things to buy before a trip — consumables to restock and gear that needs replacing. Tick one off once you’ve bought it.</p>'));
+
+  const [actionsAll, catalog] = await Promise.all([db.getActions(), db.getCatalogItems()]);
+  ALL_ACTIONS = actionsAll;
+  const catById = new Map(catalog.map((i) => [i.id, i]));
+  const nameById = new Map(catalog.map((i) => [i.id, i.name]));
+  const itemOpts = [{ value: '', label: '— Not tied to an item —' }]
+    .concat(catalog.slice().sort((x, y) => (x.name || '').localeCompare(y.name || '')).map((i) => ({ value: i.id, label: i.name || '(unnamed)' })));
+
+  const body = h('<div class="act-screen shop-screen"></div>');
+  wrap.appendChild(body);
+
+  const reasonChip = (r) => (r ? `<span class="shop-reason ${reasonClass(r)}">${esc(r)}</span>` : '');
+
+  // A buy-list row: tick = bought, tap the body to edit.
+  function buyRow(a) {
+    const tiedItem = a.itemId ? catById.get(a.itemId) : null;
+    const itemName = a.itemId ? (nameById.get(a.itemId) || a.itemName || '(item)') : '';
+    const reason = tiedItem ? shoppingReason(tiedItem, todayISO()) : '';
+    const row = h(`<div class="act-brow${a.done ? ' done' : ''}">
+      <label class="act-check"><input type="checkbox" ${a.done ? 'checked' : ''}><span class="act-box">${IC.check}</span></label>
+      <button class="act-body" type="button">
+        <span class="act-btext">${esc(a.text || '(empty)')}</span>
+        <span class="act-bsub">${itemName ? `<span class="act-item">${esc(itemName)}</span>` : ''}${reasonChip(reason)}${a.whenDate ? `<span class="act-chip">📅 ${esc(a.whenDate)}</span>` : ''}</span>
+      </button>
+    </div>`);
+    $('input', row).addEventListener('change', async (e) => {
+      a.done = e.target.checked; a.doneAt = a.done ? new Date().toISOString() : '';
+      await db.saveAction(a); await refreshActions(); draw();
+    });
+    $('.act-body', row).addEventListener('click', () => { shopEditId = a.id; draw(); });
+    return row;
+  }
+
+  // Inline editor for a buy item (existing or new).
+  function buyEditor(a, isNew) {
+    const withData = (html, attr) => html.replace('<select', `<select ${attr}`);
+    const ed = h(`<div class="act-editor">
+      <label class="field"><span>Buy</span><input data-f="text" value="${esc(a.text)}" placeholder="e.g. Sunscreen SPF50" autocomplete="off"></label>
+      <label class="field"><span>For an item <em>(optional)</em></span>${withData(selectHtml('shopitem', itemOpts, a.itemId), 'data-f="item"')}</label>
+      <label class="field"><span>Get it by <em>(optional date)</em></span><input type="date" data-f="date" value="${esc(a.whenDate)}"></label>
+      <div class="editor-actions">
+        ${isNew ? '' : `<button type="button" class="btn danger ghost" data-a="del">${IC.trash}<span>Remove</span></button>`}
+        <div class="spacer"></div>
+        <button type="button" class="btn" data-a="cancel">Cancel</button>
+        <button type="button" class="btn primary" data-a="save">Save</button>
+      </div>
+    </div>`);
+    ed.addEventListener('click', async (e) => {
+      const act = e.target.closest('[data-a]')?.dataset.a;
+      if (!act) return;
+      if (act === 'cancel') { shopEditId = null; draw(); return; }
+      if (act === 'del') {
+        if (!confirm('Remove this from the shopping list?')) return;
+        await db.deleteAction(a.id); await refreshActions(); shopEditId = null; draw(); return;
+      }
+      if (act === 'save') {
+        const text = ($('[data-f=text]', ed).value || '').trim();
+        if (!text) { $('[data-f=text]', ed).focus(); return; }
+        const itemId = $('[data-f=item]', ed).value;
+        a.kind = 'shopping';
+        a.text = text;
+        a.itemId = itemId;
+        a.itemName = itemId ? (nameById.get(itemId) || '') : '';
+        a.whenDate = $('[data-f=date]', ed).value || '';
+        await db.saveAction(a); await refreshActions();
+        shopEditId = null; draw();
+      }
+    });
+    setTimeout(() => $('[data-f=text]', ed)?.focus(), 20);
+    return ed;
+  }
+
+  function draw() {
+    const shopping = ALL_ACTIONS.filter((a) => a.kind === 'shopping').slice().sort(compareActions);
+    const open = shopping.filter((a) => !a.done);
+    const done = shopping.filter((a) => a.done);
+    const suggestions = shoppingSuggestions(catalog, ALL_ACTIONS, todayISO());
+    body.innerHTML = '';
+
+    if (shopEditId === '__new__') body.appendChild(buyEditor(newAction({ kind: 'shopping' }), true));
+
+    // --- To buy ---
+    if (open.length) {
+      const openWrap = h('<div class="act-group"></div>');
+      open.forEach((a) => openWrap.appendChild(a.id === shopEditId ? buyEditor(a, false) : buyRow(a)));
+      body.appendChild(openWrap);
+    } else if (shopEditId !== '__new__' && !done.length && !suggestions.length) {
+      body.appendChild(h('<div class="empty"><p class="empty-t">Nothing to buy</p><p class="empty-s">Tap “Add” for a one-off, or flag an item as a 🛒 <b>Consumable</b> (or set its condition to <b>Needs replacing</b> / a replace-by date) and it’ll be suggested here.</p></div>'));
+    }
+
+    // --- Suggested (from your items) ---
+    if (suggestions.length) {
+      const sec = h(`<div class="shop-suggest"><h2 class="section-h">Suggested — from your items · ${suggestions.length}</h2></div>`);
+      const sWrap = h('<div class="act-group"></div>');
+      for (const { item, reason } of suggestions) {
+        const r = h(`<div class="shop-sug-row">
+          <span class="shop-sug-body"><span class="shop-sug-name">${esc(item.name || '(unnamed)')}</span>${reasonChip(reason)}</span>
+          <button type="button" class="btn ghost sm" data-add="${esc(item.id)}">${IC.plus}<span>Add</span></button>
+        </div>`);
+        r.querySelector('[data-add]').addEventListener('click', async () => {
+          await db.saveAction(newAction({ kind: 'shopping', text: `Buy ${item.name}`, itemId: item.id, itemName: item.name }));
+          await refreshActions(); draw();
+        });
+        sWrap.appendChild(r);
+      }
+      sec.appendChild(sWrap);
+      body.appendChild(sec);
+    }
+
+    // --- Bought ---
+    if (done.length) {
+      const det = h(`<details class="act-done"${shopShowDone ? ' open' : ''}><summary>Bought <span class="act-done-n">${done.length}</span></summary></details>`);
+      const dWrap = h('<div class="act-group"></div>');
+      done.forEach((a) => dWrap.appendChild(a.id === shopEditId ? buyEditor(a, false) : buyRow(a)));
+      det.appendChild(dWrap);
+      det.addEventListener('toggle', () => { shopShowDone = det.open; });
+      body.appendChild(det);
+    }
+  }
+
+  $('[data-new]', wrap).addEventListener('click', () => { shopEditId = '__new__'; draw(); });
+  draw();
+  return wrap;
+}
+// A CSS class for a shopping reason, so each urgency reads differently.
+function reasonClass(r) {
+  return r === 'Needs replacing' ? 'replace' : r === 'Expired' ? 'expired' : r === 'Replace soon' ? 'soon' : 'restock';
 }
 
 // ============================================================
@@ -4566,9 +4738,11 @@ async function renderSearch() {
     const itemHits = items.filter((it) => has(it.name) || has(it.swedish)).slice(0, 30);
     const tmplHits = lists.filter((l) => l.role !== CONTAINER_ROLE && l.role !== 'loose' && has(l.name));
     const eventHits = events.filter((e) => has(e.name) || has(e.destination));
-    const actionHits = actions.filter((a) => has(a.text) || has(a.itemName));
+    const allActionHits = actions.filter((a) => has(a.text) || has(a.itemName));
+    const actionHits = allActionHits.filter((a) => a.kind !== 'shopping');
+    const shopHits = allActionHits.filter((a) => a.kind === 'shopping');
 
-    if (!(itemHits.length + tmplHits.length + eventHits.length + actionHits.length)) {
+    if (!(itemHits.length + tmplHits.length + eventHits.length + actionHits.length + shopHits.length)) {
       results.appendChild(h(`<p class="muted pad">No matches for “${esc(raw)}”.</p>`));
       return;
     }
@@ -4604,6 +4778,14 @@ async function renderSearch() {
       for (const a of actionHits) {
         const sub = [a.done ? 'done' : 'open', a.itemName ? esc(a.itemName) : 'General'].filter(Boolean).join(' · ');
         html += row('#/actions', '🗒️', esc(a.text || '(untitled)'), sub);
+      }
+      html += '</div>';
+    }
+    if (shopHits.length) {
+      html += sectionHead('Shopping list', shopHits.length) + '<div class="search-list">';
+      for (const a of shopHits) {
+        const sub = [a.done ? 'bought' : 'to buy', a.itemName ? esc(a.itemName) : ''].filter(Boolean).join(' · ');
+        html += row('#/shopping', '🛒', esc(a.text || '(untitled)'), sub);
       }
       html += '</div>';
     }
@@ -5313,6 +5495,7 @@ async function renderRoute() {
   if (hash === '#/containers') return renderContainers();
   if (hash === '#/items') return renderItemsGrid();
   if (hash === '#/actions') return renderActions();
+  if (hash === '#/shopping') return renderShopping();
   if (hash === '#/search') return renderSearch();
   if (hash === '#/refine') return renderRefine();
   if (hash === '#/settings') return renderSettings();
@@ -5358,7 +5541,7 @@ function setActiveTab() {
   const hash = location.hash || '#/';
   const base = hash.startsWith('#/events') || hash.startsWith('#/event/') || hash === '#/map' ? '#/events'
     : hash.startsWith('#/list') || hash === '#/refine' ? '#/lists'
-    : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') ? '#/maintenance'
+    : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') || hash.startsWith('#/shopping') ? '#/maintenance'
     : hash.startsWith('#/actions') ? '#/actions'
     : hash.startsWith('#/settings') || hash.startsWith('#/overview') ? '#/settings' : '#/';
   $$('.tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === base));
@@ -5370,7 +5553,7 @@ function currentSection() {
   const hash = location.hash || '#/';
   if (hash.startsWith('#/events') || hash.startsWith('#/event/') || hash === '#/map') return 'events';
   if (hash.startsWith('#/list') || hash === '#/refine') return 'templates';
-  if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items')) return 'care';
+  if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') || hash.startsWith('#/shopping')) return 'care';
   if (hash.startsWith('#/actions')) return 'actions';
   if (hash.startsWith('#/settings') || hash.startsWith('#/overview')) return 'settings';
   return 'home';

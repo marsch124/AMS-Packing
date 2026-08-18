@@ -213,6 +213,7 @@ export function coerceItem(it) {
   it.liquid = !!it.liquid;        // liquid / gel — 100 ml hand-luggage rule
   it.restricted = !!it.restricted; // battery / restricted — carry-on rules
   it.perNight = !!it.perNight;    // quantity scales with trip length (nights)
+  it.consumable = !!it.consumable; // used up & restocked — surfaces on the pre-trip shopping list
   // Per-template grouping. On a resolved item this holds a SECTION ID (pointing at
   // its template's `sections`); on a trip line it holds the section's DISPLAY NAME
   // (resolved from the source template, so same-named sections merge across lists).
@@ -356,6 +357,7 @@ export function actionPriorityLabel(pid) {
 export function coerceAction(a) {
   if (!a || typeof a !== 'object') return a;
   a.text = typeof a.text === 'string' ? a.text : '';
+  a.kind = a.kind === 'shopping' ? 'shopping' : 'todo';           // 'todo' (Actions tab) | 'shopping' (buy-list on the Care tab)
   a.itemId = typeof a.itemId === 'string' ? a.itemId : '';        // '' = loose (not tied to an item)
   a.itemName = typeof a.itemName === 'string' ? a.itemName : '';  // cached item name, for display + orphan fallback
   a.priority = ACTION_PRIORITY_IDS.includes(a.priority) ? a.priority : 'normal';
@@ -391,7 +393,7 @@ export function compareActions(a, b) {
 export function newAction(partial = {}) {
   return coerceAction({
     id: id(),
-    text: '', itemId: '', itemName: '',
+    text: '', kind: 'todo', itemId: '', itemName: '',
     priority: 'normal', whenPhase: '', whenDate: '',
     done: false, doneAt: '',
     createdAt: nowISO(), updatedAt: nowISO(),
@@ -452,6 +454,53 @@ export function clusterByKit(entries) {
   return out;
 }
 
+// --- Shopping list (pre-trip restock & replace) ---
+// A buy-list is built on the actions store (kind 'shopping'); these pure helpers
+// decide which items should be OFFERED for it and why.
+
+// How soon before an item's replace-by / expiry date it starts wanting attention.
+export const EXPIRY_SOON_DAYS = 30;
+
+// Why an item wants buying, or '' if it doesn't. Most urgent reason wins: an
+// explicit "Needs replacing" beats an already-expired date, which beats an expiring
+// -soon date, which beats a plain consumable that just needs restocking.
+export function shoppingReason(item, todayISO) {
+  if (!item || typeof item !== 'object') return '';
+  if (item.condition === 'retire') return 'Needs replacing';
+  if (item.expiry) {
+    const d = daysUntil(item.expiry, todayISO);
+    if (d != null && d < 0) return 'Expired';
+    if (d != null && d <= EXPIRY_SOON_DAYS) return 'Replace soon';
+  }
+  if (item.consumable) return 'Restock';
+  return '';
+}
+// Sort rank so the buy-list shows the most urgent reasons first.
+const SHOP_REASON_RANK = { 'Needs replacing': 0, Expired: 1, 'Replace soon': 2, Restock: 3 };
+
+// Items worth buying before a trip: consumables, things marked "Needs replacing",
+// and anything past (or near) its replace-by date. Retired ("not in use") items are
+// skipped, as is anything already on the open buy-list (matched by item id). Pass
+// the de-duplicated catalog as `items` and the current actions as `actions`.
+export function shoppingSuggestions(items, actions, todayISO) {
+  const onList = new Set(asArray(actions).filter((a) => a.kind === 'shopping' && !a.done && a.itemId).map((a) => a.itemId));
+  const out = [];
+  for (const it of asArray(items)) {
+    if (!it || it.retired) continue;
+    if (onList.has(it.id)) continue;
+    const reason = shoppingReason(it, todayISO);
+    if (!reason) continue;
+    out.push({ item: it, reason });
+  }
+  out.sort((a, b) => (SHOP_REASON_RANK[a.reason] - SHOP_REASON_RANK[b.reason]) || (a.item.name || '').localeCompare(b.item.name || ''));
+  return out;
+}
+
+// Open (still-to-buy) items on the shopping list — for the Home nudge + Care card.
+export function openShoppingCount(actions) {
+  return asArray(actions).filter((a) => a.kind === 'shopping' && !a.done).length;
+}
+
 export function newItem(partial = {}) {
   return coerceItem({
     id: id(),
@@ -476,6 +525,7 @@ export function newItem(partial = {}) {
     liquid: false,   // liquid/gel (100 ml rule)
     restricted: false, // battery / restricted (carry-on)
     perNight: false, // quantity scales with trip nights
+    consumable: false, // used up & restocked (feeds the pre-trip shopping list)
     section: '',     // per-template section (a section id, resolved from the membership)
     kit: '',         // kit name this item is packed as part of ('' = none; contextual, like section)
     storage: '',     // where the physical item is kept at home (free text)
@@ -1510,6 +1560,7 @@ export function applyIntrinsic(cat, it) {
   cat.liquid = !!it.liquid;
   cat.restricted = !!it.restricted;
   cat.perNight = !!it.perNight;
+  cat.consumable = !!it.consumable;
   cat.shortList = !!it.shortList;
   cat.weight = Number.isFinite(it.weight) ? it.weight : 0;
   cat.storage = it.storage || '';
@@ -1546,7 +1597,7 @@ export function catalogItemFromResolved(it) {
     name: it.name, swedish: it.swedish || '', category: it.category,
     container: it.container, phase: it.phase, itemType: it.itemType,
     charging: !!it.charging, chargeType: it.chargeType || '',
-    liquid: !!it.liquid, restricted: !!it.restricted, perNight: !!it.perNight, shortList: !!it.shortList,
+    liquid: !!it.liquid, restricted: !!it.restricted, perNight: !!it.perNight, consumable: !!it.consumable, shortList: !!it.shortList,
     weight: it.weight || 0, storage: it.storage || '', sub: asArray(it.sub).slice(),
     photos: asArray(it.photos).slice(), maintenance: it.maintenance || null, stats: it.stats,
     color: it.color || '', size: it.size || '', manufacturer: it.manufacturer || '', model: it.model || '',
