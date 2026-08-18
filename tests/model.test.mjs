@@ -21,6 +21,7 @@ import {
   presetConfigFromEvent, applyPresetConfig,
   newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
   newAction, coerceAction, shoppingReason, shoppingSuggestions, openShoppingCount, EXPIRY_SOON_DAYS,
+  coercePerson, newPerson, personColor, assignedPeople, PERSON_COLORS,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1629,4 +1630,36 @@ test('openShoppingCount counts only open shopping-kind actions', () => {
   ];
   assert.equal(openShoppingCount(actions), 1);
   assert.ok(EXPIRY_SOON_DAYS > 0);
+});
+
+// ---- People (who packs what) ----
+
+test('coercePerson: trims name, validates colour, ensures id', () => {
+  const p = coercePerson({ name: '  Anna ', color: 'nope' });
+  assert.equal(p.name, 'Anna');
+  assert.equal(p.color, PERSON_COLORS[0]);
+  assert.ok(p.id);
+  assert.equal(coercePerson({ name: 'X', color: '#a855f7' }).color, '#a855f7');
+});
+
+test('personColor: roster colour when known, stable hash otherwise, blank for empty', () => {
+  const people = [newPerson({ name: 'Martin', color: '#3b82f6' }), newPerson({ name: 'Anna', color: '#a855f7' })];
+  assert.equal(personColor('martin', people), '#3b82f6'); // case-insensitive
+  assert.equal(personColor('', people), '');
+  const emil = personColor('Emil', people);
+  assert.ok(PERSON_COLORS.includes(emil));
+  assert.equal(personColor('Emil', people), emil); // deterministic
+});
+
+test('assignedPeople: distinct packer names, first-seen order, case-folded', () => {
+  const entries = [{ packer: 'Anna' }, { packer: '' }, { packer: 'Martin' }, { packer: 'anna' }, { packer: '  ' }];
+  assert.deepEqual(assignedPeople(entries), ['Anna', 'Martin']);
+});
+
+test('packer flows onto a trip entry and survives the share bundle', () => {
+  assert.equal(newItem({ name: 'Tent', packer: 'Anna' }).packer, 'Anna');
+  const ev = newEvent({ name: 'Trip' });
+  ev.entries = [newItem({ name: 'Tent', packer: 'Anna' })];
+  const back = parseTripBundle(buildTripBundle(ev));
+  assert.equal(back.entries[0].packer, 'Anna');
 });

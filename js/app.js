@@ -13,6 +13,7 @@ import {
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
   newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
   shoppingReason, shoppingSuggestions, openShoppingCount,
+  PERSON_COLORS, coercePerson, newPerson, personColor, assignedPeople,
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
 } from './model.js';
@@ -24,7 +25,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v94';
+const APP_VERSION = 'v95';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1473,13 +1474,21 @@ let expandedEntry = null; // id of the entry whose inline editor is open
 let flagFilter = new Set(); // active "sort out" filters on the Total List: 'liquid' and/or 'charge'
 let flagFilterFor = null;   // the event id the filter belongs to (cleared when you switch trips)
 let weightSort = false;     // "Heaviest first" ordering toggle on the Total List
+let personFilter = '';      // who-packs-what filter: '' = everyone, '__none__' = unassigned, else a person name
+// Does an entry pass the current person filter? (Shared by the list + Packing Mode.)
+function matchesPerson(entry) {
+  if (!personFilter) return true;
+  const pk = (entry.packer || '').trim();
+  if (personFilter === '__none__') return !pk;
+  return normName(pk) === normName(personFilter);
+}
 const collapsedGroups = new Set(); // group headings folded closed on the Total List (keyed `mode|label`)
 
 async function renderEvent(eventId) {
   const ev = await db.getEvent(eventId);
   if (!ev) { location.assign('#/'); return h('<section></section>'); }
   ALL_LISTS = await db.getLists(); // so an entry can be traced back to its template item
-  if (flagFilterFor !== eventId) { flagFilter = new Set(); weightSort = false; collapsedGroups.clear(); flagFilterFor = eventId; } // fresh per trip
+  if (flagFilterFor !== eventId) { flagFilter = new Set(); weightSort = false; personFilter = ''; collapsedGroups.clear(); flagFilterFor = eventId; } // fresh per trip
   const p = progress(ev.entries);
 
   const wrap = h('<section class="screen"></section>');
@@ -1578,6 +1587,28 @@ async function renderEvent(eventId) {
       rerender();
     });
     syncChips();
+  }
+
+  // Who-packs-what filter — shows once anything on this trip is assigned to someone.
+  const tripPeople = assignedPeople(ev.entries);
+  if (tripPeople.length) {
+    const unassigned = ev.entries.filter((e) => !(e.packer || '').trim()).length;
+    const pcount = (name) => ev.entries.filter((e) => normName(e.packer) === normName(name)).length;
+    const pchip = (key, label, dot, n) => `<button class="pchip${personFilter === key ? ' on' : ''}" data-person-filter="${esc(key)}">${dot ? `<span class="person-dot" style="background:${esc(dot)}"></span>` : ''}${esc(label)}${n != null ? ` <em>${n}</em>` : ''}</button>`;
+    const personbar = h(`<div class="filterbar personbar">
+      <span class="filterbar-lbl">Who packs</span>
+      ${pchip('', 'Everyone', '', null)}
+      ${tripPeople.map((n) => pchip(n, n, peopleColor(n), pcount(n))).join('')}
+      ${unassigned ? pchip('__none__', 'Unassigned', '', unassigned) : ''}
+    </div>`);
+    wrap.insertBefore(personbar, body);
+    personbar.addEventListener('click', (e) => {
+      const key = e.target.closest('[data-person-filter]')?.dataset.personFilter;
+      if (key == null) return;
+      personFilter = personFilter === key ? '' : key;
+      $$('.pchip', personbar).forEach((c) => c.classList.toggle('on', c.dataset.personFilter === personFilter));
+      rerender();
+    });
   }
 
   toolbar.addEventListener('change', (e) => {
@@ -1891,14 +1922,24 @@ function renderTotalBody(body, ev) {
     </div>`));
     return;
   }
+  // Narrow to the chosen person first (keeping the item being edited visible).
+  const pool = personFilter ? ev.entries.filter((e) => e.id === expandedEntry || matchesPerson(e)) : ev.entries;
+  if (!pool.length) {
+    const who = personFilter === '__none__' ? 'unassigned items' : `items for ${esc(personFilter)}`;
+    body.appendChild(h(`<div class="empty">
+      <p class="empty-t">No ${who}</p>
+      <p class="empty-s">Tap <b>Everyone</b> above to see the whole list again.</p>
+    </div>`));
+    return;
+  }
   // Apply the "sort out" filter; always keep the item being edited visible so a
   // freshly-added row still shows even when a filter is on.
   const entries = flagFilter.size
-    ? ev.entries.filter((e) => e.id === expandedEntry
+    ? pool.filter((e) => e.id === expandedEntry
         || (flagFilter.has('liquid') && e.liquid)
         || (flagFilter.has('charge') && e.charging)
         || (flagFilter.has('restricted') && e.restricted))
-    : ev.entries;
+    : pool;
   if (!entries.length) {
     const labelFor = { liquid: 'liquids', charge: 'charge items', restricted: 'restricted items' };
     const labels = [...flagFilter].map((k) => labelFor[k] || k).join(' or ');
@@ -2021,6 +2062,7 @@ function entryRow(ev, entry, body, showWeight = false) {
   if (mode !== 'category' && entry.category) subBits.push(esc(entry.category));
   if (mode !== 'when') subBits.push(esc(phaseLabel(entry.phase)));
   if (showWeight && entry.kit) subBits.push(`🧰 ${esc(entry.kit)}`); // flat views have no kit header
+  if (entry.packer) subBits.push(personChipHTML(entry.packer));
   if (entry.note) subBits.push(esc(entry.note));
   if (entry.custom) subBits.push('added');
   const subLine = entry.swedish ? `<span class="e-sv">${esc(entry.swedish)}</span> · ` : '';
@@ -2175,6 +2217,21 @@ function promoteEntryToTemplate(entry, lists) {
   });
 }
 
+// A small coloured "who packs it" chip (a dot in the person's colour + name).
+function personChipHTML(name) {
+  if (!name) return '';
+  return `<span class="e-person"><span class="person-dot" style="background:${esc(peopleColor(name))}"></span>${esc(name)}</span>`;
+}
+
+// A "Packed by" <select>: — Anyone — plus the People roster. An assigned name not
+// on the roster (e.g. from an imported trip) is kept as its own option so it stays.
+function packerSelectHtml(current) {
+  const people = loadPeople();
+  const opts = [{ value: '', label: '— Anyone —' }, ...people.map((p) => ({ value: p.name, label: p.name }))];
+  if (current && !people.some((p) => normName(p.name) === normName(current))) opts.push({ value: current, label: `${current} (not on your People list)` });
+  return selectHtml('packer', opts, current || '');
+}
+
 function entryEditor(ev, entry, body) {
   const ed = h('<div class="editor"></div>');
   const src = sourceItemForEntry(entry); // the template item behind this entry, if any
@@ -2193,6 +2250,7 @@ function entryEditor(ev, entry, body) {
     </div>
     <label class="field"><span>Section <em>groups this item on the list</em></span><input name="section" value="${esc(entry.section)}" list="entry-sections" placeholder="optional" autocomplete="off"><datalist id="entry-sections">${tripSecNames.map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></label>
     <label class="field"><span>Kit <em>pack this together as a unit</em></span><input name="kit" value="${esc(entry.kit)}" list="entry-kits" placeholder="optional — e.g. Charging kit" autocomplete="off"><datalist id="entry-kits">${[...new Set([...(ALL_KITS || []).map((k) => k.name), ...(ev.entries || []).map((e) => (e.kit || '').trim())].filter(Boolean))].map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></label>
+    <label class="field"><span>Packed by <em>who's responsible on this trip</em></span>${packerSelectHtml(entry.packer)}</label>
     <div class="row2">
       <label class="field"><span>Weight (g)</span><input type="number" name="weight" min="0" inputmode="numeric" value="${entry.weight || ''}" placeholder="0"></label>
       <div class="checks">
@@ -2225,6 +2283,7 @@ function entryEditor(ev, entry, body) {
     entry.container = $('select[name=container]', ed).value;
     entry.section = ($('input[name=section]', ed).value || '').trim();
     entry.kit = ($('input[name=kit]', ed).value || '').trim();
+    entry.packer = ($('select[name=packer]', ed)?.value || '').trim();
     entry.phase = $('select[name=phase]', ed).value;
     entry.weight = Math.max(0, parseInt($('input[name=weight]', ed).value, 10) || 0);
     entry.perNight = $('input[name=perNight]', ed).checked;
@@ -2545,6 +2604,7 @@ async function renderPackMode(eventId) {
     const steps = packSteps(ev.entries);
     const firstUnpacked = steps.findIndex((s) => s.remaining > 0);
     packState = { eventId, idx: firstUnpacked < 0 ? 0 : firstUnpacked, showPacked: false };
+    personFilter = ''; // start Packing Mode showing everyone
   }
 
   const wrap = h('<section class="screen pack"></section>');
@@ -2552,8 +2612,9 @@ async function renderPackMode(eventId) {
   wrap.appendChild(body);
 
   function draw() {
-    const steps = packSteps(ev.entries);          // one per non-empty timeline phase
-    const overall = progress(ev.entries);
+    const pool = ev.entries.filter(matchesPerson);  // who-packs-what filter (empty = everyone)
+    const steps = packSteps(pool);                   // one per non-empty timeline phase
+    const overall = progress(pool);
     body.innerHTML = '';
 
     // Header (close back to the list)
@@ -2562,6 +2623,27 @@ async function renderPackMode(eventId) {
       <h1 class="grow">${esc(ev.name)}</h1>
     </div>`));
 
+    // Who-packs-what selector — only when this trip has anyone assigned.
+    const tripPeople = assignedPeople(ev.entries);
+    if (tripPeople.length) {
+      const unassigned = ev.entries.filter((e) => !(e.packer || '').trim()).length;
+      const pchip = (key, label, dot) => `<button class="pchip${personFilter === key ? ' on' : ''}" data-person-filter="${esc(key)}">${dot ? `<span class="person-dot" style="background:${esc(dot)}"></span>` : ''}${esc(label)}</button>`;
+      const bar = h(`<div class="filterbar personbar pack-personbar">
+        ${pchip('', 'Everyone', '')}
+        ${tripPeople.map((n) => pchip(n, n, peopleColor(n))).join('')}
+        ${unassigned ? pchip('__none__', 'Unassigned', '') : ''}
+      </div>`);
+      bar.addEventListener('click', (e) => {
+        const key = e.target.closest('[data-person-filter]')?.dataset.personFilter;
+        if (key == null) return;
+        personFilter = personFilter === key ? '' : key;
+        packState.idx = 0;
+        draw();
+      });
+      body.appendChild(bar);
+    }
+
+    if (overall.total === 0) { body.appendChild(h('<p class="muted pad">Nothing assigned to this person on the trip.</p>')); return; }
     if (overall.done >= overall.total) { body.appendChild(finishScreen(ev, overall)); return; }
 
     // Overall progress
@@ -4107,6 +4189,9 @@ function howtoCard() {
         <h3>Packing Mode</h3>
         <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed 🎒” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List.</p>
 
+        <h3>Who packs what</h3>
+        <p>Packing with someone? First set up your <b>People</b> in <b>Settings → People</b> — each with a name and a colour (Martin &amp; Anna are there to start; add, rename or recolour anyone). Then on a trip, open an item and choose <b>Packed by</b>. Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row appears at the top of the packing list so you can show <b>Everyone</b>, just one person, or the still-<b>Unassigned</b> items (each with a count). The same filter sits atop <b>Packing Mode</b>, so each of you can pack only your own things. It’s per-trip, and it <b>travels inside a shared trip</b> — send the trip to someone and the items you gave them arrive marked as theirs (a name that isn’t on their People list still shows, just with an auto-picked colour). Renaming a person carries the new name onto every trip they’re already on.</p>
+
         <h3>Weather (optional, per trip)</h3>
         <p>Add a <b>destination</b> to a trip, then tap <b>Get forecast</b>. The forecast comes from Open-Meteo (free, no account), is cached on the trip so it still shows offline, and only fetches when you ask and you're online.</p>
         <ul>
@@ -4150,6 +4235,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v95', '2026-08-18 · 16:00 UTC', false, 'Who packs what — split a trip between people',
+      'Packing with someone? You can now say <b>who packs each thing</b> and see just your own share. Set up your <b>People</b> in <b>Settings → People</b> — each with a name and a colour (Martin &amp; Anna are there to start) — then, on any trip, open an item and pick <b>Packed by</b>. Assigned items show a small <b>colour dot</b>, and a new <b>“Who packs”</b> row of chips at the top of the packing list lets you filter to <b>Everyone</b>, one person, or <b>Unassigned</b> — with a live count each. The same person filter sits at the top of <b>Packing Mode</b>, so each of you can step through only your own items, phase by phase. Best of all, the split <b>travels inside a shared trip</b>: send the trip to Anna and everything you assigned to her arrives already marked as hers. Your <b>Actions</b> and lists are untouched — this is purely about dividing the packing.',
+      'No more packing each other’s things twice or forgetting whose is whose: assign items to a person and each of you gets a clean, filtered list — on screen and in Packing Mode — that even survives sharing the trip.'),
     v('v94', '2026-08-18 · 14:00 UTC', false, 'Shopping list — know what to buy before you go',
       'A new <b>🛒 Shopping list</b> gathers everything worth buying or restocking before a trip, in one place on the <b>Care</b> tab. Three kinds of thing show up as <b>suggestions</b> automatically: items you tick as a <b>🛒 Consumable</b> in their editor (things you use up — sunscreen, toothpaste, energy gels), items whose <b>Condition</b> is set to <b>Needs replacing</b>, and anything past (or within a month of) its <b>replace-by / expiry date</b>. Tap <b>＋ Add</b> on a suggestion to drop it onto your buy-list — or add a one-off (“Buy travel adapter”) with the <b>Add</b> button. Tick an item once you’ve <b>bought</b> it; bought things tuck into a collapsible group. The buy-list is built on the same store as your to-dos, so it’s backed up with everything else, and whenever anything’s waiting a <b>🛒 “Shopping list — N to buy”</b> nudge appears on <b>Home</b>. Your <b>Actions</b> tab stays just your to-dos — shopping lives on its own screen. Find it under <b>Care → 🛒 Shopping list</b>.',
       'No more realising at the airport that the sunscreen ran out: the app quietly rounds up what needs restocking or replacing, so your pre-trip shopping is a ready-made list.'),
@@ -5017,6 +5105,72 @@ async function renderSettings() {
     }
   });
 
+  // People — the roster for "who packs what" on a trip.
+  const peopleCard = h(`<div class="card block">
+    <h2>People</h2>
+    <p class="muted">Who you pack with. Assign an item to a person on a trip (in its editor), then filter the packing list — and <b>Packing Mode</b> — by person, so each of you sees just your things. Names travel with a <b>shared trip</b>, so the split survives when you send it to someone.</p>
+    <div class="people-list" data-people></div>
+    <div class="btnrow"><button class="btn" data-person="add">${IC.plus}<span>Add person</span></button></div>
+  </div>`);
+  wrap.appendChild(peopleCard);
+  const drawPeople = () => {
+    const box = peopleCard.querySelector('[data-people]');
+    const people = loadPeople();
+    box.innerHTML = people.length
+      ? people.map((p) => `<div class="person-row">
+          <input type="color" class="person-color" data-person-color="${esc(p.id)}" value="${esc(p.color)}" aria-label="Colour for ${esc(p.name)}">
+          <span class="person-name">${esc(p.name)}</span>
+          <span class="person-acts">
+            <button type="button" class="iconbtn sm" data-person-edit="${esc(p.id)}" aria-label="Rename ${esc(p.name)}" title="Rename">${IC.edit}</button>
+            <button type="button" class="iconbtn sm" data-person-del="${esc(p.id)}" aria-label="Remove ${esc(p.name)}" title="Remove">${IC.trash}</button>
+          </span></div>`).join('')
+      : '<p class="muted">No people yet — add one to start splitting who packs what.</p>';
+  };
+  drawPeople();
+  peopleCard.addEventListener('change', (e) => {
+    const col = e.target.closest('[data-person-color]');
+    if (!col) return;
+    const people = loadPeople();
+    const p = people.find((x) => x.id === col.dataset.personColor);
+    if (p) { p.color = col.value; savePeople(people); }
+  });
+  peopleCard.addEventListener('click', async (e) => {
+    const add = e.target.closest('[data-person="add"]');
+    const edit = e.target.closest('[data-person-edit]');
+    const del = e.target.closest('[data-person-del]');
+    if (add) {
+      const name = (prompt('Name of the person:', '') || '').trim();
+      if (!name) return;
+      const people = loadPeople();
+      if (people.some((p) => p.name.toLowerCase() === name.toLowerCase())) { alert(`“${name}” is already on the list.`); return; }
+      const color = PERSON_COLORS[people.length % PERSON_COLORS.length];
+      people.push(newPerson({ name, color }));
+      savePeople(people);
+      drawPeople();
+    } else if (edit) {
+      const people = loadPeople();
+      const p = people.find((x) => x.id === edit.dataset.personEdit);
+      if (!p) return;
+      const name = (prompt('Rename this person:', p.name) || '').trim();
+      if (!name || name === p.name) return;
+      if (people.some((x) => x.id !== p.id && x.name.toLowerCase() === name.toLowerCase())) { alert(`“${name}” is already on the list.`); return; }
+      const old = p.name;
+      p.name = name;
+      savePeople(people);
+      // Carry the new name onto every trip entry assigned to the old name.
+      const moved = await renamePackerEverywhere(old, name);
+      drawPeople();
+      if (moved) render();
+    } else if (del) {
+      const people = loadPeople();
+      const p = people.find((x) => x.id === del.dataset.personDel);
+      if (!p) return;
+      if (!confirm(`Remove “${p.name}” from the People list?\n\nItems already assigned to them on a trip keep the name; this just takes them off the roster.`)) return;
+      savePeople(people.filter((x) => x.id !== p.id));
+      drawPeople();
+    }
+  });
+
   const theme = h(`<div class="card block">
     <h2>Appearance</h2>
     ${radioRow('theme', [{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }], currentTheme())}
@@ -5403,6 +5557,46 @@ function addPreset(name, ev) {
   return preset;
 }
 function deletePreset(pid) { savePresets(loadPresets().filter((p) => p.id !== pid)); }
+
+// People roster (who packs what). Stored on-device; seeded with Martin & Anna on
+// the very first run, and included in backups via collectPrefs.
+const PEOPLE_KEY = 'ams-people';
+function loadPeople() {
+  try {
+    const raw = localStorage.getItem(PEOPLE_KEY);
+    if (raw != null) { const a = JSON.parse(raw); if (Array.isArray(a)) return a.map(coercePerson).filter((p) => p.name); }
+    // First ever run (key absent): seed a starter roster.
+    const seed = [newPerson({ name: 'Martin', color: PERSON_COLORS[0] }), newPerson({ name: 'Anna', color: PERSON_COLORS[1] })];
+    savePeople(seed);
+    return seed;
+  } catch { /* ignore */ }
+  return [];
+}
+function savePeople(arr) {
+  try { localStorage.setItem(PEOPLE_KEY, JSON.stringify(asPeople(arr))); } catch { /* ignore */ }
+  return arr;
+}
+const asPeople = (arr) => (Array.isArray(arr) ? arr.map(coercePerson).filter((p) => p.name) : []);
+// The display colour for a packer name, honouring the roster (hash fallback for
+// names not on it — e.g. from a shared trip).
+const peopleColor = (name) => personColor(name, loadPeople());
+
+// Rename a packer across every trip so a renamed person doesn't strand their
+// assignments under the old name. Returns how many events changed.
+async function renamePackerEverywhere(oldName, newName) {
+  const key = String(oldName || '').trim().toLowerCase();
+  if (!key || !newName) return 0;
+  const events = await db.getEvents();
+  let changed = 0;
+  for (const ev of events) {
+    let touched = false;
+    for (const e of (ev.entries || [])) {
+      if ((e.packer || '').trim().toLowerCase() === key) { e.packer = newName; touched = true; }
+    }
+    if (touched) { await db.saveEvent(ev); changed++; }
+  }
+  return changed;
+}
 // A short one-line description of what a preset packs, for the Settings list.
 function presetSummary(config = {}) {
   const bits = [config.mode === 'quick' ? 'Quick activity' : 'Full trip'];
@@ -5445,6 +5639,8 @@ function collectPrefs() {
   try { const v = localStorage.getItem(VIEW_KEY); if (v) prefs.view = v; } catch { /* ignore */ }
   const presets = loadPresets();
   if (presets.length) prefs.presets = presets;
+  const people = loadPeople();
+  if (people.length) prefs.people = people;
   return prefs;
 }
 // Apply prefs from an imported backup. Storage places are UNIONed with what's
@@ -5462,6 +5658,12 @@ function applyPrefs(prefs) {
     const have = new Map(loadPresets().map((p) => [p.id, p]));
     for (const p of prefs.presets) if (p && p.id && p.name && p.config && !have.has(p.id)) have.set(p.id, p);
     savePresets([...have.values()]);
+  }
+  if (Array.isArray(prefs.people)) {
+    // Merge people by normalised name, keeping any already on this device.
+    const have = new Map(loadPeople().map((p) => [normName(p.name), p]));
+    for (const p of prefs.people.map(coercePerson)) if (p.name && !have.has(normName(p.name))) have.set(normName(p.name), p);
+    savePeople([...have.values()]);
   }
 }
 

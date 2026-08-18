@@ -223,6 +223,10 @@ export function coerceItem(it) {
   // (e.g. "Charging kit"). Contextual, never a catalog default: it flows onto the
   // trip line so the packing list can cluster kit-mates together. '' = not in a kit.
   it.kit = typeof it.kit === 'string' ? it.kit : '';
+  // Who packs this on a trip — the assigned person's NAME ('' = anyone / shared).
+  // Purely a trip-line concept (like kit): it rides on the entry, travels in the
+  // share bundle, and drives the "whose stuff" filter. Blank on catalog items.
+  it.packer = typeof it.packer === 'string' ? it.packer : '';
   it.storage = typeof it.storage === 'string' ? it.storage : '';   // where it lives at home (free text)
   // Pictures of the item, as resized data URLs. Canonical field is `photos`;
   // a legacy single `photo` string is folded in and then dropped.
@@ -501,6 +505,49 @@ export function openShoppingCount(actions) {
   return asArray(actions).filter((a) => a.kind === 'shopping' && !a.done).length;
 }
 
+// --- People (who packs what) ---
+// A small managed roster of people (name + colour). An assignment stores the
+// person's NAME on the trip line, so it's self-describing and survives a shared
+// trip even on a device without the roster; the colour is only for display.
+export const PERSON_COLORS = ['#3b82f6', '#a855f7', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#84cc16'];
+
+export function coercePerson(p) {
+  if (!p || typeof p !== 'object') return p;
+  p.name = typeof p.name === 'string' ? p.name.trim() : '';
+  p.color = (typeof p.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(p.color)) ? p.color : PERSON_COLORS[0];
+  if (typeof p.id !== 'string' || !p.id) p.id = id();
+  return p;
+}
+export function newPerson(partial = {}) {
+  return coercePerson({ id: id(), name: '', color: PERSON_COLORS[0], ...partial });
+}
+
+// A stable colour for a person NAME: the roster's colour if known, else a hashed
+// palette pick, so even a name from an imported trip (no roster entry) reads
+// consistently. Returns '' for a blank name.
+export function personColor(name, people = []) {
+  const n = normName(name);
+  if (!n) return '';
+  const hit = asArray(people).find((p) => normName(p.name) === n);
+  if (hit && hit.color) return hit.color;
+  let hsh = 0;
+  for (let i = 0; i < n.length; i++) hsh = (hsh * 31 + n.charCodeAt(i)) >>> 0;
+  return PERSON_COLORS[hsh % PERSON_COLORS.length];
+}
+
+// Distinct packer names actually used across entries, in first-seen order.
+export function assignedPeople(entries) {
+  const seen = new Set();
+  const out = [];
+  for (const e of asArray(entries)) {
+    const n = (e && typeof e.packer === 'string' ? e.packer.trim() : '');
+    if (!n || seen.has(normName(n))) continue;
+    seen.add(normName(n));
+    out.push(n);
+  }
+  return out;
+}
+
 export function newItem(partial = {}) {
   return coerceItem({
     id: id(),
@@ -528,6 +575,7 @@ export function newItem(partial = {}) {
     consumable: false, // used up & restocked (feeds the pre-trip shopping list)
     section: '',     // per-template section (a section id, resolved from the membership)
     kit: '',         // kit name this item is packed as part of ('' = none; contextual, like section)
+    packer: '',      // who packs this on a trip (person name; '' = anyone) — trip-line only
     storage: '',     // where the physical item is kept at home (free text)
     photos: [],      // pictures of the item, as resized data URLs (max MAX_PHOTOS)
     maintenance: null, // care record (notes/link/schedule/log) — see normalizeMaintenance

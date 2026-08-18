@@ -4537,3 +4537,45 @@ table.grid {
 .shop-sug-body { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .shop-sug-name { font-size: .95rem; overflow: hidden; text-overflow: ellipsis; }
 .shop-sug-row .btn.sm { flex: none; }
+
+/* ============================================================
+   People — who packs what
+   ============================================================ */
+
+/* Settings → People roster */
+.people-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; }
+.person-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: 10px;
+}
+.person-color {
+  flex: none; width: 30px; height: 30px; padding: 0;
+  border: 1px solid var(--line); border-radius: 8px; background: none; cursor: pointer;
+}
+.person-color::-webkit-color-swatch-wrapper { padding: 2px; }
+.person-color::-webkit-color-swatch { border: none; border-radius: 6px; }
+.person-color::-moz-color-swatch { border: none; border-radius: 6px; }
+.person-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-acts { flex: none; display: flex; gap: 2px; }
+.person-row [data-person-del]:hover { color: var(--danger); }
+
+/* Person filter chips (packing list + Packing Mode) — reuse the .fchip look. */
+.pchip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 11px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  font-size: .85rem; font-weight: 600; line-height: 1;
+}
+.pchip em { font-style: normal; opacity: .6; font-variant-numeric: tabular-nums; }
+.pchip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.pchip.on em { opacity: .85; }
+.pchip.on .person-dot { box-shadow: 0 0 0 1.5px var(--brand-ink); }
+.pack-personbar { margin: 8px 0 4px; justify-content: center; }
+
+/* The little colour dot marking who packs an item. */
+.person-dot {
+  flex: none; display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted);
+}
+/* The assigned-person chip on a packing-list row. */
+.e-person { display: inline-flex; align-items: center; gap: 4px; }
