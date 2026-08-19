@@ -82,6 +82,13 @@ function open() {
       // devices — never a gate in front of your own data.
       requireAuth: false,
       unsyncedTables: UNSYNCED_TABLES,
+      // CRITICAL. The addon otherwise renames the local database to
+      // `<name>-<cloud db id>`, which would silently open a BRAND NEW, EMPTY
+      // database and leave every existing item, trip, to-do and kit stranded in
+      // the original one — looking, from the app, exactly like total data loss.
+      // This app has one cloud database and a local database that predates it by
+      // a hundred releases, so the name must not move.
+      nameSuffix: false,
     });
   }
   _db = d;
@@ -122,6 +129,37 @@ export async function signOut() {
 
 // The live Dexie instance, for callers that want to run their own transaction.
 export function dexie() { return open(); }
+
+// v100 shipped with the cloud addon's `nameSuffix` left at its default, which
+// renamed the local database to `<name>-<cloud db id>` — so the app opened an
+// empty database, seeded it, and appeared to have lost everything (the real data
+// was untouched in the original all along). v101 pins the name back.
+//
+// This removes the empty stray that v100 created. It is deliberately timid: it
+// only ever deletes the SUFFIXED database, and only once the real one is known to
+// hold data — so it can never be the thing that removes a sole copy.
+export async function cleanupStrayCloudDb() {
+  if (!syncEnabled() || !indexedDB.databases) return { removed: false };
+  const dbid = (() => {
+    try {
+      const u = new URL(CLOUD.databaseUrl);
+      return u.pathname === '/' ? u.hostname.split('.')[0] : u.pathname.split('/')[1];
+    } catch { return ''; }
+  })();
+  if (!dbid) return { removed: false };
+  const strayName = `${DB_NAME}-${dbid}`;
+  const names = (await indexedDB.databases().catch(() => [])).map((d) => d.name);
+  if (!names.includes(strayName)) return { removed: false };
+  // Only proceed once the real database actually has templates in it.
+  const real = await getAllRaw(TEMPLATES).catch(() => []);
+  if (!real || !real.length) return { removed: false, reason: 'real database looks empty — left alone' };
+  await new Promise((res) => {
+    const req = indexedDB.deleteDatabase(strayName);
+    req.onsuccess = req.onerror = req.onblocked = () => res();
+  });
+  return { removed: true, name: strayName };
+}
+
 
 // --- Low-level helpers (same names and contracts as the hand-rolled versions) ---
 async function getAllRaw(store) {

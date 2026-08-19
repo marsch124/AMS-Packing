@@ -27,7 +27,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v100';
+const APP_VERSION = 'v101';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4468,6 +4468,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v101', '2026-08-19 · 18:30 UTC', false, 'Urgent fix: v100 hid your data',
+      'If you installed <b>v100</b> and it looked like your <b>trips, to-dos and kits had vanished</b> — they had not. <b>Nothing was ever lost.</b> The syncing library quietly renames the app\u2019s local database when sync is switched on, so v100 opened a <b>brand-new, empty</b> one, filled it with the starter templates, and showed you that instead. Your real catalogue was sitting untouched the whole time in the original database, which is why the templates looked right but your trips were missing. This release pins the database name back, so the app opens <b>your</b> data again, exactly as it was. It also tidies away the empty database v100 left behind \u2014 carefully: it only ever removes the empty one, and only once your real data is confirmed present, so it can never be the thing that deletes a last copy. Apologies \u2014 this was my mistake, and the kind that is frightening to see even when nothing is actually gone.',
+      'Your trips, to-dos and kits are back where they belong, and the flaw that hid them is fixed and covered by a test.'),
     v('v100', '2026-08-19 · 17:00 UTC', false, 'Sync between your iPhone and your Mac',
       'The big one: your <b>templates, items, trips, to-dos and kits</b> can now stay in step across every device you sign in on. Open <b>Settings → Sync your devices</b> and tap <b>Sign in to sync</b>. You enter your e-mail and get a <b>one-time code</b> back — there is no password to invent or remember. Do the same on your other device and the two keep themselves matched from then on. Edits made while you are <b>offline</b> are queued and sent the moment you are back, so a plane or a tunnel changes nothing. <b>You are never locked out of your own data:</b> the app works exactly as before without signing in — signing in is only what starts sharing between devices, and signing out on a device leaves everything on it intact. Two things deliberately <b>stay on the device that made them</b>: your <b>photos</b> (they are far larger than everything else put together, and each item still carries its small thumbnail, which does travel — so your lists look right everywhere) and the <b>automatic backups</b> (those are each device\u2019s own safety net; copying them between devices would help nobody). Your JSON backup still contains everything, as always.',
       'Add a jacket to a template on the Mac and it is on your iPhone before you have put the kettle on — with no password, no accounts to manage, and everything still working offline.'),
@@ -6131,6 +6134,8 @@ function watchForUpdate(reg) {
     const moved = await db.migrateInlinePhotos({ makeThumb });
     if (moved.photos) logDiag('photos', { migrated: moved });
   } catch (err) { logDiag('photo-migration', err); }
+  // Remove the empty database v100 accidentally created (see cleanupStrayCloudDb).
+  db.cleanupStrayCloudDb().then((r) => { if (r && r.removed) logDiag('cleanup', r); }).catch(() => {});
   // Quietly keep an automatic on-device backup (roughly one a day), so a bad edit
   // or accidental delete is always recoverable. Non-blocking and self-guarded.
   db.maybeAutoSnapshot(collectPrefs()).catch(() => {});
