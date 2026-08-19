@@ -27,7 +27,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v102';
+const APP_VERSION = 'v103';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4468,6 +4468,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v103', '2026-08-19 · 21:30 UTC', false, 'Finishing the sync safety net',
+      'A follow-up to v102. <b>Replace this device with the account copy</b> empties the device and then reloads it \u2014 at which point the app saw an empty database and helpfully filled it with the starter templates again, which would then have been uploaded as a second catalogue the next time you signed in. The app now remembers that the device is <b>deliberately</b> waiting for the account\u2019s copy, and will not put anything in its place: it stays empty until you sign in and your real catalogue arrives. Nothing else changed.',
+      'The "start this device again from the account" button now actually leaves you with the account\u2019s catalogue, instead of quietly recreating the one you just cleared.'),
     v('v102', '2026-08-19 · 20:00 UTC', false, 'Sync: no more duplicate catalogues',
       'Two fixes that matter before you switch syncing on. <b>(1) A device no longer seeds over what is arriving.</b> The app fills a brand-new, empty database with the starter templates \u2014 sensible on a new device, but on a device that is <b>signed in to sync</b>, "empty" only means the account\u2019s catalogue has not landed yet. Seeding into that gap left the device holding the starter set <em>and</em> everything that synced down, i.e. two of everything. A signed-in device now waits for the first sync before deciding it is empty, and if the sync cannot be reached it shows nothing rather than inventing a second catalogue. <b>(2) A way to clean up a device that took the wrong copy.</b> <b>Settings \u2192 Sync your devices</b> gains <b>Replace this device with the account copy</b>: it erases what is on that device and downloads the account\u2019s copy instead \u2014 for a phone or a second browser that seeded itself before it ever synced. It asks twice, and it signs out before erasing, so the wipe is purely local and is never mistaken for you deleting everything on all your devices.',
       'Turning on sync across several devices no longer risks ending up with two of everything \u2014 and there is now a clean way to point a stray device back at the right catalogue.'),
@@ -5173,7 +5176,11 @@ async function syncCard() {
         const counts = await db.currentCounts();
         if (!confirm(`Replace THIS device's data with the account copy?\n\nThis erases what is on this device right now (${countsSummary(counts)}) and downloads the account's copy instead.\n\nOnly do this on a device holding the wrong catalogue. If this is the device with your real data, press Cancel and use "Sign in to sync" instead.`)) return;
         if (!confirm('Last check — this cannot be undone on this device.\n\nErase this device and take the account copy?')) return;
-        await db.resetFromCloud();
+        const cleared = await db.resetFromCloud();
+        if (!cleared) {
+          alert('Could not finish clearing this device — another tab or window still has the app open.\n\nClose any other copies of the app and try again.');
+          return;
+        }
         alert('This device has been cleared.\n\nThe app will reload. Sign in and the account copy will download.');
         location.reload();
         return;

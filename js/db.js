@@ -129,17 +129,39 @@ export async function signIn() {
 // syncing, and only then delete the local database. Clearing data while still
 // connected would be read as "the user deleted all of this" and dutifully
 // replicated to every other device. Signing out first makes it a purely local act.
+const AWAITING_CLOUD_KEY = 'ams-awaiting-cloud';
 export async function resetFromCloud() {
   if (!syncEnabled()) throw new Error('Syncing is not switched on in this build.');
+  // Set BEFORE the wipe. After the reload this device is empty AND signed out,
+  // which is exactly the shape `ensureSeeded()` treats as "brand-new user, give
+  // them the starter templates" — and seeding here would rebuild the very
+  // catalogue we just deleted, ready to be pushed up as duplicates the moment
+  // they sign in. The flag says: this emptiness is deliberate, wait for the sync.
+  try { localStorage.setItem(AWAITING_CLOUD_KEY, '1'); } catch { /* ignore */ }
   const db = await open();
-  try { await db.cloud.logout(); } catch { /* proceed — the delete below is the point */ }
+  // Signing out must never be able to strand the reset. `logout()` can hang
+  // (offline, or already signed out), and an un-awaited hang here would mean the
+  // database is never closed and therefore never deleted — leaving the device in
+  // exactly the broken half-state this button exists to fix. Cap it and move on.
+  const withTimeout = (p, ms) => Promise.race([
+    Promise.resolve(p).catch(() => {}),
+    new Promise((res) => setTimeout(res, ms)),
+  ]);
+  try { await withTimeout(db.cloud.logout(), 5000); } catch { /* the delete below is the point */ }
   try { db.close(); } catch { /* ignore */ }
   _db = null;
-  await new Promise((res) => {
+  // `deleteDatabase` blocks while any connection is still open, so give it a
+  // deadline too and report honestly rather than hanging.
+  const deleted = await new Promise((res) => {
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; res(v); } };
     const req = indexedDB.deleteDatabase(DB_NAME);
-    req.onsuccess = req.onerror = req.onblocked = () => res();
+    req.onsuccess = () => done(true);
+    req.onerror = () => done(false);
+    req.onblocked = () => done(false);
+    setTimeout(() => done(false), 8000);
   });
-  return true;
+  return deleted;
 }
 
 // Sign out on THIS device. Local data stays; it simply stops syncing.
@@ -569,7 +591,26 @@ export async function ensureSeeded() {
   let seededVersion = 0;
   try { seededVersion = Number(localStorage.getItem(SEED_KEY)) || 0; } catch { /* ignore */ }
 
+  if (tmpls && tmpls.length) {
+    // A catalogue is present, so any pending "waiting for the account's copy" is done.
+    try { localStorage.removeItem(AWAITING_CLOUD_KEY); } catch { /* ignore */ }
+  }
   if (!tmpls || !tmpls.length) {
+    // This device was deliberately emptied to take the account's copy. Never seed
+    // over that intent — wait, however long it takes, for the user to sign in.
+    let awaiting = false;
+    try { awaiting = localStorage.getItem(AWAITING_CLOUD_KEY) === '1'; } catch { /* ignore */ }
+    if (awaiting && syncEnabled()) {
+      if (await awaitFirstSync()) {
+        const arrived = await getAllRaw(TEMPLATES);
+        if (arrived && arrived.length) {
+          try { localStorage.removeItem(AWAITING_CLOUD_KEY); } catch { /* ignore */ }
+          try { localStorage.setItem(SEED_KEY, String(SEED_VERSION)); } catch { /* ignore */ }
+          return getLists();
+        }
+      }
+      return getLists();                        // still empty: show nothing, seed nothing
+    }
     // An empty catalogue on a SIGNED-IN device usually means "the account's
     // catalogue hasn't arrived yet", not "this is a brand-new user". Give the
     // first sync a chance before seeding, or the device ends up holding the
