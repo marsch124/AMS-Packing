@@ -120,6 +120,28 @@ export async function signIn() {
   return db.cloud.login();
 }
 
+// Wipe this device and take the account's copy instead.
+//
+// For a device that holds the wrong catalogue — a starter set it seeded before
+// it ever synced, say — and should simply take what the account has.
+//
+// The ORDER is the important part: sign out FIRST, so this device is no longer
+// syncing, and only then delete the local database. Clearing data while still
+// connected would be read as "the user deleted all of this" and dutifully
+// replicated to every other device. Signing out first makes it a purely local act.
+export async function resetFromCloud() {
+  if (!syncEnabled()) throw new Error('Syncing is not switched on in this build.');
+  const db = await open();
+  try { await db.cloud.logout(); } catch { /* proceed — the delete below is the point */ }
+  try { db.close(); } catch { /* ignore */ }
+  _db = null;
+  await new Promise((res) => {
+    const req = indexedDB.deleteDatabase(DB_NAME);
+    req.onsuccess = req.onerror = req.onblocked = () => res();
+  });
+  return true;
+}
+
 // Sign out on THIS device. Local data stays; it simply stops syncing.
 export async function signOut() {
   if (!syncEnabled()) return;
@@ -504,12 +526,66 @@ async function reseedBuiltins() {
 }
 
 // --- First-run seeding + one-time migration from the legacy `lists` store ---
+
+// Wait for the first sync to land, when this device is signed in.
+//
+// Why this exists: `ensureSeeded()` runs at startup and seeds the built-in
+// templates whenever it finds an empty catalogue. On a device that is signed in
+// to sync, "empty" is a LIE for the first second or two — the account's real
+// catalogue is on its way. Seeding into that gap is what produced two complete
+// sets of everything (v100 uploaded 880 items: the same 440 twice).
+//
+// Resolves true if a sync completed, false if not signed in or it timed out.
+async function awaitFirstSync(timeoutMs = 20000) {
+  if (!syncEnabled()) return false;
+  const db = await open();
+  const user = db.cloud.currentUser?.value;
+  if (!user || !user.isLoggedIn) return false;      // never synced here — seeding is correct
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; try { sub?.unsubscribe(); } catch { /* ignore */ } clearTimeout(timer); resolve(v); };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    let sub = null;
+    try {
+      sub = db.cloud.syncState.subscribe((st) => {
+        if (st && st.phase === 'in-sync') finish(true);
+        if (st && st.phase === 'error') finish(false);
+      });
+    } catch { finish(false); }
+  });
+}
+
+async function isSignedIn() {
+  if (!syncEnabled()) return false;
+  try {
+    const db = await open();
+    const u = db.cloud.currentUser?.value;
+    return !!(u && u.isLoggedIn);
+  } catch { return false; }
+}
+
 export async function ensureSeeded() {
   const tmpls = await getAllRaw(TEMPLATES);
   let seededVersion = 0;
   try { seededVersion = Number(localStorage.getItem(SEED_KEY)) || 0; } catch { /* ignore */ }
 
   if (!tmpls || !tmpls.length) {
+    // An empty catalogue on a SIGNED-IN device usually means "the account's
+    // catalogue hasn't arrived yet", not "this is a brand-new user". Give the
+    // first sync a chance before seeding, or the device ends up holding the
+    // starter set AND everything that syncs down.
+    if (await awaitFirstSync()) {
+      const arrived = await getAllRaw(TEMPLATES);
+      if (arrived && arrived.length) {
+        try { localStorage.setItem(SEED_KEY, String(SEED_VERSION)); } catch { /* ignore */ }
+        return getLists();                       // the account supplied it — never seed over that
+      }
+    } else if (syncEnabled() && (await isSignedIn())) {
+      // Signed in but the sync did not land (offline, or the server is unhappy).
+      // Deliberately do NOT seed: an empty screen this launch is recoverable,
+      // whereas a duplicate catalogue has to be untangled by hand.
+      return getLists();
+    }
     // Migrate existing v1 copy-based lists if present; otherwise seed fresh.
     const legacy = (await getAllRaw(LISTS).catch(() => [])) || [];
     const source = legacy.length ? legacy.map(coerceList) : seedLists();
