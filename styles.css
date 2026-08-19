@@ -367,7 +367,34 @@ em {
   width: 22px;
   height: 22px;
   display: block;
+  flex: none;
 }
+
+/* Size steps for the interface icon family. The default (22px) is for buttons and
+   top bars; these cover the smaller places a glyph sits beside text. Inline sizes
+   drop to `inline-block` and take a hair of optical lift so they centre on the
+   text baseline rather than sitting low. */
+.ic.md {
+  width: 19px;
+  height: 19px;
+}
+
+.ic.sm {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  vertical-align: -.18em;
+}
+
+.ic.xs {
+  width: 13px;
+  height: 13px;
+  display: inline-block;
+  vertical-align: -.14em;
+}
+
+/* Glyph/label pairing rules live at the END of this file, so they win over the
+   per-component rules below without needing extra specificity. */
 
 /* Storage-places manager (Settings) */
 .places-list {
@@ -4695,3 +4722,73 @@ table.grid {
 }
 /* The assigned-person chip on a packing-list row. */
 .e-person { display: inline-flex; align-items: center; gap: 4px; }
+
+/* ================================================================
+   Interface icon alignment
+   ----------------------------------------------------------------
+   Everything that pairs a glyph from the icon family with a text
+   label lines the two up and spaces them once, here. Placed last so
+   these win over the per-component rules above without needing
+   extra specificity — no caller has to hand-place a gap after an
+   icon, and no label needs a leading space.
+   ================================================================ */
+.badge,
+.fchip,
+.check,
+.setup-tag,
+.care-stat,
+.ov-tpl,
+.ai-badge,
+.ev-countdown,
+.ev-prog,
+.preset-lbl,
+.setup-title,
+.act-chip,
+.cal-overdue,
+.data-status,
+.ov-dupes-h,
+.ov-stored,
+.e-sub span,
+.ai-sub span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Badges and the flag column are tight, so their glyphs sit closer. */
+.badge { gap: 3px; }
+.ov-fl { gap: 2px; }
+
+/* The maintenance/duplicate dots are one filled glyph, coloured by the state
+   class that wraps them. */
+.care-stat.overdue .ic,
+.cal-overdue .ic,
+.ov-duphead .ic { color: var(--danger); }
+.care-stat.soon .ic { color: var(--warn); }
+.care-stat.ok .ic { color: var(--ok); }
+
+/* Icon "slots" that used to hold a big emoji character now hold an SVG, so they
+   size the glyph rather than a font. */
+.nudge-ic .ic,
+.care-link-ic .ic,
+.setup-ic .ic { width: 19px; height: 19px; }
+.nudge-ic,
+.care-link-ic,
+.setup-ic { display: grid; place-items: center; }
+
+/* The Packing Mode finish screen: a big tick instead of the old emoji. */
+.pack-finish-emoji .ic {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto;
+  color: var(--ok);
+}
+
+/* Search-result rows take an SVG glyph in their leading slot. */
+.sr-ic { display: grid; place-items: center; }
+.sr-ic .ic { width: 19px; height: 19px; }
+
+/* The pack CTA and the readiness "all clear" tile pair a word with a tick. */
+.pack-cta span { display: inline-flex; align-items: center; gap: 6px; }
+.rd-val { display: inline-flex; align-items: center; gap: 4px; }
+.rd-val .ic { width: 18px; height: 18px; }

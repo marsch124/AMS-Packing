@@ -26,7 +26,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v96';
+const APP_VERSION = 'v97';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -256,7 +256,7 @@ function collectItemValues(field, lists = ALL_LISTS) {
 // A small "condition" badge for an item row — shown ONLY for the states that need
 // attention (worn / needs-replacing), so healthy gear stays unbadged and quiet.
 function conditionBadgeHTML(it) {
-  if (it.condition === 'retire') return '<span class="badge cond retire" title="Condition: Needs replacing">♻️ Replace</span>';
+  if (it.condition === 'retire') return `<span class="badge cond retire" title="Condition: Needs replacing">${ic('swap','xs')} Replace</span>`;
   if (it.condition === 'worn') return '<span class="badge cond worn" title="Condition: Worn">Worn</span>';
   return '';
 }
@@ -310,9 +310,9 @@ async function renderContainers() {
 const GRID_ITEM_COLS = [
   { key: 'weight', label: 'Weight' },
   { key: 'storage', label: 'Storage' },
-  { key: 'liquid', label: '💧' },
-  { key: 'charging', label: '⚡' },
-  { key: 'restricted', label: '⚠️' },
+  { key: 'liquid', label: 'Liquid', icon: 'drop' },
+  { key: 'charging', label: 'Charging', icon: 'bolt' },
+  { key: 'restricted', label: 'Restricted', icon: 'warn' },
   { key: 'container', label: 'Container' },
   { key: 'color', label: 'Color' },
   { key: 'size', label: 'Size' },
@@ -372,8 +372,8 @@ function manageGridColumns(order) {
     const draw = () => {
       const rows = cols.map((k, i) => `<div class="col-row" data-i="${i}">
         <span class="col-name">${labelOf(k)}</span>
-        <button class="iconbtn sm" data-m="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">▲</button>
-        <button class="iconbtn sm" data-m="down" ${i === cols.length - 1 ? 'disabled' : ''} aria-label="Move down">▼</button>
+        <button class="iconbtn sm" data-m="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">${ic('up','sm')}</button>
+        <button class="iconbtn sm" data-m="down" ${i === cols.length - 1 ? 'disabled' : ''} aria-label="Move down">${ic('down','sm')}</button>
       </div>`).join('');
       body.innerHTML = `<h2>Column order</h2>
         <p class="modal-sub">Reorder the “① the item itself” columns. Your choice is remembered on this device.</p>
@@ -465,7 +465,7 @@ async function renderItemsGrid() {
     }
     const matrix = templates.map((t) => `<td class="g-check"><input type="checkbox" data-tmpl="${esc(t.id)}"${memIds.has(t.id) ? ' checked' : ''}></td>`).join('');
     return `<tr data-id="${esc(row.id)}">
-      <th class="cell-name" scope="row"><a href="#/list/${esc(openLid)}/item/${esc(row.id)}">${esc(it.name || '(unnamed)')}</a>${it.retired ? ' <span title="Not in use">🚫</span>' : ''}</th>
+      <th class="cell-name" scope="row"><a href="#/list/${esc(openLid)}/item/${esc(row.id)}">${esc(it.name || '(unnamed)')}</a>${it.retired ? ` <span title="Not in use">${ic('ban','xs')}</span>` : ''}</th>
       ${itemCells}${qtyCell}${sectionCell}${matrix}
     </tr>`;
   };
@@ -493,11 +493,13 @@ async function renderItemsGrid() {
     });
     const q = query.trim().toLowerCase();
     if (q) rows = rows.filter((r) => (r.item.name || '').toLowerCase().includes(q));
-    const colLabel = (k) => (GRID_ITEM_COLS.find((c) => c.key === k) || {}).label || k;
+    const colDef = (k) => GRID_ITEM_COLS.find((c) => c.key === k) || {};
+    const colLabel = (k) => colDef(k).label || k;
+    const colHead = (k) => { const c = colDef(k); return c.icon ? `<span title="${esc(c.label)}">${ic(c.icon, 'sm')}</span>` : esc(colLabel(k)); };
     const head = `<thead>
       <tr class="grp"><th class="cell-name" rowspan="2">Item <em>${rows.length}</em></th>
         <th colspan="${colOrder.length}">① The item itself</th><th colspan="2">② In this list</th><th colspan="${templates.length}">③ In these templates</th></tr>
-      <tr class="col">${colOrder.map((k) => `<th>${esc(colLabel(k))}</th>`).join('')}
+      <tr class="col">${colOrder.map((k) => `<th>${colHead(k)}</th>`).join('')}
         <th>Qty</th><th>Section</th>${templates.map((t) => `<th class="tmpl-col"><span>${esc(t.name)}</span></th>`).join('')}</tr>
     </thead>`;
     const body = `<tbody>${rows.map((r) => rowHTML(r, templates)).join('') || '<tr><td class="g-empty" colspan="99">No items match your search.</td></tr>'}</tbody>`;
@@ -585,14 +587,14 @@ function isUnfiled(name, lists = ALL_LISTS) {
 // template's own item list: tap a chip to isolate a kind of thing (liquids to
 // pack, chargeables, items with care info…). Chips are OR'd together.
 const ITEM_FILTER_CATS = [
-  { key: 'loose',      label: '⚠️ No template', test: (it) => isUnfiled(it.name) },
-  { key: 'liquid',     label: '💧 Liquids',     test: (it) => !!it.liquid },
-  { key: 'charge',     label: '⚡ Charging',     test: (it) => !!it.charging },
-  { key: 'restricted', label: '⚠️ Restricted',  test: (it) => !!it.restricted },
-  { key: 'consumable', label: '🛒 Consumable',  test: (it) => !!it.consumable },
-  { key: 'care',       label: '🧰 Has care',    test: (it) => hasCare(it) },
-  { key: 'photo',      label: '📷 Photo',        test: (it) => (it.photos || []).length > 0 },
-  { key: 'retired',    label: '🚫 Not in use',   test: (it) => !!it.retired },
+  { key: 'loose',      label: 'No template', icon: 'warn',     test: (it) => isUnfiled(it.name) },
+  { key: 'liquid',     label: 'Liquids',     icon: 'drop',     test: (it) => !!it.liquid },
+  { key: 'charge',     label: 'Charging',    icon: 'bolt',     test: (it) => !!it.charging },
+  { key: 'restricted', label: 'Restricted',  icon: 'warn',     test: (it) => !!it.restricted },
+  { key: 'consumable', label: 'Consumable',  icon: 'cart',     test: (it) => !!it.consumable },
+  { key: 'care',       label: 'Has care',    icon: 'toolbox',  test: (it) => hasCare(it) },
+  { key: 'photo',      label: 'Photo',       icon: 'camera',   test: (it) => (it.photos || []).length > 0 },
+  { key: 'retired',    label: 'Not in use',  icon: 'ban',      test: (it) => !!it.retired },
 ];
 
 // Chip-bar HTML for the given items and active filter Set. Only categories that
@@ -602,7 +604,7 @@ const ITEM_FILTER_CATS = [
 function itemFilterChipsHTML(items, filter, excludeLoose) {
   const cats = ITEM_FILTER_CATS.filter((c) => !(excludeLoose && c.key === 'loose'));
   const chips = cats.map((c) => ({ c, n: items.filter(c.test).length })).filter((x) => x.n)
-    .map(({ c, n }) => `<button class="fchip${filter.has(c.key) ? ' on' : ''}" type="button" data-cat="${c.key}">${c.label} <em>${n}</em></button>`)
+    .map(({ c, n }) => `<button class="fchip${filter.has(c.key) ? ' on' : ''}" type="button" data-cat="${c.key}">${c.icon ? ic(c.icon, 'sm') : ''}${c.label} <em>${n}</em></button>`)
     .join('');
   return chips ? `${chips}<button class="fchip clear" type="button" data-cat="__clear"${filter.size ? '' : ' hidden'}>Show all</button>` : '';
 }
@@ -656,7 +658,11 @@ function dueLabel(status) {
   if (d === 1) return 'Due tomorrow';
   return `Due in ${d} days`;
 }
-const CARE_EMOJI = { overdue: '🔴', soon: '🟡', ok: '🟢', reference: '🧰' };
+// Maintenance state glyph. The three due-states are the same filled dot, coloured
+// by the state class that wraps them; a reference item shows the care toolbox.
+// A function, not a map: `IC` is defined further down, so building the markup at
+// module-evaluation time would read it inside its temporal dead zone.
+const careIcon = (state) => ic(state === 'reference' ? 'toolbox' : 'dot', 'xs');
 function prettyDate(ymd) {
   const t = Date.parse(`${ymd}T00:00:00Z`);
   if (Number.isNaN(t)) return ymd || '';
@@ -693,29 +699,91 @@ async function saveGuard(promise) {
   }
 }
 
+// The interface icon family. Every glyph is a single-stroke line drawing on the
+// same 24×24 grid, stroked in `currentColor` so it inherits the section accent
+// wherever it sits. The shared skeleton lives in `svgIcon()` so each entry below
+// is just its path data — `w` overrides the stroke weight for the few glyphs
+// that need a heavier or lighter line.
+//
+// These cover the app's OWN language: buttons, badges, flags, chips, nudges and
+// status. Emoji are deliberately kept for things that identify the USER's stuff —
+// category / container / phase group headers, template covers and kits — where a
+// colourful, instantly recognisable glyph beats a monochrome outline.
+const svgIcon = (d, w = 1.9) => `<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const svgSolid = (d) => `<svg class="ic" viewBox="0 0 24 24" fill="currentColor" stroke="none">${d}</svg>`;
+
 const IC = {
-  bag: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l-1 12H7Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>',
-  list: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h11M8 12h11M8 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>',
-  plus: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 6v12M6 12h12"/></svg>',
-  gear: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"><polygon points="12,2.5 21.2,7.25 21.2,16.75 12,21.5 2.8,16.75 2.8,7.25"/><circle cx="12" cy="12" r="4"/></svg>',
-  trash: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/></svg>',
-  edit: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L18 10l-4-4L4 16Z"/><path d="M13 7l4 4"/></svg>',
-  back: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>',
-  sheet: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/></svg>',
-  refresh: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/></svg>',
-  fwd: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
-  close: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
-  check: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>',
-  share: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4M8.5 7.5 12 4l3.5 3.5"/><path d="M6 12v6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-6"/></svg>',
-  link: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg>',
-  pin: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>',
-  wrench: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.2 5.1L4 16.9 7.1 20l5.5-5.5a4 4 0 0 0 5.1-5.2l-2.4 2.4-2.1-.6-.6-2.1Z"/></svg>',
-  camera: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.2"/></svg>',
-  cal: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M8 3.5v3M16 3.5v3"/></svg>',
-  search: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>',
-  globe: '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/></svg>',
-  star: '<svg class="ic" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.77 6.8 19.5l.99-5.79-4.21-4.1 5.82-.85Z"/></svg>',
+  // --- navigation & actions ---
+  bag: svgIcon('<path d="M6 8h12l-1 12H7Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>'),
+  list: svgIcon('<path d="M8 6h11M8 12h11M8 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/>'),
+  plus: svgIcon('<path d="M12 6v12M6 12h12"/>', 2.3),
+  gear: svgIcon('<polygon points="12,2.5 21.2,7.25 21.2,16.75 12,21.5 2.8,16.75 2.8,7.25"/><circle cx="12" cy="12" r="4"/>', 1.85),
+  trash: svgIcon('<path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/>'),
+  edit: svgIcon('<path d="M4 20h4L18 10l-4-4L4 16Z"/><path d="M13 7l4 4"/>'),
+  back: svgIcon('<path d="M15 6l-6 6 6 6"/>', 2.1),
+  sheet: svgIcon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/>'),
+  refresh: svgIcon('<path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/>'),
+  fwd: svgIcon('<path d="M9 6l6 6-6 6"/>', 2.1),
+  up: svgIcon('<path d="M6 15l6-6 6 6"/>', 2.1),
+  down: svgIcon('<path d="M6 9l6 6 6-6"/>', 2.1),
+  close: svgIcon('<path d="M6 6l12 12M18 6L6 18"/>', 2.1),
+  check: svgIcon('<path d="M5 12.5l4.5 4.5L19 7"/>', 2.6),
+  share: svgIcon('<path d="M12 15V4M8.5 7.5 12 4l3.5 3.5"/><path d="M6 12v6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-6"/>'),
+  link: svgIcon('<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>'),
+  pin: svgIcon('<path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/>'),
+  wrench: svgIcon('<path d="M14.7 6.3a4 4 0 0 0-5.2 5.1L4 16.9 7.1 20l5.5-5.5a4 4 0 0 0 5.1-5.2l-2.4 2.4-2.1-.6-.6-2.1Z"/>'),
+  camera: svgIcon('<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.2"/>'),
+  cal: svgIcon('<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M8 3.5v3M16 3.5v3"/>'),
+  search: svgIcon('<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>'),
+  globe: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/>'),
+  star: svgSolid('<path d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.77 6.8 19.5l.99-5.79-4.21-4.1 5.82-.85Z"/>'),
+
+  // --- item flags & badges (was ⚠️ 💧 ⚡ 🚫 ♻️ 🛒 🧰 📷 👤 ☑ 🌙 ⭐ 🗒️ 🗂️) ---
+  warn: svgIcon('<path d="M12 4.2 21 19.6H3Z"/><path d="M12 10v4.2"/><path d="M12 17.2h.01"/>'),
+  drop: svgIcon('<path d="M12 3.4c3.5 4.3 5.4 7.1 5.4 9.6a5.4 5.4 0 0 1-10.8 0c0-2.5 1.9-5.3 5.4-9.6Z"/>'),
+  bolt: svgIcon('<path d="M13.2 3 5.6 13.6h5.3l-1 7.4 7.5-10.6h-5.2Z"/>'),
+  ban: svgIcon('<circle cx="12" cy="12" r="8.4"/><path d="M6.1 6.1l11.8 11.8"/>'),
+  swap: svgIcon('<path d="M3.8 8.4h14.4l-3.6-3.6"/><path d="M20.2 15.6H5.8l3.6 3.6"/>'),
+  cart: svgIcon('<path d="M2.8 4.2h2.4l2.4 10.6h9.3l2.3-7.7H6.3"/><circle cx="9.4" cy="19" r="1.5"/><circle cx="16.6" cy="19" r="1.5"/>'),
+  toolbox: svgIcon('<rect x="3" y="8.4" width="18" height="11.2" rx="1.8"/><path d="M8.8 8.4V6.6a1.6 1.6 0 0 1 1.6-1.6h3.2a1.6 1.6 0 0 1 1.6 1.6v1.8"/><path d="M3 13.2h18"/><path d="M10.4 13.2v2.2h3.2v-2.2"/>'),
+  person: svgIcon('<circle cx="12" cy="8" r="3.6"/><path d="M5.2 20a6.8 6.8 0 0 1 13.6 0"/>'),
+  checkbox: svgIcon('<rect x="3.8" y="3.8" width="16.4" height="16.4" rx="3"/><path d="M8 12.4l2.6 2.6L16.2 9.4"/>'),
+  moon: svgIcon('<path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8Z"/>'),
+  note: svgIcon('<path d="M6 3.6h8.4L19 8.2v12.2H6Z"/><path d="M14.4 3.6v4.6H19"/><path d="M9 12.4h7M9 16.2h4.6"/>'),
+  folder: svgIcon('<path d="M3.4 6.6A1.6 1.6 0 0 1 5 5h3.9l2 2.6H19a1.6 1.6 0 0 1 1.6 1.6v8.2A1.6 1.6 0 0 1 19 19H5a1.6 1.6 0 0 1-1.6-1.6Z"/>'),
+  laundry: svgIcon('<path d="M4.4 8.6h15.2L18.2 20H5.8Z"/><path d="M3 8.6h18"/><path d="M8.8 11.8l.8 5M15.2 11.8l-.8 5M12 11.8v5"/>'),
+  weight: svgIcon('<path d="M7 8.4h10l2 11.4H5Z"/><path d="M9.4 8.4V6.9a2.6 2.6 0 0 1 5.2 0v1.5"/>'),
+  lock: svgIcon('<rect x="4.4" y="10" width="15.2" height="10.4" rx="2"/><path d="M8 10V7.6a4 4 0 0 1 8 0V10"/>'),
+  save: svgIcon('<path d="M4.6 4.6h10.6l4.2 4.2v10.6H4.6Z"/><path d="M8.4 4.6v4.8h6.4V4.6"/><path d="M8 13.4h8v6H8Z"/>'),
+  sparkle: svgIcon('<path d="M11 3.4l1.7 4.6 4.6 1.7-4.6 1.7L11 16l-1.7-4.6L4.7 9.7l4.6-1.7Z"/><path d="M17.8 15.2l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8Z"/>', 1.7),
+  box: svgIcon('<path d="M3.6 8 12 3.6 20.4 8v8L12 20.4 3.6 16Z"/><path d="M3.6 8 12 12.4 20.4 8M12 12.4v8"/>'),
+  clock: svgIcon('<circle cx="12" cy="13.4" r="7.4"/><path d="M12 9.6v3.8l2.6 1.8"/><path d="M9.6 3.2h4.8"/>'),
+  suitcase: svgIcon('<rect x="3.4" y="7.6" width="17.2" height="12" rx="2"/><path d="M8.8 7.6V5.8A1.6 1.6 0 0 1 10.4 4.2h3.2a1.6 1.6 0 0 1 1.6 1.6v1.8"/><path d="M8.6 7.6v12M15.4 7.6v12"/>'),
+  dot: svgSolid('<circle cx="12" cy="12" r="5.6"/>'),
+
+  // --- trip-setup vocabulary (was 🚗 ✈️ 🚐 🏠 🌲 🏁 🎯 🏋️ 🎈 🍳 🍽️ 🥡) ---
+  car: svgIcon('<path d="M4.4 16.4v-3.1l1.9-4.4A1.8 1.8 0 0 1 8 7.8h8a1.8 1.8 0 0 1 1.7 1.1l1.9 4.4v3.1"/><path d="M4.4 13.3h15.2"/><circle cx="8" cy="16.4" r="1.6"/><circle cx="16" cy="16.4" r="1.6"/>'),
+  plane: svgIcon('<path d="M10.4 4.2a1.6 1.6 0 0 1 3.2 0v4.9l7 4.1v2.2l-7-1.9v3.6l2.3 1.7v1.6L12 19.5l-3.9.9v-1.6l2.3-1.7v-3.6l-7 1.9v-2.2l7-4.1Z"/>'),
+  rv: svgIcon('<path d="M3 17V7.6a1.2 1.2 0 0 1 1.2-1.2h11.3L20.6 12v5"/><path d="M3 17h17.6"/><circle cx="7.6" cy="17.6" r="1.6"/><circle cx="16" cy="17.6" r="1.6"/><path d="M6 9.2h4.2v3.2H6Z"/>'),
+  home: svgIcon('<path d="M4 10.4 12 4l8 6.4V20H4Z"/><path d="M9.6 20v-5.8h4.8V20"/>'),
+  tree: svgIcon('<path d="M12 3.2 6.4 11h3.2l-4 6h12.8l-4-6h3.2Z"/><path d="M12 17v3.8"/>'),
+  flag: svgIcon('<path d="M6 21V4M6 4h11l-2 4 2 4H6"/>'),
+  target: svgIcon('<circle cx="12" cy="12" r="8.2"/><circle cx="12" cy="12" r="3.9"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>'),
+  dumbbell: svgIcon('<path d="M6.6 8.6v6.8M3.8 10.4v3.2M17.4 8.6v6.8M20.2 10.4v3.2"/><path d="M6.6 12h10.8"/>'),
+  balloon: svgIcon('<path d="M12 3.6a5.2 5.2 0 0 1 5.2 5.2c0 3.3-2.6 5.9-5.2 6.6-2.6-.7-5.2-3.3-5.2-6.6A5.2 5.2 0 0 1 12 3.6Z"/><path d="M12 15.4v2.2"/><path d="M10.6 20.6c1.2-.9 2.8-.9 1.4-3"/>'),
+  pan: svgIcon('<circle cx="9.8" cy="12.8" r="5.6"/><path d="M15.4 12.8h5.4"/>'),
+  cutlery: svgIcon('<path d="M7.8 3.4v6.8a2 2 0 0 0 2 2v8.4"/><path d="M5.8 3.4v4.4M9.8 3.4v4.4"/><path d="M16.6 3.4c1.8 0 2.6 2.2 2.6 4.4s-1 3.4-2.6 3.4v9.4"/>'),
+  takeaway: svgIcon('<path d="M5.4 8.4h13.2L17.4 20H6.6Z"/><path d="M4.2 8.4 12 4.2l7.8 4.2"/><path d="M9.2 12.4h5.6"/>'),
 };
+
+// Renders an interface glyph at a chosen size. `size` is a CSS modifier class —
+// 'xs' for badges, 'sm' for chips and sub-labels, 'md' for nudges; omit for the
+// default 22px used in buttons and top bars.
+function ic(name, size = '') {
+  const raw = IC[name];
+  if (!raw) return '';
+  return size ? raw.replace('class="ic"', `class="ic ${size}"`) : raw;
+}
 
 // Weather glyphs, keyed by the symbolic icon keys model.js emits. Colours are
 // baked in (not currentColor) so the sky reads at a glance — chosen to stay legible
@@ -728,6 +796,13 @@ const WIC = {
   rain: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 6 3.5 3.5 0 0 0 7 14Z" stroke="#8b98a8"/><g stroke="#3b82f6" stroke-width="2"><path d="M8 18l-1 2M12 18l-1 2M16 18l-1 2"/></g></svg>',
   snow: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 13h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 5 3.5 3.5 0 0 0 7 13Z" stroke="#8b98a8"/><g stroke="#38bdf8" stroke-width="2.3"><path d="M8 17h.01M12 19h.01M16 17h.01M10 20h.01M14 20h.01"/></g></svg>',
   storm: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 13h10a3.2 3.2 0 0 0 .2-6.4A5 5 0 0 0 7.5 5 3.5 3.5 0 0 0 7 13Z" stroke="#7f8b99"/><path d="M13 14l-3 4h3l-1 3" fill="#f59e0b" stroke="#f59e0b"/></svg>',
+  // Conditions you can force-pack for, plus the two seasons. Same coloured
+  // language as the forecast glyphs above: cyan for cold/snow, amber for heat,
+  // slate for wind.
+  snowflake: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M4.2 7.5l15.6 9M19.8 7.5l-15.6 9"/><path d="M12 6.6 9.6 4.6M12 6.6l2.4-2M12 17.4l-2.4 2M12 17.4l2.4 2"/></svg>',
+  cold: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13.6V5.4a2.2 2.2 0 0 1 4.4 0v8.2a4 4 0 1 1-4.4 0Z"/><path d="M12.2 9.4v6"/></svg>',
+  hot: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.4c2.6 3 3.6 5 3.6 6.6 0 1.6-1.2 2.6-1.2 4.2a3 3 0 0 0 3 2.8c-.4 2.4-2.7 4-5.4 4a5.6 5.6 0 0 1-5.6-5.6c0-4 3.4-6.4 5.6-12Z"/></svg>',
+  wind: '<svg class="wi" viewBox="0 0 24 24" fill="none" stroke="#8b98a8" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5h9a2.6 2.6 0 1 0-2.6-2.6"/><path d="M3.5 13h12a2.6 2.6 0 1 1-2.6 2.6"/><path d="M3.5 17.5h6"/></svg>',
 };
 const wIcon = (key) => WIC[key] || WIC.cloud;
 
@@ -831,7 +906,7 @@ async function renderHome() {
   if (nudges.length) {
     const { e, n } = nudges[0];
     wrap.appendChild(h(`<a class="nudge" href="#/event/${e.id}/pack">
-      <span class="nudge-ic">⏰</span>
+      <span class="nudge-ic">${ic('clock','md')}</span>
       <span class="nudge-body"><b>${esc(e.name || 'Trip')} ${esc(n.label)}</b> — ${n.dueCount} item${n.dueCount === 1 ? '' : 's'} to pack now<span class="nudge-sub">${esc(n.focusLabel)}</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
@@ -842,7 +917,7 @@ async function renderHome() {
   if (care.due > 0) {
     const parts = [care.overdue ? `${care.overdue} overdue` : '', care.soon ? `${care.soon} due soon` : ''].filter(Boolean).join(' · ');
     wrap.appendChild(h(`<a class="nudge care" href="#/maintenance">
-      <span class="nudge-ic">🧰</span>
+      <span class="nudge-ic">${ic('toolbox','md')}</span>
       <span class="nudge-body"><b>Maintenance due</b> — ${care.due} item${care.due === 1 ? ' needs' : 's need'} looking after<span class="nudge-sub">${esc(parts)}</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
@@ -853,7 +928,7 @@ async function renderHome() {
   const openShopping = openShoppingCount(actions);
   if (openShopping) {
     wrap.appendChild(h(`<a class="nudge shop" href="#/shopping">
-      <span class="nudge-ic">🛒</span>
+      <span class="nudge-ic">${ic('cart','md')}</span>
       <span class="nudge-body"><b>Shopping list</b> — ${openShopping} to buy<span class="nudge-sub">Restocks &amp; replacements before your trip</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
@@ -866,7 +941,7 @@ async function renderHome() {
     const high = openActions.filter((a) => a.priority === 'high').length;
     const detail = `${openActions.length} open${high ? ` · ${high} high-priority` : ''}`;
     wrap.appendChild(h(`<a class="nudge todo" href="#/actions">
-      <span class="nudge-ic">🗒️</span>
+      <span class="nudge-ic">${ic('note','md')}</span>
       <span class="nudge-body"><b>To-dos to tackle</b> — ${detail}<span class="nudge-sub">Tap to open your Actions list</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
@@ -877,9 +952,9 @@ async function renderHome() {
     const d = daysSinceBackup();
     const msg = d === null ? 'you haven’t saved a backup yet' : `it’s been ${d} day${d === 1 ? '' : 's'} since your last one`;
     const nudge = h(`<div class="nudge backup">
-      <span class="nudge-ic">💾</span>
+      <span class="nudge-ic">${ic('save','md')}</span>
       <a class="nudge-body" href="#/settings"><b>Back up your data</b> — ${esc(msg)}<span class="nudge-sub">Tap to open Settings → Export backup</span></a>
-      <button class="nudge-x" type="button" aria-label="Remind me later" title="Remind me later">✕</button>
+      <button class="nudge-x" type="button" aria-label="Remind me later" title="Remind me later">${ic('close','sm')}</button>
     </div>`);
     nudge.querySelector('.nudge-x').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); snoozeBackupNudge(); render(); });
     wrap.appendChild(nudge);
@@ -928,7 +1003,7 @@ function eventCardHTML(e) {
   const endVal = e.endDate || endFromNights(e.startDate, e.nights);
   const n = nightsBetween(e.startDate, endVal);
   const nightsBit = n == null ? '' : n === 0 ? 'day trip' : `${n} night${n === 1 ? '' : 's'}`;
-  const sub = [e.destination ? `📍 ${esc(e.destination)}` : '', nightsBit].filter(Boolean).join(' · ');
+  const sub = [e.destination ? `${ic('pin','xs')}${esc(e.destination)}` : '', nightsBit].filter(Boolean).join(' · ');
   // Weather glyph + range, only when a forecast has actually been fetched for the trip.
   const dw = deriveWeather(e);
   const wx = dw ? `<span class="ev-wx">${wIcon(dw.days[0].icon)} ${esc(dw.rangeLabel)}</span>` : '';
@@ -940,14 +1015,14 @@ function eventCardHTML(e) {
         ${sub ? `<span class="ev-sub">${sub}</span>` : ''}
       </div>
       <div class="ev-badge">
-        ${countdown ? `<span class="ev-countdown${soon ? ' soon' : ''}">🗓 ${countdown}</span>` : ''}
+        ${countdown ? `<span class="ev-countdown${soon ? ' soon' : ''}">${ic('cal','xs')}${countdown}</span>` : ''}
         ${wx}
       </div>
     </div>
     ${meta.length ? `<div class="chips">${meta.map(chip).join('')}</div>` : ''}
     <div class="ev-foot">
       <div class="bar"><span style="width:${p.pct}%"></span></div>
-      <span class="ev-prog">${done ? '✓ Packed' : `${p.done}/${p.total} · ${p.pct}%`}</span>
+      <span class="ev-prog">${done ? `${ic('check','xs')}Packed` : `${p.done}/${p.total} · ${p.pct}%`}</span>
     </div>
   </a>`;
 }
@@ -1260,13 +1335,13 @@ function eventForm(ev, lists, isEdit) {
   // the form in one tap.
   const presets = !isEdit ? loadPresets() : [];
   const presetBar = presets.length ? `<div class="preset-bar" data-preset-bar>
-    <span class="preset-lbl">⚡ Start from a preset</span>
+    <span class="preset-lbl">${ic('bolt','sm')}Start from a preset</span>
     <div class="preset-chips">${presets.map((p) => `<button type="button" class="preset-chip" data-preset="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div>
   </div>` : '';
   form.innerHTML = `
     ${presetBar}
     <fieldset class="mode-pick"><legend>List type</legend>${radioRow('mode', [
-    { value: 'trip', label: '🧳 Full trip' },
+    { value: 'trip', label: 'Full trip' },
     { value: 'quick', label: '⏱️ Quick activity' },
   ], ev.mode || 'trip')}
       <p class="grp-hint" data-mode-hint></p></fieldset>
@@ -1281,7 +1356,7 @@ function eventForm(ev, lists, isEdit) {
     </div>
     <p class="nights-hint muted" data-nights-hint></p>
     <label class="field-check"><input type="checkbox" name="laundry"${ev.laundry ? ' checked' : ''}>
-      <span class="fc-txt"><b>🧺 Laundry available on this trip</b><em>Caps per-night items (socks, underwear, tees) at ${LAUNDRY_CAP_NIGHTS} rather than one per night, so a long trip doesn’t demand a dozen. Short trips are unaffected.</em></span></label>
+      <span class="fc-txt"><b>${ic('laundry','sm')}Laundry available on this trip</b><em>Caps per-night items (socks, underwear, tees) at ${LAUNDRY_CAP_NIGHTS} rather than one per night, so a long trip doesn’t demand a dozen. Short trips are unaffected.</em></span></label>
     <label class="field"><span>Destination <em>(optional — for weather)</em></span>
       <input name="destination" value="${esc(ev.destination)}" placeholder="e.g. Chamonix" autocomplete="off"></label>
 
@@ -1349,12 +1424,12 @@ function eventForm(ev, lists, isEdit) {
     const n = nightsBetween(startInput.value, endInput.value);
     let msg; let warn = false;
     if (!startInput.value || !endInput.value) msg = 'Add an end date to count the days — nights scale per-night quantities.';
-    else if (n == null) { msg = '⚠ End date is before the start date.'; warn = true; }
+    else if (n == null) { msg = 'End date is before the start date.'; warn = true; }
     else {
       const days = n + 1;  // inclusive calendar days: start and end day both count
       msg = n === 0
-        ? '🗓 1 day · 🌙 0 nights (day trip)'
-        : `🗓 ${days} days · 🌙 ${n} night${n === 1 ? '' : 's'}`;
+        ? '1 day · 0 nights (day trip)'
+        : `${days} days · ${n} night${n === 1 ? '' : 's'}`;
     }
     nightsHint.textContent = msg;
     nightsHint.classList.toggle('warn', warn);
@@ -1517,7 +1592,7 @@ async function renderEvent(eventId) {
   const nudge = tripNudge(ev);
   if (nudge && nudge.dueCount > 0) {
     wrap.appendChild(h(`<a class="nudge" href="#/event/${ev.id}/pack">
-      <span class="nudge-ic">⏰</span>
+      <span class="nudge-ic">${ic('clock','md')}</span>
       <span class="nudge-body"><b>${esc(nudge.label)}</b> — ${nudge.dueCount} item${nudge.dueCount === 1 ? '' : 's'} to pack now<span class="nudge-sub">${esc(nudge.focusLabel)}</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
@@ -1538,9 +1613,9 @@ async function renderEvent(eventId) {
     </div>
     <div class="spacer"></div>
     <button class="btn ghost" data-act="add">${IC.plus}<span>Item</span></button>
-    <button class="btn ghost" data-act="kit">${KIT_DEFAULT_EMOJI}<span>Kit</span></button>
+    <button class="btn ghost" data-act="kit">${ic('toolbox')}<span>Kit</span></button>
     <button class="btn ghost" data-act="regen">${IC.refresh}<span>Regenerate</span></button>
-    <button class="btn ghost" data-act="preset">${IC.star || '⭐'}<span>Save as preset</span></button>
+    <button class="btn ghost" data-act="preset">${IC.star}<span>Save as preset</span></button>
     <button class="btn ghost" data-act="review">${IC.check}<span>Trip review</span></button>
     <button class="btn ghost" data-act="share">${IC.share}<span>Share</span></button>
     <button class="btn ghost" data-act="xlsx">${IC.sheet}<span>Excel</span></button>
@@ -1553,7 +1628,7 @@ async function renderEvent(eventId) {
   const rerender = () => { renderTotalBody(body, ev); };
   rerender();
 
-  // "Sort out" quick filters: isolate all liquids (💧) or all chargeables (⚡)
+  // "Sort out" quick filters: isolate all the liquids, or everything that charges
   // so they can be gathered — the wash bag, the cable pouch. Reuses the same rows.
   const liquidCount = ev.entries.filter((e) => e.liquid).length;
   const chargeCount = ev.entries.filter((e) => e.charging).length;
@@ -1563,10 +1638,10 @@ async function renderEvent(eventId) {
     const fchip = (key, label, n) => `<button class="fchip${flagFilter.has(key) ? ' on' : ''}" data-filter="${key}">${label} <em>${n}</em></button>`;
     const filterbar = h(`<div class="filterbar">
       <span class="filterbar-lbl">Sort out</span>
-      ${liquidCount ? fchip('liquid', '💧 Liquids', liquidCount) : ''}
-      ${chargeCount ? fchip('charge', '⚡ Charge', chargeCount) : ''}
-      ${restrictedCount ? fchip('restricted', '⚠️ Restricted', restrictedCount) : ''}
-      ${weightedCount ? `<button class="fchip${weightSort ? ' on' : ''}" data-filter="__weight">🪨 Heaviest</button>` : ''}
+      ${liquidCount ? fchip('liquid', `${ic('drop','sm')}Liquids`, liquidCount) : ''}
+      ${chargeCount ? fchip('charge', `${ic('bolt','sm')}Charge`, chargeCount) : ''}
+      ${restrictedCount ? fchip('restricted', `${ic('warn','sm')}Restricted`, restrictedCount) : ''}
+      ${weightedCount ? `<button class="fchip${weightSort ? ' on' : ''}" data-filter="__weight">${ic('weight','sm')}Heaviest</button>` : ''}
       <button class="fchip clear" data-filter="__clear" hidden>Show all</button>
     </div>`);
     wrap.insertBefore(filterbar, body);
@@ -1645,7 +1720,7 @@ async function renderEvent(eventId) {
       if (loadPresets().some((p) => p.name.toLowerCase() === name.toLowerCase())
         && !confirm(`A preset called “${name}” already exists. Replace it?`)) return;
       addPreset(name, ev);
-      alert(`Saved “${name}” as a preset.\n\nStart a new trip from it on the Home screen — look for “⚡ Start from a preset”.`);
+      alert(`Saved “${name}” as a preset.\n\nStart a new trip from it on the Home screen — look for “Start from a preset”.`);
     } else if (act === 'review') { location.assign(`#/event/${ev.id}/review`); }
     else if (act === 'share') { shareTrip(ev); }
     else if (act === 'xlsx') { exportEventXlsx(ev); }
@@ -1657,48 +1732,51 @@ async function renderEvent(eventId) {
 // A pretty, read-only recap of every choice made when the event was created —
 // list type, dates, destination, transport, season, catering, WET contexts and
 // the activities that were ticked. Collapsible so it never crowds the list.
-const TRANSPORT_EMOJI = { Car: '🚗', Plane: '✈️', RV: '🚐' };
-const SEASON_EMOJI = { Summer: '☀️', Winter: '❄️' };
-const CATERING_EMOJI = { self: '🍳', eatout: '🍽️', mixed: '🥡' };
-const CONTEXT_EMOJI = { Indoor: '🏠', Outdoor: '🌲', Race: '🏁' };
-const GROUP_EMOJI = { GA: '🎯', WET: '🏋️', OE: '🎈' };
+// The app's own vocabulary for a trip's settings, drawn from the interface icon
+// family (weather and seasons keep the coloured WIC glyphs, so the sky still
+// reads at a glance the way it does on a trip card).
+const TRANSPORT_ICON = { Car: 'car', Plane: 'plane', RV: 'rv' };
+const CATERING_ICON = { self: 'pan', eatout: 'cutlery', mixed: 'takeaway' };
+const CONTEXT_ICON = { Indoor: 'home', Outdoor: 'tree', Race: 'flag' };
+const GROUP_ICON = { GA: 'target', WET: 'dumbbell', OE: 'balloon' };
+const SEASON_WIC = { Summer: 'sun', Winter: 'snowflake' };
+const WX_WIC = { rain: 'rain', cold: 'cold', hot: 'hot', wind: 'wind', snow: 'snow' };
 function tripSetupCard(ev) {
   const quick = ev.mode === 'quick';
 
   // Single-value settings become tiles in a responsive grid.
   const tiles = [];
-  const tile = (ic, lbl, val) => tiles.push(
-    `<div class="setup-tile"><span class="setup-ic">${ic}</span>`
+  const tile = (glyph, lbl, val) => tiles.push(
+    `<div class="setup-tile"><span class="setup-ic">${glyph}</span>`
     + `<div class="setup-txt"><span class="setup-lbl">${esc(lbl)}</span>`
     + `<span class="setup-val">${val}</span></div></div>`);
 
-  tile(quick ? '⏱️' : '🧳', 'List type', quick ? 'Quick activity' : 'Full trip');
+  tile(ic(quick ? 'clock' : 'suitcase', 'md'), 'List type', quick ? 'Quick activity' : 'Full trip');
 
   const endVal = ev.endDate || endFromNights(ev.startDate, ev.nights);
   if (ev.startDate || endVal) {
     const n = nightsBetween(ev.startDate, endVal);
     const sub = n == null ? '' : n === 0 ? ' · day trip' : ` · ${n} night${n === 1 ? '' : 's'}`;
-    tile('🗓', 'Dates', `${esc(prettyRange(ev.startDate, endVal))}${sub}`);
+    tile(ic('cal', 'md'), 'Dates', `${esc(prettyRange(ev.startDate, endVal))}${sub}`);
   }
-  if (ev.destination) tile('📍', 'Destination', esc(ev.destination));
-  if (ev.laundry) tile('🧺', 'Laundry', ev.nights > LAUNDRY_CAP_NIGHTS ? `Yes · per-night capped at ${LAUNDRY_CAP_NIGHTS}` : 'Yes');
-  if (!quick && ev.transport) tile(TRANSPORT_EMOJI[ev.transport] || '🧭', 'Transport', esc(ev.transport));
-  if (ev.season) tile(SEASON_EMOJI[ev.season] || '📅', 'Time of year', esc(ev.season));
-  if (!quick && ev.catering) tile(CATERING_EMOJI[ev.catering] || '🍴', 'Catering', esc(cateringLabel(ev.catering)));
+  if (ev.destination) tile(ic('pin', 'md'), 'Destination', esc(ev.destination));
+  if (ev.laundry) tile(ic('laundry', 'md'), 'Laundry', ev.nights > LAUNDRY_CAP_NIGHTS ? `Yes · per-night capped at ${LAUNDRY_CAP_NIGHTS}` : 'Yes');
+  if (!quick && ev.transport) tile(ic(TRANSPORT_ICON[ev.transport] || 'car', 'md'), 'Transport', esc(ev.transport));
+  if (ev.season) tile(wIcon(SEASON_WIC[ev.season] || 'sun'), 'Time of year', esc(ev.season));
+  if (!quick && ev.catering) tile(ic(CATERING_ICON[ev.catering] || 'cutlery', 'md'), 'Catering', esc(cateringLabel(ev.catering)));
 
   // Multi-value settings (WET contexts, ticked activities) become tag rows below.
   const blocks = [];
   const contexts = ev.contexts || [];
   if (contexts.length) {
-    const tags = contexts.map((c) => `<span class="setup-tag">${CONTEXT_EMOJI[c] || '•'} ${esc(c)}</span>`).join('');
+    const tags = contexts.map((c) => `<span class="setup-tag">${ic(CONTEXT_ICON[c] || 'box', 'sm')}${esc(c)}</span>`).join('');
     blocks.push(`<div class="setup-block"><span class="setup-lbl">WET options</span><div class="setup-tags">${tags}</div></div>`);
   }
   const weatherOn = ev.weatherOn || [];
   if (weatherOn.length) {
-    const WX_EMOJI = { rain: '🌧', cold: '🥶', hot: '🔥', wind: '💨', snow: '❄️' };
     const tags = weatherOn.map((w) => {
       const def = WEATHER_CONDITIONS.find((x) => x.id === w);
-      return `<span class="setup-tag">${WX_EMOJI[w] || '•'} ${esc(def ? def.label : w)}</span>`;
+      return `<span class="setup-tag">${wIcon(WX_WIC[w] || 'cloud')}${esc(def ? def.label : w)}</span>`;
     }).join('');
     blocks.push(`<div class="setup-block"><span class="setup-lbl">Force-packed weather gear</span><div class="setup-tags">${tags}</div></div>`);
   }
@@ -1711,18 +1789,18 @@ function tripSetupCard(ev) {
       const arr = chosen.filter((l) => l.group === g.id);
       if (!arr.length) continue;
       inner += `<div class="setup-grp-lbl">${esc(g.id)} · ${esc(g.label)}</div>`
-        + `<div class="setup-tags">${arr.map((l) => `<span class="setup-tag">${GROUP_EMOJI[g.id] || '•'} ${esc(l.name)}</span>`).join('')}</div>`;
+        + `<div class="setup-tags">${arr.map((l) => `<span class="setup-tag">${ic(GROUP_ICON[g.id] || 'box', 'sm')}${esc(l.name)}</span>`).join('')}</div>`;
     }
     const ung = chosen.filter((l) => !GROUP_IDS.includes(l.group));
     if (ung.length) {
       inner += '<div class="setup-grp-lbl">Other lists</div>'
-        + `<div class="setup-tags">${ung.map((l) => `<span class="setup-tag">📦 ${esc(l.name)}</span>`).join('')}</div>`;
+        + `<div class="setup-tags">${ung.map((l) => `<span class="setup-tag">${ic('box','sm')}${esc(l.name)}</span>`).join('')}</div>`;
     }
     blocks.push(`<div class="setup-block"><span class="setup-lbl">${quick ? 'Activities packed for' : 'Extra activities'}</span>${inner}</div>`);
   }
 
   return h(`<details class="setup" open>
-    <summary><span class="setup-title">✨ Trip setup</span><span class="setup-chev">${IC.fwd}</span></summary>
+    <summary><span class="setup-title">${ic('sparkle','sm')}Trip setup</span><span class="setup-chev">${IC.fwd}</span></summary>
     <div class="setup-body">
       <div class="setup-grid">${tiles.join('')}</div>
       ${blocks.join('')}
@@ -1758,7 +1836,7 @@ function readinessDashboard(ev, openTodos = 0) {
   } else { wtVal = '—'; wtLbl = 'no weights yet'; }
 
   // Open to-dos (across the app), matching the Home nudge — links to the Actions tab.
-  const todoVal = openTodos > 0 ? String(openTodos) : '✓';
+  const todoVal = openTodos > 0 ? String(openTodos) : ic('check', 'sm');
   const todoLbl = openTodos > 0 ? `open to-do${openTodos === 1 ? '' : 's'}` : 'all clear';
 
   const pct = p.pct;
@@ -1776,7 +1854,7 @@ function readinessDashboard(ev, openTodos = 0) {
         <a class="rd-stat rd-link" href="#/actions"><span class="rd-val">${todoVal}</span><span class="rd-lbl">${todoLbl}</span></a>
       </div>
     </div>
-    ${p.total ? `<a class="btn primary lg pack-cta" href="#/event/${ev.id}/pack">${IC.bag}<span>${p.done >= p.total ? 'All packed ✓' : p.done ? 'Continue packing' : 'Start packing'}</span></a>` : ''}
+    ${p.total ? `<a class="btn primary lg pack-cta" href="#/event/${ev.id}/pack">${IC.bag}<span>${p.done >= p.total ? `All packed${ic('check','sm')}` : p.done ? 'Continue packing' : 'Start packing'}</span></a>` : ''}
   </div>`);
 }
 
@@ -1788,10 +1866,10 @@ function logisticsSummary(ev) {
   const overBags = loads.filter((b) => b.over);
   const bits = [];
   if (f.totalKg > 0) bits.push(`${f.totalKg} kg`);
-  if (f.liquids) bits.push(`💧 ${f.liquids} liquid`);
-  if (f.restricted) bits.push(`⚠️ ${f.restricted} restricted`);
+  if (f.liquids) bits.push(`${f.liquids} liquid`);
+  if (f.restricted) bits.push(`${f.restricted} restricted`);
   if (ev.nights) bits.push(`${ev.nights} night${ev.nights === 1 ? '' : 's'}`);
-  if (ev.laundry && ev.nights > LAUNDRY_CAP_NIGHTS) bits.push('🧺 laundry');
+  if (ev.laundry && ev.nights > LAUNDRY_CAP_NIGHTS) bits.push('laundry');
   const head = bits.length ? bits.join(' · ') : 'Add weights & flags to items to track bag loads';
 
   const det = h(`<details class="logi"${overBags.length ? ' open' : ''}>
@@ -2048,7 +2126,8 @@ function updateReadinessProgress(ev, wasComplete) {
   }
   // Keep the pack button's label honest as the count changes.
   const ctaSpan = document.querySelector('.readiness .pack-cta span');
-  if (ctaSpan) ctaSpan.textContent = p.total > 0 && p.done >= p.total ? 'All packed ✓' : (p.done ? 'Continue packing' : 'Start packing');
+  // innerHTML, not textContent: the "all packed" state carries a tick glyph.
+  if (ctaSpan) ctaSpan.innerHTML = p.total > 0 && p.done >= p.total ? `All packed${ic('check', 'sm')}` : (p.done ? 'Continue packing' : 'Start packing');
   return p;
 }
 
@@ -2057,28 +2136,28 @@ function entryRow(ev, entry, body, showWeight = false) {
   const mode = viewFor(ev);
   // Show the dimensions NOT used as the current grouping, so the row stays informative.
   const subBits = [];
-  if (mode !== 'stored' && entry.storage) subBits.push(`📍 ${esc(entry.storage)}`);
-  if (mode !== 'section' && entry.section) subBits.push(`🗂 ${esc(entry.section)}`);
+  if (mode !== 'stored' && entry.storage) subBits.push(`${ic('pin','xs')}${esc(entry.storage)}`);
+  if (mode !== 'section' && entry.section) subBits.push(`${ic('folder','xs')}${esc(entry.section)}`);
   if (mode !== 'container' && entry.container) subBits.push(esc(entry.container));
   if (mode !== 'category' && entry.category) subBits.push(esc(entry.category));
   if (mode !== 'when') subBits.push(esc(phaseLabel(entry.phase)));
-  if (showWeight && entry.kit) subBits.push(`🧰 ${esc(entry.kit)}`); // flat views have no kit header
+  if (showWeight && entry.kit) subBits.push(`${kitEmoji(null)} ${esc(entry.kit)}`); // flat views have no kit header
   if (entry.packer) subBits.push(personChipHTML(entry.packer));
   if (entry.note) subBits.push(esc(entry.note));
   if (entry.custom) subBits.push('added');
   const subLine = entry.swedish ? `<span class="e-sv">${esc(entry.swedish)}</span> · ` : '';
   const chShort = entry.charging ? chargeTypeShort(entry.chargeType) : '';
   const chTitle = entry.charging ? `Needs charging${chShort ? ` — ${chargeTypeLabel(entry.chargeType)}` : ''}` : '';
-  const badges = `${entry.charging ? `<span class="badge charge" title="${esc(chTitle)}">⚡${chShort ? ` ${esc(chShort)}` : ''}</span>` : ''}`
-    + `${entry.liquid ? '<span class="badge liquid" title="Liquid / 100 ml rule">💧</span>' : ''}`
-    + `${entry.restricted ? '<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">⚠️</span>' : ''}`
+  const badges = `${entry.charging ? `<span class="badge charge" title="${esc(chTitle)}">${ic('bolt','xs')}${chShort ? esc(chShort) : ''}</span>` : ''}`
+    + `${entry.liquid ? `<span class="badge liquid" title="Liquid / 100 ml rule">${ic('drop','xs')}</span>` : ''}`
+    + `${entry.restricted ? `<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">${ic('warn','xs')}</span>` : ''}`
     + `${isRem ? '<span class="badge rem">reminder</span>' : ''}`;
   // Scaled quantity: per-night items show × trip nights (capped when laundry is on);
   // otherwise the explicit qty.
   const qn = qtyNights(ev);
   const eq = effectiveQty(entry, qn);
   const qtyTitle = ev.laundry && ev.nights > LAUNDRY_CAP_NIGHTS ? `capped to ${qn} with laundry (trip is ${ev.nights} nights)` : `scaled to ${ev.nights} nights`;
-  const qtyLabel = isRem ? '' : (entry.perNight && ev.nights ? ` <em title="${esc(qtyTitle)}">×${eq}${ev.laundry && ev.nights > LAUNDRY_CAP_NIGHTS ? ' 🧺' : ''}</em>` : (entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''));
+  const qtyLabel = isRem ? '' : (entry.perNight && ev.nights ? ` <em title="${esc(qtyTitle)}">×${eq}${ev.laundry && ev.nights > LAUNDRY_CAP_NIGHTS ? ic('laundry','xs') : ''}</em>` : (entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''));
   const subItems = (entry.sub && entry.sub.length) ? `<span class="e-subitems">${entry.sub.map(esc).join(' · ')}</span>` : '';
   // In "Heaviest first" view, show each item's weight (— when none recorded).
   const g = showWeight ? entryGrams(entry, qn) : 0;
@@ -2120,7 +2199,7 @@ function entryRow(ev, entry, body, showWeight = false) {
   return row;
 }
 
-// Render a list of entries into `gb`, clustering kit-mates under a "🧰 Kit name"
+// Render a list of entries into `gb`, clustering kit-mates under a kit
 // header with a one-tap "pack the whole kit" toggle. Loose (kit-less) entries
 // render as normal rows in place. A kit's own emoji is used when the kit still
 // exists; otherwise the default bundle glyph.
@@ -2256,9 +2335,9 @@ function entryEditor(ev, entry, body) {
       <label class="field"><span>Weight (g)</span><input type="number" name="weight" min="0" inputmode="numeric" value="${entry.weight || ''}" placeholder="0"></label>
       <div class="checks">
         <label class="check${entry.perNight ? ' on' : ''}"><input type="checkbox" name="perNight" ${entry.perNight ? 'checked' : ''}>Per night</label>
-        <label class="check${entry.liquid ? ' on' : ''}"><input type="checkbox" name="liquid" ${entry.liquid ? 'checked' : ''}>💧</label>
-        <label class="check${entry.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${entry.charging ? 'checked' : ''}>⚡</label>
-        <label class="check${entry.restricted ? ' on' : ''}"><input type="checkbox" name="restricted" ${entry.restricted ? 'checked' : ''}>⚠️</label>
+        <label class="check${entry.liquid ? ' on' : ''}"><input type="checkbox" name="liquid" ${entry.liquid ? 'checked' : ''}>${ic('drop','sm')}</label>
+        <label class="check${entry.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${entry.charging ? 'checked' : ''}>${ic('bolt','sm')}</label>
+        <label class="check${entry.restricted ? ' on' : ''}"><input type="checkbox" name="restricted" ${entry.restricted ? 'checked' : ''}>${ic('warn','sm')}</label>
       </div>
     </div>
     <label class="field charge-type-field${entry.charging ? '' : ' hidden'}"><span>Charge type</span>${selectHtml('chargeType', CHARGE_TYPES.map((c) => ({ value: c.id, label: c.label })), entry.chargeType)}</label>
@@ -2773,11 +2852,11 @@ async function renderPackMode(eventId) {
 }
 
 function packRow(ev, entry, redraw) {
-  const meta = [entry.swedish, entry.storage ? `📍 ${entry.storage}` : '', entry.container, entry.note].filter(Boolean).map(esc).join(' · ');
+  const meta = [entry.swedish, entry.storage ? entry.storage : '', entry.container, entry.note].filter(Boolean).map(esc).join(' · ');
   const row = h(`<button class="pack-item${entry.checked ? ' done' : ''}" type="button">
     <span class="pack-box">${entry.checked ? IC.check : ''}</span>
     <span class="pack-body">
-      <span class="pack-name">${esc(entry.name)}${entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''}${entry.charging ? ` <span class="badge charge" title="${esc('Needs charging' + (chargeTypeShort(entry.chargeType) ? ` — ${chargeTypeLabel(entry.chargeType)}` : ''))}">⚡${chargeTypeShort(entry.chargeType) ? ` ${esc(chargeTypeShort(entry.chargeType))}` : ''}</span>` : ''}</span>
+      <span class="pack-name">${esc(entry.name)}${entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''}${entry.charging ? ` <span class="badge charge" title="${esc('Needs charging' + (chargeTypeShort(entry.chargeType) ? ` — ${chargeTypeLabel(entry.chargeType)}` : ''))}">${ic('bolt','xs')}${chargeTypeShort(entry.chargeType) ? `${esc(chargeTypeShort(entry.chargeType))}` : ''}</span>` : ''}</span>
       ${meta ? `<span class="pack-meta">${meta}</span>` : ''}
     </span>
   </button>`);
@@ -2792,7 +2871,7 @@ function packRow(ev, entry, redraw) {
 
 function finishScreen(ev, overall) {
   return h(`<div class="pack-finish empty">
-    <p class="pack-finish-emoji">🎒</p>
+    <p class="pack-finish-emoji">${ic('check')}</p>
     <p class="empty-t">All packed!</p>
     <p class="empty-s">${overall.total} item${overall.total === 1 ? '' : 's'} packed for ${esc(ev.name)}. Have a great trip.</p>
     <a class="btn primary lg" href="#/event/${ev.id}">Back to the list</a>
@@ -2996,7 +3075,7 @@ async function renderList(listId, openItemId) {
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-cover><span class="cover-dot" style="background:${esc(listColor(list))}">${esc(listEmoji(list))}</span><span>Cover</span></button>`}
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
     ${isLoose ? `<button class="btn ghost" data-batch>${IC.list}<span>Add several</span></button>` : ''}
-    ${noTemplateChrome ? '' : `<button class="btn ghost" data-kit>${KIT_DEFAULT_EMOJI}<span>Add a kit</span></button>`}
+    ${noTemplateChrome ? '' : `<button class="btn ghost" data-kit>${ic('toolbox')}<span>Add a kit</span></button>`}
     <button class="btn ghost" data-add>${IC.plus}<span>${isContainer ? 'Add container' : 'Add item'}</span></button>
   </div>`));
 
@@ -3019,7 +3098,7 @@ async function renderList(listId, openItemId) {
     await saveGuard(db.saveList(list));
   });
   // When arriving from the Care page's "All items" browser, open that item's
-  // editor straight away (and expand its 🧰 care panel).
+  // editor straight away (and expand its care panel).
   let openItem = (openItemId && list.items.some((x) => x.id === openItemId)) ? openItemId : null;
   if (openItem) careForceOpenItemId = openItem;
   const emptyMsg = isLoose
@@ -3152,8 +3231,8 @@ function manageSections(list) {
     const draw = () => {
       const rows = secs.map((s, i) => `<div class="sec-row" data-i="${i}">
         <input value="${esc(s.name)}" placeholder="Section name" aria-label="Section name">
-        <button class="iconbtn sm" data-m="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">▲</button>
-        <button class="iconbtn sm" data-m="down" ${i === secs.length - 1 ? 'disabled' : ''} aria-label="Move down">▼</button>
+        <button class="iconbtn sm" data-m="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">${ic('up','sm')}</button>
+        <button class="iconbtn sm" data-m="down" ${i === secs.length - 1 ? 'disabled' : ''} aria-label="Move down">${ic('down','sm')}</button>
         <button class="iconbtn sm" data-m="del" aria-label="Delete section">${IC.trash}</button>
       </div>`).join('');
       body.innerHTML = `<h2>Sections — ${esc(list.name)}</h2>
@@ -3206,7 +3285,6 @@ function manageSections(list) {
 }
 
 // ---- Actions (to-dos) shared helpers ----
-const IC_FLAG = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4M6 4h11l-2 4 2 4H6"/></svg>';
 // The "when" choices: any time, or one of the trip phases.
 const ACTION_WHEN_OPTS = [{ value: '', label: 'Any time' }, ...PHASES.map((p) => ({ value: p.id, label: p.label }))];
 function actionWhenSelectHtml(dataAttr, val) {
@@ -3225,18 +3303,18 @@ function actionChipsHtml(a) {
 }
 
 function listItemRow(list, it, getOpen, setOpen, draw) {
-  const tags = [it.owner ? `👤 ${it.owner}` : '', it.storage ? `📍 ${it.storage}` : '', it.container, ...(it.seasons || []), ...(it.contexts || []), ...(it.transports || [])].filter(Boolean);
+  const tags = [it.owner ? `${it.owner}` : '', it.storage ? `${it.storage}` : '', it.container, ...(it.seasons || []), ...(it.contexts || []), ...(it.transports || [])].filter(Boolean);
   const chShort = it.charging ? chargeTypeShort(it.chargeType) : '';
   const care = maintenanceStatus(it);
-  const badges = `${isUnfiled(it.name) ? '<span class="badge unfiled" title="Not in any template yet — still a loose item">⚠️ No template</span>' : ''}`
-    + `${it.charging ? `<span class="badge charge" title="${esc('Needs charging' + (chShort ? ` — ${chargeTypeLabel(it.chargeType)}` : ''))}">⚡${chShort ? ` ${esc(chShort)}` : ''}</span>` : ''}`
-    + `${it.liquid ? '<span class="badge liquid" title="Liquid / 100 ml rule">💧</span>' : ''}`
-    + `${it.restricted ? '<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">⚠️</span>' : ''}`
-    + `${it.consumable ? '<span class="badge consumable" title="Consumable — offered for restocking on the shopping list">🛒</span>' : ''}`
-    + `${(it.photos || []).length ? `<span class="badge photo" title="${esc((it.photos.length === 1 ? 'Has a photo' : `${it.photos.length} photos`))}">📷${it.photos.length > 1 ? ` ${it.photos.length}` : ''}</span>` : ''}`
-    + `${care ? `<span class="badge maint ${care.state}" title="${esc(`Maintenance: ${dueLabel(care)}`)}">${CARE_EMOJI[care.state]}</span>` : ''}`
-    + `${openActionsForItem(it._itemId) ? `<span class="badge act" title="${esc(`${openActionsForItem(it._itemId)} open to-do${openActionsForItem(it._itemId) === 1 ? '' : 's'}`)}">☑ ${openActionsForItem(it._itemId)}</span>` : ''}`
-    + `${it.retired ? `<span class="badge retired" title="${esc('Not in use' + (it.retiredReason ? ` — ${retireReasonLabel(it.retiredReason)}` : '') + ' — kept on record, never added to a trip')}">🚫 Not in use</span>` : ''}`
+  const badges = `${isUnfiled(it.name) ? `<span class="badge unfiled" title="Not in any template yet — still a loose item">${ic('warn','xs')}No template</span>` : ''}`
+    + `${it.charging ? `<span class="badge charge" title="${esc('Needs charging' + (chShort ? ` — ${chargeTypeLabel(it.chargeType)}` : ''))}">${ic('bolt','xs')}${chShort ? esc(chShort) : ''}</span>` : ''}`
+    + `${it.liquid ? `<span class="badge liquid" title="Liquid / 100 ml rule">${ic('drop','xs')}</span>` : ''}`
+    + `${it.restricted ? `<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">${ic('warn','xs')}</span>` : ''}`
+    + `${it.consumable ? `<span class="badge consumable" title="Consumable — offered for restocking on the shopping list">${ic('cart','xs')}</span>` : ''}`
+    + `${(it.photos || []).length ? `<span class="badge photo" title="${esc((it.photos.length === 1 ? 'Has a photo' : `${it.photos.length} photos`))}">${ic('camera','xs')}${it.photos.length > 1 ? ` ${it.photos.length}` : ''}</span>` : ''}`
+    + `${care ? `<span class="badge maint ${care.state}" title="${esc(`Maintenance: ${dueLabel(care)}`)}">${careIcon(care.state)}</span>` : ''}`
+    + `${openActionsForItem(it._itemId) ? `<span class="badge act" title="${esc(`${openActionsForItem(it._itemId)} open to-do${openActionsForItem(it._itemId) === 1 ? '' : 's'}`)}">${ic('checkbox','xs')}${openActionsForItem(it._itemId)}</span>` : ''}`
+    + `${it.retired ? `<span class="badge retired" title="${esc('Not in use' + (it.retiredReason ? ` — ${retireReasonLabel(it.retiredReason)}` : '') + ' — kept on record, never added to a trip')}">${ic('ban','xs')}Not in use</span>` : ''}`
     + conditionBadgeHTML(it);
   const thumb = (it.photos || []).length ? `<img class="row-thumb" src="${esc(it.photos[0])}" alt="">` : '';
   const row = h(`<div class="entry${it.retired ? ' retired' : ''}">
@@ -3375,10 +3453,10 @@ function itemEditor(list, it, setOpen, draw) {
       </div>
       <label class="field"><span>Weight (g) <em>per unit</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
       <div class="checks">
-        <label class="check${it.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${it.charging ? 'checked' : ''}>⚡ Charging</label>
-        <label class="check${it.liquid ? ' on' : ''}"><input type="checkbox" name="liquid" ${it.liquid ? 'checked' : ''}>💧 Liquid</label>
-        <label class="check${it.restricted ? ' on' : ''}"><input type="checkbox" name="restricted" ${it.restricted ? 'checked' : ''}>⚠️ Restricted</label>
-        <label class="check${it.consumable ? ' on' : ''}" title="Something you use up — offered for restocking on the pre-trip shopping list"><input type="checkbox" name="consumable" ${it.consumable ? 'checked' : ''}>🛒 Consumable</label>
+        <label class="check${it.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${it.charging ? 'checked' : ''}>${ic('bolt','sm')}Charging</label>
+        <label class="check${it.liquid ? ' on' : ''}"><input type="checkbox" name="liquid" ${it.liquid ? 'checked' : ''}>${ic('drop','sm')}Liquid</label>
+        <label class="check${it.restricted ? ' on' : ''}"><input type="checkbox" name="restricted" ${it.restricted ? 'checked' : ''}>${ic('warn','sm')}Restricted</label>
+        <label class="check${it.consumable ? ' on' : ''}" title="Something you use up — offered for restocking on the pre-trip shopping list"><input type="checkbox" name="consumable" ${it.consumable ? 'checked' : ''}>${ic('cart','sm')}Consumable</label>
       </div>
       <label class="field charge-type-field${it.charging ? '' : ' hidden'}"><span>Charge type</span>${selectHtml('chargeType', CHARGE_TYPES.map((c) => ({ value: c.id, label: c.label })), it.chargeType)}</label>`}
 
@@ -3439,7 +3517,7 @@ function itemEditor(list, it, setOpen, draw) {
             <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
           </div>
           <div class="lifecycle${it.retired ? ' is-retired' : ''}">
-            <label class="check${it.retired ? ' on' : ''}"><input type="checkbox" name="retired" ${it.retired ? 'checked' : ''}>🚫 Not in use <em>kept on record, but never added to a trip</em></label>
+            <label class="check${it.retired ? ' on' : ''}"><input type="checkbox" name="retired" ${it.retired ? 'checked' : ''}>${ic('ban','sm')}Not in use <em>kept on record, but never added to a trip</em></label>
             <label class="field retire-reason-field${it.retired ? '' : ' hidden'}"><span>Reason</span>${selectHtml('retiredReason', [{ value: '', label: '— not set —' }, ...RETIRE_REASONS.map((r) => ({ value: r.id, label: r.label }))], it.retiredReason)}</label>
           </div>
           <div class="row2">
@@ -3540,7 +3618,7 @@ function itemEditor(list, it, setOpen, draw) {
         <input class="act-text" data-act-text value="${esc(a.text)}" placeholder="To-do">
         <div class="act-controls">
           ${actionWhenSelectHtml('data-act-when', a.whenPhase)}
-          <button type="button" class="act-flag${a.priority === 'high' ? ' on' : ''}" data-act-flag title="High priority">${IC_FLAG}</button>
+          <button type="button" class="act-flag${a.priority === 'high' ? ' on' : ''}" data-act-flag title="High priority">${IC.flag}</button>
           <button type="button" class="iconbtn sm act-del" data-act-del aria-label="Delete to-do">${IC.trash}</button>
         </div>
       </div>`).join('');
@@ -3756,7 +3834,7 @@ function itemEditor(list, it, setOpen, draw) {
 let careView = 'list';            // 'list' | 'calendar'
 let careExpanded = null;          // item id whose detail panel is open (list mode)
 let careMonth = null;             // 'YYYY-MM' shown in the calendar (defaults to this month)
-let careForceOpenItemId = null;   // when set, the item's editor opens with its 🧰 care panel expanded
+let careForceOpenItemId = null;   // when set, the item's editor opens with its care panel expanded
 let careItemSearch = '';          // current text in the "All items" search box on the Care page
 const careItemFilter = new Set();  // active category chips on the Care page ('loose','liquid','charge','restricted','care','photo') — OR'd together
 const monthOf = (ymd) => ymd.slice(0, 7);
@@ -3769,12 +3847,12 @@ async function renderMaintenance() {
   // Entry point to the Containers catalogue (bags/duffels/backpacks as objects).
   const containerCount = (lists.find((l) => l.role === CONTAINER_ROLE)?.items || []).length;
   wrap.appendChild(h(`<a class="care-link" href="#/containers">
-    <span class="care-link-ic">🎒</span>
+    <span class="care-link-ic">${ic('bag','md')}</span>
     <span class="care-link-body"><b>Containers</b><span class="care-link-sub">Your bags, duffels &amp; backpacks — photos, capacity, storage &amp; care${containerCount ? ` · ${containerCount}` : ''}</span></span>
     <span class="care-link-go">${IC.fwd}</span>
   </a>`));
   wrap.appendChild(h(`<a class="care-link" href="#/items">
-    <span class="care-link-ic">▦</span>
+    <span class="care-link-ic">${ic('sheet','md')}</span>
     <span class="care-link-body"><b>All items · table</b><span class="care-link-sub">Every item as a spreadsheet — edit weight, storage, flags &amp; template membership in bulk</span></span>
     <span class="care-link-go">${IC.fwd}</span>
   </a>`));
@@ -3784,7 +3862,7 @@ async function renderMaintenance() {
   const sugCount = shoppingSuggestions(shopCatalog, shopActions, todayISO()).length;
   const shopSub = ['Restock &amp; replace before a trip', buyCount ? `${buyCount} to buy` : '', sugCount ? `${sugCount} suggested` : ''].filter(Boolean).join(' · ');
   wrap.appendChild(h(`<a class="care-link" href="#/shopping">
-    <span class="care-link-ic">🛒</span>
+    <span class="care-link-ic">${ic('cart','md')}</span>
     <span class="care-link-body"><b>Shopping list</b><span class="care-link-sub">${shopSub}</span></span>
     <span class="care-link-go">${IC.fwd}</span>
   </a>`));
@@ -3797,9 +3875,9 @@ async function renderMaintenance() {
   if (rows.length) {
     // Headline: overdue / due-soon counts.
     const sc = [];
-    if (summary.overdue) sc.push(`<span class="care-stat overdue">🔴 ${summary.overdue} overdue</span>`);
-    if (summary.soon) sc.push(`<span class="care-stat soon">🟡 ${summary.soon} due soon</span>`);
-    if (!summary.due) sc.push(`<span class="care-stat ok">🟢 All up to date</span>`);
+    if (summary.overdue) sc.push(`<span class="care-stat overdue">${ic('dot','xs')}${summary.overdue} overdue</span>`);
+    if (summary.soon) sc.push(`<span class="care-stat soon">${ic('dot','xs')}${summary.soon} due soon</span>`);
+    if (!summary.due) sc.push(`<span class="care-stat ok">${ic('dot','xs')}All up to date</span>`);
     wrap.appendChild(h(`<div class="care-stats">${sc.join('')}</div>`));
 
     // List / Calendar toggle.
@@ -3849,7 +3927,7 @@ async function renderMaintenance() {
 }
 
 // The "All items" browser on the Care page: search all items across every
-// list, tap one to jump to its editor (with the 🧰 care panel expanded), or
+// list, tap one to jump to its editor (with the care panel expanded), or
 // add a brand-new item to any list and edit it right away.
 function allItemsSection(lists) {
   const sec = h('<div class="allitems"></div>');
@@ -3951,12 +4029,12 @@ function aiRow(it, list) {
     ? `<span class="ai-thumb"><img src="${esc(it.photos[0])}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
     : `<span class="ai-thumb ph">${IC.wrench}</span>`;
   const bits = [esc(list.name)];
-  if (it.owner) bits.push(`👤 ${esc(it.owner)}`);
-  if (it.storage) bits.push(`📍 ${esc(it.storage)}`);
-  const unfiledBadge = isUnfiled(it.name) ? '<span class="ai-badge unfiled" title="Not in any template yet — still a loose item">⚠️</span>' : '';
+  if (it.owner) bits.push(`${ic('person','xs')}${esc(it.owner)}`);
+  if (it.storage) bits.push(`${ic('pin','xs')}${esc(it.storage)}`);
+  const unfiledBadge = isUnfiled(it.name) ? `<span class="ai-badge unfiled" title="Not in any template yet — still a loose item">${ic('warn','xs')}</span>` : '';
   const badge = care
-    ? `<span class="ai-badge ${care.state}" title="${esc('Maintenance: ' + dueLabel(care))}">${CARE_EMOJI[care.state]}</span>`
-    : (nPhotos ? `<span class="ai-badge" title="${esc(nPhotos === 1 ? 'Has a photo' : `${nPhotos} photos`)}">📷${nPhotos > 1 ? ` ${nPhotos}` : ''}</span>` : '');
+    ? `<span class="ai-badge ${care.state}" title="${esc('Maintenance: ' + dueLabel(care))}">${careIcon(care.state)}</span>`
+    : (nPhotos ? `<span class="ai-badge" title="${esc(nPhotos === 1 ? 'Has a photo' : `${nPhotos} photos`)}">${ic('camera','xs')}${nPhotos > 1 ? `${nPhotos}` : ''}</span>` : '');
   return h(`<a class="ai-item" href="#/list/${esc(list.id)}/item/${esc(it.id)}">
     ${thumb}
     <span class="ai-main">
@@ -3978,7 +4056,7 @@ function drawCareList(body, rows, markDone) {
   for (const { state, label } of CARE_SECTIONS) {
     const group = rows.filter((r) => r.status.state === state);
     if (!group.length) continue;
-    body.appendChild(h(`<div class="care-sech ${state}">${CARE_EMOJI[state]} ${esc(label)} <em>${group.length}</em></div>`));
+    body.appendChild(h(`<div class="care-sech ${state}">${careIcon(state)} ${esc(label)} <em>${group.length}</em></div>`));
     for (const row of group) body.appendChild(careRow(row, markDone));
   }
 }
@@ -3989,9 +4067,9 @@ function careRow(row, markDone) {
   const nPhotos = (item.photos || []).length;
   const thumb = nPhotos
     ? `<span class="care-thumb"><img src="${esc(item.photos[0])}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
-    : `<span class="care-thumb ph ${status.state}">${CARE_EMOJI[status.state]}</span>`;
+    : `<span class="care-thumb ph ${status.state}">${careIcon(status.state)}</span>`;
   const bits = [esc(listName)];
-  if (item.storage) bits.push(`📍 ${esc(item.storage)}`);
+  if (item.storage) bits.push(`${ic('pin','xs')}${esc(item.storage)}`);
   const nextBit = status.scheduled && status.nextDue ? ` · next ${esc(prettyDate(status.nextDue))}` : '';
   const wrapEl = h(`<div class="care-item ${status.state}${careExpanded === item.id ? ' open' : ''}">
     <div class="care-row">
@@ -4049,7 +4127,7 @@ function drawCareCalendar(body, rows, markDone) {
 
   const overdue = rows.filter((r) => r.status.state === 'overdue');
   if (overdue.length) {
-    body.appendChild(h(`<div class="cal-overdue">🔴 ${overdue.length} item${overdue.length === 1 ? '' : 's'} overdue — see the <b>List</b> view to catch up.</div>`));
+    body.appendChild(h(`<div class="cal-overdue">${ic('dot','xs')}${overdue.length} item${overdue.length === 1 ? '' : 's'} overdue — see the <b>List</b> view to catch up.</div>`));
   }
 
   const dows = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -4119,7 +4197,7 @@ function howtoCard() {
         <p>If you remember nothing else, remember this loop:</p>
         <ol>
           <li><b>Templates hold your gear.</b> The app comes pre-filled with reusable lists (Travel, Golf, Run, Diving…). Edit them in the <b>Templates</b> tab whenever your kit changes — it's a one-time-ish setup you tweak over the years.</li>
-          <li><b>Home builds a trip.</b> On <b>Home</b>, pick your transport and season, tick any <b>extra activities</b> you'll do, add a name and dates, and press <b>Create Event</b>. (Take a similar trip often? Tap a saved <b>⚡ preset</b> to fill it all in at once.)</li>
+ <li><b>Home builds a trip.</b> On <b>Home</b>, pick your transport and season, tick any <b>extra activities</b> you'll do, add a name and dates, and press <b>Create Event</b>. (Take a similar trip often? Tap a saved <b>preset</b> to fill it all in at once.)</li>
           <li><b>The trip gives you one Packing List.</b> Open the new trip (under <b>Events</b>) to see a single, tidy list combined from everything above — organised by when to pack and which bag it goes in.</li>
           <li><b>Pack it off.</b> Tap <b>Start packing</b> and tick things phase by phase. That's it — the readiness ring at the top fills up as you go.</li>
         </ol>
@@ -4133,7 +4211,7 @@ function howtoCard() {
           <li><b>OE — Other Events:</b> small nice things (a coffee, a winter bath, a walk).</li>
         </ul>
         <p><b>Covers.</b> Each template shows as a <b>cover card</b> in the grid — a coloured tile with an emoji — so you can pick out Golf, Diving or Travel by look alone. Every template gets a distinct colour automatically; to choose your own, open a template and tap the <b>Cover</b> button in its toolbar, then set an <b>emoji</b> and a <b>colour</b> (or leave the colour on <b>Auto</b>). A live preview shows the card before you save. It’s purely visual — it doesn’t change what the template holds.</p>
-        <p>Open a template to add or edit its items. Each item carries a Swedish alias shown as a subtitle, so your original wording is never lost. At the top of a template’s item list sit <b>quick-filter chips</b> — <b>💧 Liquids</b>, <b>⚡ Charging</b>, <b>⚠️ Restricted</b>, <b>🧰 Has care</b>, <b>📷 Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
+ <p>Open a template to add or edit its items. Each item carries a Swedish alias shown as a subtitle, so your original wording is never lost. At the top of a template’s item list sit <b>quick-filter chips</b> — <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
         <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
 
         <h3>Anatomy of an item</h3>
@@ -4141,25 +4219,25 @@ function howtoCard() {
         <ul>
           <li><b>Category</b> (what it is), <b>Container</b> (which bag it goes in), <b>Phase</b> (when to pack it — see the timeline below).</li>
           <li><b>Reminder</b> vs item: a reminder is a to-do prompt (e.g. “charge the Garmin”), not a physical thing to tick off.</li>
-          <li><b>Flags:</b> ⚡ needs charging (with an optional <b>charge type</b> — USB-C, USB-A, Lightning, special charger… shown on the badge, e.g. ⚡ USB-C, so you know which cables to bring), short-home-list, 💧 liquid/gel (100 ml rule), ⚠️ restricted — think before packing (battery / carry-on rules), <b>per-night</b> (quantity scales with trip length), and a <b>weight</b> in grams.</li>
+ <li><b>Flags:</b> needs charging (with an optional <b>charge type</b> — USB-C, USB-A, Lightning, special charger… shown on the badge, e.g. USB-C, so you know which cables to bring), short-home-list, liquid/gel (100 ml rule), restricted — think before packing (battery / carry-on rules), <b>per-night</b> (quantity scales with trip length), and a <b>weight</b> in grams.</li>
           <li><b>Conditions</b> — “only include when…”: Season, Context (Indoor/Outdoor/Race — applies to <b>Workout / Exercise (WET)</b> lists only), Transport (Car/Plane/RV), Catering, and <b>Weather</b> (see below). A blank condition means “always applies”.</li>
           <li><b>Sub-items:</b> optional nested things bundled under one line.</li>
-          <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. Each item lives <b>once</b> and every template simply points to it — so <b>editing an item (its name, category, weight, flags or care) updates it in every template it belongs to</b>, and it still appears just once in <b>Care</b>. Only the <b>list-specific</b> choices stay separate per template: which <b>bag</b> it goes in, <b>when</b> to pack it, and its <b>conditions</b>. Items that are in <b>no</b> template show a <b>⚠️ No template</b> flag.</li>
+ <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. Each item lives <b>once</b> and every template simply points to it — so <b>editing an item (its name, category, weight, flags or care) updates it in every template it belongs to</b>, and it still appears just once in <b>Care</b>. Only the <b>list-specific</b> choices stay separate per template: which <b>bag</b> it goes in, <b>when</b> to pack it, and its <b>conditions</b>. Items that are in <b>no</b> template show a <b>No template</b> flag.</li>
         </ul>
 
         <h3>Loose items — things not in a template yet</h3>
-        <p>You don’t have to file an item into a template just to keep it. At the top of the <b>Templates</b> tab there’s a <b>Loose items</b> card — a holding place for anything you want to jot down before you’ve decided where or when to pack it. Open it and use <b>Add several</b> to type or paste a whole batch (<b>one item per line</b>), or <b>Add item</b> for a single one. Loose items are <b>never</b> added to a trip and never appear in the activity picker; they simply wait. When you’re ready, open a loose item and tick a template under <b>In these templates</b> — it’s filed there and <b>automatically drops out</b> of the Loose items list. Anything still loose (here or in the Care tab’s <b>All items</b>) carries a <b>⚠️ No template</b> flag so it’s never quietly forgotten.</p>
+ <p>You don’t have to file an item into a template just to keep it. At the top of the <b>Templates</b> tab there’s a <b>Loose items</b> card — a holding place for anything you want to jot down before you’ve decided where or when to pack it. Open it and use <b>Add several</b> to type or paste a whole batch (<b>one item per line</b>), or <b>Add item</b> for a single one. Loose items are <b>never</b> added to a trip and never appear in the activity picker; they simply wait. When you’re ready, open a loose item and tick a template under <b>In these templates</b> — it’s filed there and <b>automatically drops out</b> of the Loose items list. Anything still loose (here or in the Care tab’s <b>All items</b>) carries a <b>No template</b> flag so it’s never quietly forgotten.</p>
 
         <h3>Containers — your bags as objects</h3>
-        <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>🎒 Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
+ <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
 
         <h3>All items · table (the spreadsheet)</h3>
-        <p>For fast bulk edits, the <b>Care</b> tab → <b>▦ All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
+        <p>For fast bulk edits, the <b>Care</b> tab → <b>All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
         <p>A toolbar above the grid bends the table to how you work: <b>Sort</b> the whole thing by <b>Name</b>, <b>Weight</b>, <b>Storage</b>, <b>Container</b> or <b>how many lists</b> an item is in, with a <b>▲/▼</b> button to flip the direction; and a <b>Columns</b> button opens a panel to <b>reorder the “item itself” columns</b> into the order you like. Both your <b>sort choice</b> and your <b>column order</b> are remembered on this device, so the table opens just how you left it.</p>
 
         <h3>Places visited (the world map)</h3>
-        <p>The <b>Events</b> tab → <b>🌍 Map</b> button opens a <b>world map of everywhere you’ve been</b>. Every trip that has a <b>destination</b> set becomes a pin; <b>repeat visits to the same place merge into one pin</b> with a small count, and pins are ordered most-recent-first in the list beneath. <b>Tap a pin</b> to highlight and scroll to that place in the list, where each visit links to its trip. The map <b>opens framed on the places you’ve visited</b> (rather than the whole globe), and you can <b>zoom</b> for a closer look — use the small <b>＋ / − / ⤢</b> buttons in the corner (the <b>⤢</b> re-frames everything), a <b>trackpad pinch</b> or <b>⌘-scroll</b>, or a <b>double-click</b> (pinch and double-tap work on a phone too) — then <b>drag</b> to move around; this keeps trips that sit close together from overlapping into one dot. A place is pinned automatically once its <b>weather</b> has been looked up; for trips whose destination hasn’t been located yet, the <b>“Find places on the map”</b> button geocodes them all at once (this needs the internet) and caches each spot so the map then works fully <b>offline</b>. The map is drawn inside the app from open geographic data — no outside map service, and nothing about your trips leaves the device.</p>
-        <p>Two finishing touches: your trips are joined by a <b>subtle dotted line in date order</b> (oldest → newest) so you can trace your travels over time — undated trips keep their pin but sit off the line — and a small <b>★ “most visited” badge</b> at the top names the place you’ve been most, appearing once anywhere has more than one visit.</p>
+ <p>The <b>Events</b> tab → <b>Map</b> button opens a <b>world map of everywhere you’ve been</b>. Every trip that has a <b>destination</b> set becomes a pin; <b>repeat visits to the same place merge into one pin</b> with a small count, and pins are ordered most-recent-first in the list beneath. <b>Tap a pin</b> to highlight and scroll to that place in the list, where each visit links to its trip. The map <b>opens framed on the places you’ve visited</b> (rather than the whole globe), and you can <b>zoom</b> for a closer look — use the small <b>＋ / − / ⤢</b> buttons in the corner (the <b>⤢</b> re-frames everything), a <b>trackpad pinch</b> or <b>⌘-scroll</b>, or a <b>double-click</b> (pinch and double-tap work on a phone too) — then <b>drag</b> to move around; this keeps trips that sit close together from overlapping into one dot. A place is pinned automatically once its <b>weather</b> has been looked up; for trips whose destination hasn’t been located yet, the <b>“Find places on the map”</b> button geocodes them all at once (this needs the internet) and caches each spot so the map then works fully <b>offline</b>. The map is drawn inside the app from open geographic data — no outside map service, and nothing about your trips leaves the device.</p>
+ <p>Two finishing touches: your trips are joined by a <b>subtle dotted line in date order</b> (oldest → newest) so you can trace your travels over time — undated trips keep their pin but sit off the line — and a small <b>“most visited” badge</b> at the top names the place you’ve been most, appearing once anywhere has more than one visit.</p>
 
         <h3>The timeline (phases)</h3>
         <p>Items are packed in stages, in this order: <b>Preparations</b> (book/cancel/charge, done ahead) → <b>≥1 week ahead</b> (things you don't use at home) → <b>Day before</b> (stage / move to the RV) → <b>Morning of</b> → <b>At the front door</b> (last check as you leave) → <b>Wear / carry</b> on the day → <b>After / recovery</b> (shower, change, recovery).</p>
@@ -4168,13 +4246,13 @@ function howtoCard() {
         <p>Six tabs along the bottom:</p>
         <ul>
           <li><b>Home</b> — the builder for starting a new trip, plus a compact preview of your few most recent events.</li>
-          <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here. The <b>🌍 Map</b> button up top opens the <b>Places visited</b> world map (see below).</li>
+ <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here. The <b>Map</b> button up top opens the <b>Places visited</b> world map (see below).</li>
           <li><b>Templates</b> — your reusable templates (the building blocks).</li>
           <li><b>Care</b> — everything that needs looking after, as an urgency-ordered list or a month calendar (see <b>Care, storage &amp; maintenance</b> below).</li>
           <li><b>Actions</b> — your to-do list (the red tab): everything you need to <em>do</em>, not just pack, whether it belongs to a specific item or stands on its own (see <b>Actions — your to-do list</b> below).</li>
           <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip import, this guide and the version history.</li>
         </ul>
-        <p><b>Search.</b> A <b>🔍</b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name or Swedish), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
+ <p><b>Search.</b> A <b></b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name or Swedish), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
 
         <h3>Colour tells you where you are</h3>
         <p>Each of the six tabs has its <b>own colour</b>, and that colour flows through the whole screen — the page heading, the buttons, the chips and progress bars, the back/edit icons, and the tab itself. In the bottom bar <b>every tab always shows its colour</b>, and the one you're currently on fills in solid and goes bold — so a single glance tells you which part of the app you're in:</p>
@@ -4188,13 +4266,21 @@ function howtoCard() {
         </ul>
         <p>When you open a detail screen (an item, a trip), it keeps the colour of the tab you came from and shows a <b>← Back</b> arrow to return.</p>
 
+        <h3>Icons: the app's language vs your gear</h3>
+        <p>There are two kinds of symbol in the app, and the difference is deliberate.</p>
+        <ul>
+          <li><b>Line icons</b> — everything the <em>app</em> says. Buttons, flags and badges (charging, liquid, restricted, consumable, not-in-use), the trip-setup tiles, the Care states and the nudges are all drawn in <b>one hand-drawn family</b>, in a single line weight. They're drawn in the current section's colour, so they shift from blue to green to purple as you move around, and they look identical on your Mac, your iPhone and anyone else's device.</li>
+          <li><b>Emoji</b> — everything that identifies <em>your stuff</em>. The group headings on a packing list (Clothing, Checked luggage, Golf bag, Morning list), your <b>template covers</b> and your <b>kits</b> stay as colourful emoji, because they name real things and you pick them yourself.</li>
+        </ul>
+        <p>So a quick rule: <b>a line icon is the app talking; an emoji is your gear.</b> The weather keeps its own coloured glyphs (gold sun, blue rain, cyan snow) wherever a forecast or a forced condition is shown.</p>
+
         <h3>Creating a trip</h3>
         <p>The <b>Home</b> tab is the builder. Set the trip's conditions, tick any <b>extra activities</b> you're doing, and press <b>Create Event</b> — it generates an editable Event (with its own Packing List) that then lives under the <b>Events</b> tab.</p>
-        <p><b>Presets.</b> For trips you take often, save the whole setup and reuse it. On any trip, tap <b>⭐ Save as preset</b> to remember its recipe — the activities plus all the conditions (trip/quick, transport, season, WET options, forced weather gear, laundry), but not the dates, destination or packed items. Back on <b>Home</b>, a <b>⚡ Start from a preset</b> row lets you fill the whole builder in one tap, then just add this trip's name and dates. Manage them under <b>Settings → Trip presets</b>; they ride along in your backups.</p>
-        <p><b>Kits.</b> A <b>kit</b> is a bundle of small things you always pack together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Build your kits under <b>Settings → Kits</b>: give each a name and an emoji, then search your catalogue to pick its members. Once a kit exists you can add it <b>as one unit</b> in two places — from a <b>template</b> (its <b>🧰 Add a kit</b> button, so every trip built from that template includes the whole bundle) or straight onto a single <b>trip</b> (the <b>🧰 Kit</b> button on the trip’s toolbar). On the Packing List the kit’s items <b>cluster together</b> under a <b>🧰 kit header</b> with a <b>Pack all</b> button, so you tick the whole pouch off in one tap. Need to tweak one trip? Open any item on a trip and use its <b>Kit</b> field to add it to, move it between, or clear it from a kit just for that trip. Kits are included in your backups and automatic snapshots. (Deleting a kit only removes the bundle — items you already added to templates or trips stay put.)</p>
+ <p><b>Presets.</b> For trips you take often, save the whole setup and reuse it. On any trip, tap <b>Save as preset</b> to remember its recipe — the activities plus all the conditions (trip/quick, transport, season, WET options, forced weather gear, laundry), but not the dates, destination or packed items. Back on <b>Home</b>, a <b>Start from a preset</b> row lets you fill the whole builder in one tap, then just add this trip's name and dates. Manage them under <b>Settings → Trip presets</b>; they ride along in your backups.</p>
+ <p><b>Kits.</b> A <b>kit</b> is a bundle of small things you always pack together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Build your kits under <b>Settings → Kits</b>: give each a name and an emoji, then search your catalogue to pick its members. Once a kit exists you can add it <b>as one unit</b> in two places — from a <b>template</b> (its <b>Add a kit</b> button, so every trip built from that template includes the whole bundle) or straight onto a single <b>trip</b> (the <b>Kit</b> button on the trip’s toolbar). On the Packing List the kit’s items <b>cluster together</b> under a <b>kit header</b> with a <b>Pack all</b> button, so you tick the whole pouch off in one tap. Need to tweak one trip? Open any item on a trip and use its <b>Kit</b> field to add it to, move it between, or clear it from a kit just for that trip. Kits are included in your backups and automatic snapshots. (Deleting a kit only removes the bundle — items you already added to templates or trips stay put.)</p>
         <ul>
           <li><b>Name, start date, end date, destination</b> (end date and destination are optional). You give the <b>end date</b> — the return day — rather than counting nights yourself; the app works out the nights and shows them live below the dates.</li>
-          <li><b>Time of year, catering, context</b> narrow the list; the <b>nights between your start and end date</b> drive per-night quantities (e.g. socks ×6 for six nights). Tick <b>🧺 Laundry available</b> to cap those per-night items at ${LAUNDRY_CAP_NIGHTS} — so a long trip doesn’t demand a dozen (short trips are unaffected); capped items show a small 🧺 by their ×count.</li>
+ <li><b>Time of year, catering, context</b> narrow the list; the <b>nights between your start and end date</b> drive per-night quantities (e.g. socks ×6 for six nights). Tick <b>Laundry available</b> to cap those per-night items at ${LAUNDRY_CAP_NIGHTS} — so a long trip doesn’t demand a dozen (short trips are unaffected); capped items show a small by their ×count.</li>
           <li>The <b>start date</b> also decides where a trip sorts on Home and the Events tab — nearest upcoming first, then undated drafts, then past trips.</li>
         </ul>
 
@@ -4210,8 +4296,8 @@ function howtoCard() {
         <h3>Full trip vs. Quick activity</h3>
         <p>At the top of the builder is a <b>List type</b> switch, because sometimes you don't want a whole trip — you just want to grab a bag for one activity:</p>
         <ul>
-          <li><b>🧳 Full trip</b> <em>(default)</em> — the three sources above: common base + transport kit + the activities you tick. For real trips.</li>
-          <li><b>⏱️ Quick activity</b> — <b>only the activities you tick</b>, with <b>no common base and no transport kit</b>. The transport and catering choices disappear because they don't apply. Tick <b>Swim</b> (or <b>Run</b>, or both) and you get just those 5–20 items — perfect for “I'm off for a swim.” Set <b>Context</b> to <b>Indoor</b> or <b>Outdoor</b> to trim it further (e.g. an outdoor run adds a headlamp and sunscreen; indoor doesn't). Quick events show a small <b>⏱️ Quick</b> tag on their card.</li>
+ <li><b>Full trip</b> <em>(default)</em> — the three sources above: common base + transport kit + the activities you tick. For real trips.</li>
+ <li><b>⏱ Quick activity</b> — <b>only the activities you tick</b>, with <b>no common base and no transport kit</b>. The transport and catering choices disappear because they don't apply. Tick <b>Swim</b> (or <b>Run</b>, or both) and you get just those 5–20 items — perfect for “I'm off for a swim.” Set <b>Context</b> to <b>Indoor</b> or <b>Outdoor</b> to trim it further (e.g. an outdoor run adds a headlamp and sunscreen; indoor doesn't). Quick events show a small <b>⏱ Quick</b> tag on their card.</li>
         </ul>
 
         <h3>How the Packing List is composed</h3>
@@ -4225,54 +4311,54 @@ function howtoCard() {
           <li><b>Weight</b> — the total packed weight; it turns <b>red</b> and tells you how many bags are <b>over limit</b> if any bag is too heavy. (Add weights to items to make this exact — see <b>Bags &amp; weight</b>.)</li>
           <li><b>Open to-dos</b> — how many <b>Actions</b> are still open; tap it to jump to the Actions tab.</li>
         </ul>
-        <p>The big <b>Start / Continue packing</b> button sits right underneath, opening <b>Packing Mode</b> at the first phase that still has unpacked things. Below the dashboard is a <b>✨ Trip setup</b> panel that recaps every choice you made when creating the trip (type, dates, destination, transport, season, catering, laundry, forced weather and the activities you ticked) — a read-only reminder of what this list was built from.</p>
+ <p>The big <b>Start / Continue packing</b> button sits right underneath, opening <b>Packing Mode</b> at the first phase that still has unpacked things. Below the dashboard is a <b>Trip setup</b> panel that recaps every choice you made when creating the trip (type, dates, destination, transport, season, catering, laundry, forced weather and the activities you ticked) — a read-only reminder of what this list was built from.</p>
 
         <h3>Reading &amp; organising the list</h3>
         <ul>
           <li><b>Group by</b> When / Where / Category — same list, several lenses — plus <b>GA</b> and <b>WET</b> (each appears once a trip packs for that kind of activity), which group the list by the <em>activity each item came from</em>: pick <b>GA</b> to see <b>Golf, Hiking, Diving…</b> each in their own block, or <b>WET</b> for <b>Swim, Bike, Run…</b>, so you can round up one activity's kit at once — everything not specific to that activity (your common base, transport kit, other activities and hand-added items) gathers under <b>Everything else</b>. There's also <b>Section</b> (once a trip has sectioned items) and <b>Stored</b> (once items have a storage place), which groups by <em>where each thing lives at home</em> so you can empty one cupboard at a time. <b>Tap any group heading to fold it shut</b> (and again to reopen) — handy for hiding a bag you've finished packing; each heading shows a <b>packed/total</b> count.</li>
-          <li><b>Sort out</b> — quick filters above the list isolate all <b>💧 Liquids</b> (for the wash bag / 100 ml rule) or all <b>⚡ Charge</b> items (to round up cables and chargers). Tap a chip to show only those; tap <b>Show all</b> to bring the full list back. Ticking and editing work the same in the filtered view. Mark an item as a liquid or charge item with the 💧 / ⚡ toggles in its editor.</li>
-          <li><b>🪨 Heaviest</b> — reorders the list heaviest-first with each item’s weight shown, so when a bag is over its limit you can see at a glance what to leave behind. It uses the real load (weight × quantity, including per-night scaling); items without a weight sit at the bottom. Combine it with a Liquids/Charge filter to rank just those. Add a weight to an item in its editor to make it count.</li>
+ <li><b>Sort out</b> — quick filters above the list isolate all <b>Liquids</b> (for the wash bag / 100 ml rule) or all <b>Charge</b> items (to round up cables and chargers). Tap a chip to show only those; tap <b>Show all</b> to bring the full list back. Ticking and editing work the same in the filtered view. Mark an item as a liquid or charge item with the / toggles in its editor.</li>
+ <li><b>Heaviest</b> — reorders the list heaviest-first with each item’s weight shown, so when a bag is over its limit you can see at a glance what to leave behind. It uses the real load (weight × quantity, including per-night scaling); items without a weight sit at the bottom. Combine it with a Liquids/Charge filter to rank just those. Add a weight to an item in its editor to make it count.</li>
           <li><b>Tap an item</b> to open a quick editor for this trip’s bits (Qty, Category, Container, When, weight, flags, note). For the item’s deeper settings — conditions, which templates it’s in, storage &amp; maintenance — tap <b>Edit the full item</b> to jump straight into the full item editor, then use Back to return to your trip. If the item was only added to this one trip, the same button offers to <b>add it to a template first</b> (you pick which) so it’s saved for reuse — then opens its full editor.</li>
           <li>A small <b>colour dot</b> before each item marks its <b>category</b> (clothing, electronics, toiletries…), so a long list scans by hue. Badges show flags at a glance; quantities marked per-night show the scaled count (e.g. Socks ×6 for a 6-night trip). Ticking an item gives a small pop and a gentle buzz, and the readiness ring fills in as you go.</li>
           <li><b>Regenerate</b> refreshes the Packing List from your templates while keeping your ticks, edits and manually-added items.</li>
         </ul>
 
         <h3>Bags &amp; weight</h3>
-        <p>The <b>Bags &amp; weight</b> panel totals each container's weight against typical airline limits (carry-on 8 kg, checked 23 kg…), warns when a bag is over, and counts 💧 liquids and ⚠️ restricted items. Totals only cover items you've given a weight.</p>
+ <p>The <b>Bags &amp; weight</b> panel totals each container's weight against typical airline limits (carry-on 8 kg, checked 23 kg…), warns when a bag is over, and counts liquids and restricted items. Totals only cover items you've given a weight.</p>
 
         <h3>Care, storage &amp; maintenance</h3>
         <p>Every item can carry a few extra things about the <em>physical object</em>, set in its editor (in the <b>Templates</b> tab) — its <b>photos sit right beside the item name</b>, while where it's stored and how to look after it live in the <b>Storage &amp; maintenance</b> panel below:</p>
         <ul>
-          <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a 📍 pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b> or remove places — under <b>Storage places</b> in <b>Settings</b>.</li>
-          <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the ✕ to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one.</li>
+ <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b> or remove places — under <b>Storage places</b> in <b>Settings</b>.</li>
+ <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one.</li>
           <li><b>Maintenance</b> — how and how often to look after it: a <b>maintenance cadence</b> (monthly … every 2 years, or a custom number of days), when it was <b>last done</b>, free-text <b>how-to notes</b> (steps, products, settings), and a <b>how-to link</b>. Tap <b>Log done today</b> to record a service — it resets the schedule and adds a dated entry to the item's maintenance history.</li>
           <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b>, <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
-          <li><b>🚫 Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>🚫 Not in use</b> tag, and the new <b>🚫 Not in use</b> filter chip rounds them all up. (This is different from <b>Condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
+ <li><b>Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>Not in use</b> tag, and the new <b>Not in use</b> filter chip rounds them all up. (This is different from <b>Condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
         </ul>
         <p>The <b>Care</b> tab then gathers everything with care info across all your lists, two ways:</p>
         <ul>
-          <li><b>List</b> — grouped by urgency: <b>🔴 Overdue</b>, <b>🟡 Due soon</b> (within three weeks), <b>🟢 Upcoming</b>, and <b>🧰 Reference only</b> (care notes but no schedule). Each row shows the photo, where it's stored and when it's next due; tap it to read the how-to notes, open the how-to link, and see its maintenance history. Hit <b>✓ Done</b> to log a service in one tap.</li>
+ <li><b>List</b> — grouped by urgency: <b>Overdue</b>, <b>Due soon</b> (within three weeks), <b>Upcoming</b>, and <b>Reference only</b> (care notes but no schedule). Each row shows the photo, where it's stored and when it's next due; tap it to read the how-to notes, open the how-to link, and see its maintenance history. Hit <b>Done</b> to log a service in one tap.</li>
           <li><b>Calendar</b> — a month view with each scheduled service on its due date, colour-coded by urgency and dotted with a count; tap a day to see (and tick off) what's due. Overdue items are flagged above the grid.</li>
         </ul>
-        <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>🧰 reminder</b> also shows on the <b>Home</b> screen.</p>
-        <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>⚠️ No template</b> (loose items), <b>💧 Liquids</b>, <b>⚡ Charging</b>, <b>⚠️ Restricted</b>, <b>🧰 Has care</b>, <b>📷 Photo</b> and <b>🚫 Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
+ <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>reminder</b> also shows on the <b>Home</b> screen.</p>
+ <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>No template</b> (loose items), <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> and <b>Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
 
         <h3>Actions — your to-do list</h3>
         <p>The <b>Actions</b> tab (the red one in the bottom bar) is a proper <b>to-do list</b> for the things you need to <em>do</em>, not pack. Actions come in two kinds:</p>
         <ul>
-          <li><b>Tied to an item</b> — open any item’s editor (in the <b>Templates</b> tab) and use its <b>Actions · to-dos</b> panel to jot things to do for it: “replace foam tips”, “re-wax the zip”, “charge before the trip”. Because each item lives once in the catalogue, its actions follow it everywhere, and the item’s row shows a small <b>☑ count</b> of its open to-dos.</li>
+ <li><b>Tied to an item</b> — open any item’s editor (in the <b>Templates</b> tab) and use its <b>Actions · to-dos</b> panel to jot things to do for it: “replace foam tips”, “re-wax the zip”, “charge before the trip”. Because each item lives once in the catalogue, its actions follow it everywhere, and the item’s row shows a small <b>count</b> of its open to-dos.</li>
           <li><b>General (loose)</b> — on the Actions tab tap <b>New</b> to add a to-do that isn’t about any one item (you can still tie it to an item later from that item’s editor).</li>
         </ul>
-        <p>Every action can carry a <b>priority</b> (High / Normal), a <b>when</b> (a trip phase like “≥1 week ahead”, or a specific <b>date</b>), and a tick to mark it <b>done</b>. The Actions tab gathers them all in one place — open ones first (High before Normal, soonest first) — with completed ones tucked into a collapsible <b>Done</b> group. Ticking an item’s action done is <b>permanent on that item</b>; it doesn’t reset each trip. Actions live on-device and travel in your <b>JSON backup</b>, and whenever anything is open a <b>🗒️ “To-dos to tackle”</b> card appears on the <b>Home</b> screen.</p>
+ <p>Every action can carry a <b>priority</b> (High / Normal), a <b>when</b> (a trip phase like “≥1 week ahead”, or a specific <b>date</b>), and a tick to mark it <b>done</b>. The Actions tab gathers them all in one place — open ones first (High before Normal, soonest first) — with completed ones tucked into a collapsible <b>Done</b> group. Ticking an item’s action done is <b>permanent on that item</b>; it doesn’t reset each trip. Actions live on-device and travel in your <b>JSON backup</b>, and whenever anything is open a <b>“To-dos to tackle”</b> card appears on the <b>Home</b> screen.</p>
 
         <h3>Shopping list</h3>
-        <p>A separate <b>🛒 Shopping list</b> (on the <b>Care</b> tab) rounds up what to <b>buy or restock before a trip</b>. It suggests three kinds of thing automatically: items you flag as a <b>🛒 Consumable</b> in their editor (things you use up — sunscreen, toothpaste, energy gels, a gas canister), items whose <b>Condition</b> you’ve set to <b>Needs replacing</b>, and anything past or within a month of its <b>replace-by / expiry date</b>. Tap <b>＋ Add</b> beside a suggestion to move it onto your buy-list, or the <b>Add</b> button for a one-off like “travel adapter”. <b>Tick</b> a line once you’ve bought it — bought things drop into a collapsible group. It’s built on the same store as your to-dos (so it’s in every backup), and a <b>🛒 “Shopping list — N to buy”</b> nudge shows on <b>Home</b> whenever something’s waiting. Your <b>Actions</b> tab stays purely to-dos; shopping keeps its own screen.</p>
+ <p>A separate <b>Shopping list</b> (on the <b>Care</b> tab) rounds up what to <b>buy or restock before a trip</b>. It suggests three kinds of thing automatically: items you flag as a <b>Consumable</b> in their editor (things you use up — sunscreen, toothpaste, energy gels, a gas canister), items whose <b>Condition</b> you’ve set to <b>Needs replacing</b>, and anything past or within a month of its <b>replace-by / expiry date</b>. Tap <b>＋ Add</b> beside a suggestion to move it onto your buy-list, or the <b>Add</b> button for a one-off like “travel adapter”. <b>Tick</b> a line once you’ve bought it — bought things drop into a collapsible group. It’s built on the same store as your to-dos (so it’s in every backup), and a <b>“Shopping list — N to buy”</b> nudge shows on <b>Home</b> whenever something’s waiting. Your <b>Actions</b> tab stays purely to-dos; shopping keeps its own screen.</p>
 
         <h3>Countdown &amp; “pack now” nudges</h3>
-        <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b>🧰</b> maintenance nudge when gear is overdue or due soon, a <b>🛒 shopping</b> nudge when you’ve things to buy, a <b>🗒️ “To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), and a <b>💾</b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
+ <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b></b> maintenance nudge when gear is overdue or due soon, a <b>shopping</b> nudge when you’ve things to buy, a <b>“To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), and a <b></b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
 
         <h3>Packing Mode</h3>
-        <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed 🎒” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List.</p>
+ <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List.</p>
 
         <h3>Who packs what</h3>
         <p>Packing with someone? First set up your <b>People</b> in <b>Settings → People</b> — each with a name and a colour (Martin &amp; Anna are there to start; add, rename or recolour anyone). Then on a trip, open an item and choose <b>Packed by</b>. Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row appears at the top of the packing list so you can show <b>Everyone</b>, just one person, or the still-<b>Unassigned</b> items (each with a count). The same filter sits atop <b>Packing Mode</b>, so each of you can pack only your own things. It’s per-trip, and it <b>travels inside a shared trip</b> — send the trip to someone and the items you gave them arrive marked as theirs (a name that isn’t on their People list still shows, just with an auto-picked colour). Renaming a person carries the new name onto every trip they’re already on.</p>
@@ -4298,11 +4384,11 @@ function howtoCard() {
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
-        <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Export backup (JSON)</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. The app remembers your last backup and gives a gentle <b>💾</b> reminder on the Home screen when it’s been a while. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
+ <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Export backup (JSON)</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. The app remembers your last backup and gives a gentle <b></b> reminder on the Home screen when it’s been a while. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
         <p><b>Automatic backups.</b> On top of the file backups, the app quietly keeps recent <b>copies of your data on this device</b> — about one a day, and always one <b>just before any restore</b> — so a mistaken edit, an accidental delete or a wrong import is easy to undo. They’re in <b>Settings → Your data → Automatic backups</b>, each labelled with when it was taken and what it holds; tap <b>Restore</b> on any copy, or <b>Save a copy now</b> whenever you like. This safety net is careful never to record an empty database over real data and never to clear your richest copy. And when you tap <b>Import backup</b>, the app now <b>shows exactly what’s in the file</b> — items, templates, trips, photos and the date — before changing anything, warning you first if a Replace would wipe most of your data. These on-device copies protect against mistakes; a saved backup <b>file</b> is still your insurance against losing the device itself.</p>
 
         <h3>Maintenance mode — the whole-database overview</h3>
-        <p>At the top of <b>Settings</b>, <b>🗂️ Maintenance mode — database overview</b> opens a single <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the quickest way to keep everything current without hopping between templates. Each row shows the <b>item</b> (with its category and any Swedish wording), <b>which templates it belongs to</b> (tap a template name to jump there), its <b>flags</b> — <b>⚡</b> charging (and the plug type), <b>💧</b> liquid, <b>⚠️</b> restricted, <b>🌙</b> per-night, <b>⭐</b> short list, <b>🧰</b> care, <b>📷</b> photo, <b>🚫</b> not in use — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. <b>Search</b> by item, template or storage; use the same <b>category chips</b> from the Care tab to narrow; and <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. The page also <b>finds probable duplicates</b> — same or very similar names (e.g. “Sunglasses” and “Sun glasses”) — listing them in a <b>⚠️ Possible duplicates</b> panel and highlighting them in the table; it never merges anything for you, so you can open each and rename or remove as you see fit. <b>Export (Excel)</b> saves the whole overview as a spreadsheet for review on a computer.</p>
+ <p>At the top of <b>Settings</b>, <b>Maintenance mode — database overview</b> opens a single <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the quickest way to keep everything current without hopping between templates. Each row shows the <b>item</b> (with its category and any Swedish wording), <b>which templates it belongs to</b> (tap a template name to jump there), its <b>flags</b> — <b></b> charging (and the plug type), <b></b> liquid, <b></b> restricted, <b></b> per-night, <b></b> short list, <b></b> care, <b></b> photo, <b></b> not in use — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. <b>Search</b> by item, template or storage; use the same <b>category chips</b> from the Care tab to narrow; and <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. The page also <b>finds probable duplicates</b> — same or very similar names (e.g. “Sunglasses” and “Sun glasses”) — listing them in a <b>Possible duplicates</b> panel and highlighting them in the table; it never merges anything for you, so you can open each and rename or remove as you see fit. <b>Export (Excel)</b> saves the whole overview as a spreadsheet for review on a computer.</p>
 
       </div>
     </details>
@@ -4320,6 +4406,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v97', '2026-08-18 · 20:00 UTC', false, 'One unified icon set',
+      'The app now speaks in <b>one visual language</b>. Every symbol that belongs to the <em>interface</em> — the item flags (charging, liquid, restricted, consumable, not-in-use, photo, owner, per-night), the badges, the quick-filter chips, the Home nudges, the Care states, the trip-setup tiles, the search results and the buttons — has been redrawn as a <b>hand-drawn line icon</b> in a single consistent weight, replacing the mixed bag of emoji that had built up over 96 versions. Because they’re drawn rather than typed, they <b>take on the colour of whatever section you’re in</b> (blue on Home, green on Events, purple on Templates…) and they look <b>exactly the same on every device</b> — no more Apple-vs-Android emoji roulette, and no more glyphs that sat slightly too high or too low next to their label. Around <b>45 new icons</b> were drawn for this. What deliberately <b>stays</b> as emoji is anything that identifies <b>your things</b>: the group headings on a packing list (Clothing, Checked luggage, Golf bag, Morning list), your <b>template covers</b> and your <b>kits</b> — those are colourful, instantly recognisable, and you choose them yourself. The rule is simple: <b>a line icon is the app talking; an emoji is your gear.</b> Weather keeps its own coloured glyphs. The <b>How it works</b> guide gains a short section explaining the distinction, and its wording no longer quotes icons that might change. Nothing about how the app works changed — it just looks like one designed thing now.',
+      'The interface finally looks like a single designed product rather than 96 versions of accumulated emoji — and every icon renders identically on your Mac and your iPhone, in the colour of the section you’re in.'),
     v('v96', '2026-08-18 · 18:00 UTC', false, 'Template covers — a colourful Templates grid',
       'The <b>Templates</b> tab just got a face-lift. Instead of a plain list, your templates now appear as a <b>visual grid of cover cards</b>, each with a <b>coloured tile and an emoji</b>, so you can spot <b>Golf</b>, <b>Diving</b> or <b>Travel</b> by look alone. Every template gets a distinct colour automatically, but you can pick your own: open any template and tap the new <b>Cover</b> button in its toolbar to choose an <b>emoji</b> (⛳ 🤿 🏃 🎿…) and a <b>colour</b> — or leave the colour on <b>Auto</b> to let the app keep it consistent for you. A live preview shows exactly how the card will look before you save. The chosen emoji also shows up next to the template in <b>Search</b>. Purely visual — nothing about what a template holds or how trips are built changed; the grid just makes the tab quicker to scan and a lot nicer to look at.',
       'Your templates are now instantly recognisable at a glance — pick a colour and an emoji for each, and the Templates tab turns from a grey list into a bright, scannable grid.'),
@@ -4396,7 +4485,7 @@ function versionHistoryCard() {
       'The <b>All items · table</b> now bends to how <b>you</b> like to work. A tidier <b>toolbar</b> sits above the grid: <b>Sort</b> the whole table by <b>Name, Weight, Storage, Container</b> or <b>how many lists</b> an item is in, and tap the <b>▲/▼</b> button to flip between ascending and descending. Next to it, a <b>Columns</b> button opens a little panel where you can <b>reorder the “① the item itself” columns</b> (weight, storage, flags, container, colour…) with ▲▼ — put the ones you care about first. Both your <b>sort choice</b> and your <b>column order</b> are <b>remembered on this device</b>, so the table opens just how you left it. We also <b>polished the header</b> — the ①②③ group titles now line up and stand out more — and <b>removed the little up/down spinner arrows</b> from the <b>Weight</b> cells for a cleaner look (just type the number).',
       'Make the spreadsheet fit your habits — sort by what matters, arrange the columns in your own order, and have it stick every time you come back.'),
     v('v71', '2026-08-06 · 13:00 UTC', false, 'All items · table — edit everything in one spreadsheet',
-      'A new <b>spreadsheet view</b> of every item, reached from the <b>Care</b> tab → <b>▦ All items · table</b>. Each row is an item; the columns are grouped just like an item’s editor: <b>① the item itself</b> (weight, storage, 💧/⚡/⚠️ flags, container, colour, size, maker, model), <b>② in this list</b> (qty, section), and <b>③ a tick-box per template</b> showing which lists the item is in. <b>Edit right in the grid:</b> type a weight or storage place, tick a flag, and it updates the item <b>everywhere it’s used</b>; tick or untick a template box to <b>file the item in or out</b> of that list on the spot (unticking an item’s last list parks it safely in <b>Loose items</b> rather than deleting it). The <b>qty</b> and <b>section</b> columns are per-list, so they’re editable when an item lives in a single template and show “<b>N lists</b>” (tap the name to open it) when it’s shared. There’s a <b>search box</b> to filter to a few rows, the <b>item name stays pinned</b> on the left, and you <b>swipe sideways</b> for the rest of the columns — so it works on the phone and really shines on an iPad or Mac. Nothing new to learn: it’s the same data as the per-item editor, just all at once for fast bulk tidying.',
+      'A new <b>spreadsheet view</b> of every item, reached from the <b>Care</b> tab → <b>All items · table</b>. Each row is an item; the columns are grouped just like an item’s editor: <b>① the item itself</b> (weight, storage, 💧/⚡/⚠️ flags, container, colour, size, maker, model), <b>② in this list</b> (qty, section), and <b>③ a tick-box per template</b> showing which lists the item is in. <b>Edit right in the grid:</b> type a weight or storage place, tick a flag, and it updates the item <b>everywhere it’s used</b>; tick or untick a template box to <b>file the item in or out</b> of that list on the spot (unticking an item’s last list parks it safely in <b>Loose items</b> rather than deleting it). The <b>qty</b> and <b>section</b> columns are per-list, so they’re editable when an item lives in a single template and show “<b>N lists</b>” (tap the name to open it) when it’s shared. There’s a <b>search box</b> to filter to a few rows, the <b>item name stays pinned</b> on the left, and you <b>swipe sideways</b> for the rest of the columns — so it works on the phone and really shines on an iPad or Mac. Nothing new to learn: it’s the same data as the per-item editor, just all at once for fast bulk tidying.',
       'See and fix your whole kit at a glance — weights, storage places, flags and which templates each thing belongs to — editing many items far faster than opening them one by one.'),
     v('v70', '2026-08-06 · 12:00 UTC', false, 'Maintenance mode — a whole-database overview, with duplicate spotting',
       'A new <b>Maintenance mode</b> in <b>Settings</b> (tap <b>🗂️ Maintenance mode — database overview</b> at the top) gives you a single, <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the fastest way to keep everything current in one place. Each row shows the <b>item</b> (with its category and any Swedish wording), <b>which templates it’s in</b> (tap a template name to jump straight there), its <b>flags</b> at a glance — <b>⚡ charging</b> (with the plug type), <b>💧 liquid</b>, <b>⚠️ restricted</b>, <b>🌙 per-night</b>, <b>⭐ short list</b>, <b>🧰 has care</b>, <b>📷 photo</b>, <b>🚫 not in use</b> — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. A <b>search box</b> filters by item, template or storage; the same <b>category chips</b> from the Care tab narrow it further; and you can <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. <b>The bonus:</b> the app now <b>hunts for probable duplicates</b> — items with the same or very similar names (it treats “Sunglasses” and “Sun glasses” as a pair) — and surfaces them in a <b>⚠️ Possible duplicates</b> panel at the top, with each highlighted <span style="color:var(--warn)">in amber</span> in the table too. Nothing is ever merged automatically — it just <b>flags</b> look-alikes so you can open each, then rename one or remove the copy you don’t need. There’s also an <b>Export (Excel)</b> button that saves the whole overview as a spreadsheet (one row per item, every flag as a column) for reviewing away from the phone.',
@@ -4768,7 +4857,7 @@ async function renderShopping() {
       <label class="act-check"><input type="checkbox" ${a.done ? 'checked' : ''}><span class="act-box">${IC.check}</span></label>
       <button class="act-body" type="button">
         <span class="act-btext">${esc(a.text || '(empty)')}</span>
-        <span class="act-bsub">${itemName ? `<span class="act-item">${esc(itemName)}</span>` : ''}${reasonChip(reason)}${a.whenDate ? `<span class="act-chip">📅 ${esc(a.whenDate)}</span>` : ''}</span>
+        <span class="act-bsub">${itemName ? `<span class="act-item">${esc(itemName)}</span>` : ''}${reasonChip(reason)}${a.whenDate ? `<span class="act-chip">${ic('cal','xs')}${esc(a.whenDate)}</span>` : ''}</span>
       </button>
     </div>`);
     $('input', row).addEventListener('change', async (e) => {
@@ -4833,7 +4922,7 @@ async function renderShopping() {
       open.forEach((a) => openWrap.appendChild(a.id === shopEditId ? buyEditor(a, false) : buyRow(a)));
       body.appendChild(openWrap);
     } else if (shopEditId !== '__new__' && !done.length && !suggestions.length) {
-      body.appendChild(h('<div class="empty"><p class="empty-t">Nothing to buy</p><p class="empty-s">Tap “Add” for a one-off, or flag an item as a 🛒 <b>Consumable</b> (or set its condition to <b>Needs replacing</b> / a replace-by date) and it’ll be suggested here.</p></div>'));
+      body.appendChild(h('<div class="empty"><p class="empty-t">Nothing to buy</p><p class="empty-s">Tap “Add” for a one-off, or flag an item as a <b>Consumable</b> (or set its condition to <b>Needs replacing</b> / a replace-by date) and it’ll be suggested here.</p></div>'));
     }
 
     // --- Suggested (from your items) ---
@@ -4945,7 +5034,7 @@ async function renderSearch() {
       for (const e of eventHits) {
         const d = daysUntil(e.startDate);
         const sub = [e.destination ? esc(e.destination) : '', d != null ? esc(countdownLabel(d)) : ''].filter(Boolean).join(' · ');
-        html += row(`#/event/${encodeURIComponent(e.id)}`, '🧳', esc(e.name || 'Untitled trip'), sub);
+        html += row(`#/event/${encodeURIComponent(e.id)}`, ic('suitcase','md'), esc(e.name || 'Untitled trip'), sub);
       }
       html += '</div>';
     }
@@ -4953,7 +5042,7 @@ async function renderSearch() {
       html += sectionHead('To-dos', actionHits.length) + '<div class="search-list">';
       for (const a of actionHits) {
         const sub = [a.done ? 'done' : 'open', a.itemName ? esc(a.itemName) : 'General'].filter(Boolean).join(' · ');
-        html += row('#/actions', '🗒️', esc(a.text || '(untitled)'), sub);
+        html += row('#/actions', ic('note','md'), esc(a.text || '(untitled)'), sub);
       }
       html += '</div>';
     }
@@ -4961,7 +5050,7 @@ async function renderSearch() {
       html += sectionHead('Shopping list', shopHits.length) + '<div class="search-list">';
       for (const a of shopHits) {
         const sub = [a.done ? 'bought' : 'to buy', a.itemName ? esc(a.itemName) : ''].filter(Boolean).join(' · ');
-        html += row('#/shopping', '🛒', esc(a.text || '(untitled)'), sub);
+        html += row('#/shopping', ic('cart','md'), esc(a.text || '(untitled)'), sub);
       }
       html += '</div>';
     }
@@ -4991,11 +5080,11 @@ async function renderSettings() {
     : dsb === 0 ? 'Last backup: <b>today</b>.'
     : `Last backup: <b>${dsb} day${dsb === 1 ? '' : 's'} ago</b>${dsb >= BACKUP_STALE_DAYS ? ' — <b class="warn-txt">time for a fresh one</b>.' : '.'}`;
   const protectStatus = protectedNow
-    ? '🔒 <b>Storage protected</b> — the browser has been asked not to auto-delete your data.'
-    : '⚠️ <b>Storage not yet protected</b> — <b>install</b> the app (iPhone: Share → Add to Home Screen; Mac: File → Add to Dock) so your data isn’t auto-deleted, and take regular backups.';
+    ? `${ic('lock','sm')}<b>Storage protected</b> — the browser has been asked not to auto-delete your data.`
+    : `${ic('warn','sm')}<b>Storage not yet protected</b> — <b>install</b> the app (iPhone: Share → Add to Home Screen; Mac: File → Add to Dock) so your data isn’t auto-deleted, and take regular backups.`;
 
   wrap.appendChild(h(`<a class="care-link" href="#/overview">
-    <span class="care-link-ic">🗂️</span>
+    <span class="care-link-ic">${ic('folder','md')}</span>
     <span class="care-link-body"><b>Maintenance mode — database overview</b><span class="care-link-sub">Every item on one line, the templates it’s in, its flags &amp; storage — with look-alikes flagged, so you can keep the whole catalog tidy</span></span>
     <span class="care-link-go">${IC.fwd}</span>
   </a>`));
@@ -5003,7 +5092,7 @@ async function renderSettings() {
   const card = h(`<div class="card block">
     <h2>Your data</h2>
     <p class="muted">Everything is stored <b>on this device only</b> — nothing is uploaded. Because it lives in the browser, a saved backup file is your real safety net.</p>
-    <p class="data-status">📦 <b>${esc(countsSummary(curCounts))}</b>${usedLabel ? ` · ${esc(usedLabel)} used` : ''}</p>
+    <p class="data-status">${ic('box','sm')}<b>${esc(countsSummary(curCounts))}</b>${usedLabel ? ` · ${esc(usedLabel)} used` : ''}</p>
     <p class="data-status">${protectStatus}</p>
     <p class="data-status">${backupStatus}</p>
     <div class="btnrow">
@@ -5123,10 +5212,10 @@ async function renderSettings() {
   });
 
   // Trip presets — saved event recipes, with delete. Save one from any trip's
-  // ⭐ Save as preset button; start a new trip from one on Home.
+  // The "Save as preset" button; start a new trip from one on Home.
   const presetCard = h(`<div class="card block">
     <h2>Trip presets</h2>
-    <p class="muted">Saved trip setups — the activities and conditions, not the dates or packed items. Start a new trip from one on the <b>Home</b> screen; save a new one from any trip via its <b>⭐ Save as preset</b> button.</p>
+    <p class="muted">Saved trip setups — the activities and conditions, not the dates or packed items. Start a new trip from one on the <b>Home</b> screen; save a new one from any trip via its <b>Save as preset</b> button.</p>
     <div class="snap-list" data-presets></div>
   </div>`);
   wrap.appendChild(presetCard);
@@ -5138,7 +5227,7 @@ async function renderSettings() {
           <span class="snap-info"><b class="snap-when">${esc(p.name)}</b><span class="snap-sub">${esc(presetSummary(p.config))}</span></span>
           <span class="snap-acts"><button type="button" class="iconbtn sm" data-preset-del="${esc(p.id)}" aria-label="Delete preset ${esc(p.name)}" title="Delete">${IC.trash}</button></span>
         </div>`).join('')
-      : '<p class="muted">No presets yet — open a trip and tap ⭐ Save as preset to make your first.</p>';
+      : '<p class="muted">No presets yet — open a trip and tap Save as preset to make your first.</p>';
   };
   drawPresets();
   presetCard.addEventListener('click', (e) => {
@@ -5333,7 +5422,7 @@ async function renderSettings() {
       if (!merge) {
         const cur = await db.currentCounts();
         if (backupShrinks(cur, info.counts)
-          && !confirm(`⚠️  This REPLACES your current data\n( ${countsSummary(cur)} )\nwith a much smaller backup\n( ${countsSummary(info.counts)} ).\n\nYour current data is saved as an automatic backup first, so it's undoable — but continue only if you're sure.\n\nReplace anyway?`)) {
+          && !confirm(`This REPLACES your current data\n( ${countsSummary(cur)} )\nwith a much smaller backup\n( ${countsSummary(info.counts)} ).\n\nYour current data is saved as an automatic backup first, so it's undoable — but continue only if you're sure.\n\nReplace anyway?`)) {
           file.value = ''; return;
         }
       }
@@ -5379,15 +5468,15 @@ function fmtWeight(g) {
 // The small flag badges shown for one item in the overview (and reused nowhere else).
 function ovFlagBadges(it) {
   const b = [];
-  if (it.itemType === 'reminder') b.push('<span class="ov-fl" title="A reminder / to-do, not a packed thing">🗒️</span>');
-  if (it.charging) { const s = chargeTypeShort(it.chargeType); b.push(`<span class="ov-fl" title="Needs charging${s ? ' · ' + esc(s) : ''}">⚡${s ? `<em>${esc(s)}</em>` : ''}</span>`); }
-  if (it.liquid) b.push('<span class="ov-fl" title="Liquid / gel — 100 ml hand-luggage rule">💧</span>');
-  if (it.restricted) b.push('<span class="ov-fl" title="Battery / restricted — carry-on rules">⚠️</span>');
-  if (it.perNight) b.push('<span class="ov-fl" title="Quantity scales with the number of nights">🌙</span>');
-  if (it.shortList) b.push('<span class="ov-fl" title="On the minimal short list">⭐</span>');
-  if (hasCare(it)) b.push('<span class="ov-fl" title="Has care / maintenance info">🧰</span>');
-  if ((it.photos || []).length) b.push(`<span class="ov-fl" title="${(it.photos || []).length} photo(s)">📷</span>`);
-  if (it.retired) b.push('<span class="ov-fl" title="Not in use — kept on record but never packed">🚫</span>');
+  if (it.itemType === 'reminder') b.push(`<span class="ov-fl" title="A reminder / to-do, not a packed thing">${ic('note','xs')}</span>`);
+  if (it.charging) { const s = chargeTypeShort(it.chargeType); b.push(`<span class="ov-fl" title="Needs charging${s ? ' · ' + esc(s) : ''}">${ic('bolt','xs')}${s ? `<em>${esc(s)}</em>` : ''}</span>`); }
+  if (it.liquid) b.push(`<span class="ov-fl" title="Liquid / gel — 100 ml hand-luggage rule">${ic('drop','xs')}</span>`);
+  if (it.restricted) b.push(`<span class="ov-fl" title="Battery / restricted — carry-on rules">${ic('warn','xs')}</span>`);
+  if (it.perNight) b.push(`<span class="ov-fl" title="Quantity scales with the number of nights">${ic('moon','xs')}</span>`);
+  if (it.shortList) b.push(`<span class="ov-fl" title="On the minimal short list">${ic('star','xs')}</span>`);
+  if (hasCare(it)) b.push(`<span class="ov-fl" title="Has care / maintenance info">${ic('toolbox','xs')}</span>`);
+  if ((it.photos || []).length) b.push(`<span class="ov-fl" title="${(it.photos || []).length} photo(s)">${ic('camera','xs')}</span>`);
+  if (it.retired) b.push(`<span class="ov-fl" title="Not in use — kept on record but never packed">${ic('ban','xs')}</span>`);
   return b.join('');
 }
 
@@ -5402,10 +5491,10 @@ function ovEditHref(row) {
 // Chips naming the templates an item is in (real templates as links; the loose /
 // container homes shown as a plain tag, since they aren't tickable templates).
 function ovTemplateChips(row) {
-  if (!row.templates.length) return '<span class="ov-tpl none">⚠️ No template</span>';
+  if (!row.templates.length) return `<span class="ov-tpl none">${ic('warn','xs')}No template</span>`;
   return row.templates.map((t) => {
-    if (t.role === 'loose') return '<span class="ov-tpl none">⚠️ No template</span>';
-    if (t.role === CONTAINER_ROLE) return `<span class="ov-tpl bag">🎒 ${esc(t.name)}</span>`;
+    if (t.role === 'loose') return `<span class="ov-tpl none">${ic('warn','xs')}No template</span>`;
+    if (t.role === CONTAINER_ROLE) return `<span class="ov-tpl bag">${ic('bag','xs')}${esc(t.name)}</span>`;
     return `<a class="ov-tpl" href="#/list/${esc(t.id)}">${esc(t.name)}</a>`;
   }).join('');
 }
@@ -5442,12 +5531,12 @@ async function renderOverview() {
         return `<a class="ov-dupitem" href="${ovEditHref(r)}"><span class="ov-dupname">${esc(r.name)}</span><span class="ov-dupwhere">${esc(where)}</span>${IC.fwd}</a>`;
       }).join('');
       return `<div class="ov-dupgroup">
-        <div class="ov-duphead">${g.exact ? '🔴 Same name' : '🟠 Look-alike'} <em>${g.rows.length}</em></div>
+        <div class="ov-duphead">${g.exact ? `${ic('dot','xs')}Same name` : `${ic('dot','xs')}Look-alike`} <em>${g.rows.length}</em></div>
         ${items}
       </div>`;
     }).join('');
     wrap.appendChild(h(`<details class="card block ov-dupes" open>
-      <summary><span class="ov-dupes-h">⚠️ Possible duplicates (${dupeGroups.length})</span><span class="ov-dupes-sub">Tap each to compare — then rename one, or remove the copy you don’t need</span></summary>
+      <summary><span class="ov-dupes-h">${ic('warn','sm')}Possible duplicates (${dupeGroups.length})</span><span class="ov-dupes-sub">Tap each to compare — then rename one, or remove the copy you don’t need</span></summary>
       <p class="ov-dupes-note">These items look alike (same or very similar names). They’re only <b>flagged</b>, never merged automatically — open each and decide. Rows below are highlighted in <span class="ov-dupmark">amber</span>.</p>
       ${groupHtml}
     </details>`));
@@ -5512,13 +5601,13 @@ async function renderOverview() {
       const swed = it.swedish ? `<span class="ov-swed">${esc(it.swedish)}</span>` : '';
       const rowEl = h(`<div class="ov-row${dup ? ' dupe' : ''}${it.retired ? ' retired' : ''}" data-href="${ovEditHref(r)}">
         <span class="ov-cell ov-item">
-          <span class="ov-name">${dup ? '<span class="ov-dupmark" title="Possible duplicate">⚠️</span> ' : ''}${esc(it.name || '(unnamed)')}</span>
+          <span class="ov-name">${dup ? `<span class="ov-dupmark" title="Possible duplicate">${ic('warn','xs')}</span> ` : ''}${esc(it.name || '(unnamed)')}</span>
           <span class="ov-meta">${cat}${swed}</span>
         </span>
         <span class="ov-cell ov-tpls">${ovTemplateChips(r)}</span>
         <span class="ov-cell ov-flags">${ovFlagBadges(it) || '<span class="ov-dash">—</span>'}</span>
         <span class="ov-cell ov-num ov-weight">${fmtWeight(it.weight) || '<span class="ov-dash">—</span>'}</span>
-        <span class="ov-cell ov-stored">${it.storage ? `📍 ${esc(it.storage)}` : '<span class="ov-dash">—</span>'}</span>
+        <span class="ov-cell ov-stored">${it.storage ? `${ic('pin','xs')}${esc(it.storage)}` : '<span class="ov-dash">—</span>'}</span>
       </div>`);
       body.appendChild(rowEl);
     }
@@ -5588,7 +5677,7 @@ async function renderImportTrip(data) {
   try {
     const ev = await db.importTrip(fromBase64Url(data));
     location.replace(`#/event/${ev.id}`);
-    return h('<section class="screen"><div class="empty"><p class="empty-t">Trip imported ✓</p><p class="empty-s">Opening it now…</p></div></section>');
+    return h('<section class="screen"><div class="empty"><p class="empty-t">Trip imported</p><p class="empty-s">Opening it now…</p></div></section>');
   } catch (err) {
     return h(`<section class="screen"><div class="empty"><p class="empty-t">That trip link didn’t work</p><p class="empty-s">${esc(err.message || 'The link may be incomplete or damaged.')}</p><a class="btn primary" href="#/">Go home</a></div></section>`);
   }
@@ -5693,7 +5782,7 @@ function presetSummary(config = {}) {
   const na = (config.activities || []).length;
   if (na) bits.push(`${na} activit${na === 1 ? 'y' : 'ies'}`);
   if ((config.weatherOn || []).length) bits.push(`force ${config.weatherOn.length} weather`);
-  if (config.laundry) bits.push('🧺 laundry');
+  if (config.laundry) bits.push('laundry');
   return bits.join(' · ');
 }
 
@@ -5879,7 +5968,7 @@ function showUpdateToast() {
   if (updateToastShown) return;
   updateToastShown = true;
   const toast = h(`<div class="update-toast" role="status">
-    <span class="ut-txt">🎉 A new version is ready</span>
+    <span class="ut-txt">${ic('sparkle','sm')}A new version is ready</span>
     <button type="button" class="ut-btn">Update now</button>
   </div>`);
   toast.querySelector('.ut-btn').addEventListener('click', () => location.reload());
