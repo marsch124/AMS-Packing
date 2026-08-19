@@ -659,6 +659,39 @@ em {
   background: color-mix(in srgb, var(--warn) 12%, var(--card));
   border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
 }
+.nudge.backup .nudge-ic { color: var(--warn); }
+/* ...escalating to red once the backup is badly out of date. The heavier border
+   and shadow are deliberate: at this point it should look like a problem. */
+.nudge.backup.urgent {
+  background: color-mix(in srgb, var(--danger) 12%, var(--card));
+  border: 2px solid color-mix(in srgb, var(--danger) 55%, var(--line));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+.nudge.backup.urgent .nudge-ic { color: var(--danger); }
+.nudge.backup.urgent .nudge-body > b { color: var(--danger); }
+/* This nudge carries a button, so it wraps on its own terms rather than at a
+   viewport breakpoint: the message keeps a sensible minimum width and the Save
+   button drops to its own row whenever the card gets too narrow to hold both.
+   Top-aligned, because the message often runs to two or three lines. */
+.nudge.backup {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.nudge.backup .nudge-ic { margin-top: 1px; }
+.nudge.backup .nudge-body { flex: 1 1 15rem; }
+.nudge-acts {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.nudge-save { white-space: nowrap; }
+.nudge.backup.urgent .nudge-save {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+  color: var(--danger);
+}
+.nudge-save[disabled] { opacity: .55; }
 /* To-do reminder — a red tint echoing the red Actions tab it links to. */
 .nudge.todo {
   background: color-mix(in srgb, var(--danger) 9%, var(--card));
@@ -684,6 +717,8 @@ em {
   margin: 2px 0 0;
 }
 .warn-txt { color: var(--warn); }
+/* A quieter aside under a card's status lines (e.g. why the backup nags). */
+.muted.small { font-size: .82rem; line-height: 1.45; margin-top: 8px; }
 
 .nudge-go {
   flex: none;

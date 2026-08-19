@@ -24,6 +24,7 @@ import {
   coercePerson, newPerson, personColor, assignedPeople, PERSON_COLORS,
   listEmoji, listColor, TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS,
   isPhotoRef, photoRefs, inlinePhotos, hasInlinePhotos,
+  backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1758,4 +1759,91 @@ test('buildCatalog merges same-named copies without losing the one that has a ph
   assert.equal(merged.length, 1, 'same-named items merge into one catalog entry');
   assert.deepEqual(merged[0].photos, ['pid-9']);
   assert.equal(merged[0].thumb, DATA_URL);
+});
+
+// --- Backup reminders (#13) ---------------------------------------------------
+
+const NOW = '2026-08-20T12:00:00.000Z';
+
+test('newestChangeAt: picks the latest stamp across every group', () => {
+  const events = [{ updatedAt: '2026-08-01T09:00:00.000Z' }, { createdAt: '2026-08-03T09:00:00.000Z' }];
+  const lists = [{ updatedAt: '2026-08-11T09:00:00.000Z' }];
+  const actions = [{ updatedAt: '2026-08-05T09:00:00.000Z' }];
+  assert.equal(newestChangeAt(events, lists, actions), '2026-08-11T09:00:00.000Z');
+  assert.equal(newestChangeAt(), '', 'nothing at all reads as no change');
+  assert.equal(newestChangeAt([], null, [{}, null]), '', 'rows without stamps are skipped');
+});
+
+test('backupState: an empty install is never nagged', () => {
+  const s = backupState({ hasData: false, lastBackupAt: '', now: NOW });
+  assert.equal(s.level, 'ok');
+  assert.equal(s.unsaved, false);
+});
+
+test('backupState: stays silent when nothing changed since the backup, however long ago', () => {
+  const s = backupState({
+    hasData: true,
+    lastBackupAt: '2026-01-01T10:00:00.000Z',   // 200+ days ago
+    changedAt: '2025-12-30T10:00:00.000Z',      // but nothing touched since
+    now: NOW,
+  });
+  assert.equal(s.level, 'ok', 'a quiet year is not a risk');
+  assert.equal(s.unsaved, false);
+  assert.ok(s.days > BACKUP_URGENT_DAYS, 'the age is still reported, it just does not nag');
+});
+
+test('backupState: escalates amber then red once there are unsaved changes', () => {
+  const at = (days) => new Date(Date.parse(NOW) - days * 86400000).toISOString();
+  const stateAfter = (days) => backupState({
+    hasData: true, lastBackupAt: at(days), changedAt: NOW, now: NOW,
+  });
+  assert.equal(stateAfter(3).level, 'ok', 'a few days with changes is fine');
+  assert.equal(stateAfter(BACKUP_DUE_DAYS).level, 'due');
+  assert.equal(stateAfter(BACKUP_URGENT_DAYS - 1).level, 'due');
+  assert.equal(stateAfter(BACKUP_URGENT_DAYS).level, 'urgent');
+  assert.equal(stateAfter(BACKUP_DUE_DAYS).days, BACKUP_DUE_DAYS);
+});
+
+test('backupState: a same-day edit after a same-day backup still counts as unsaved', () => {
+  const s = backupState({
+    hasData: true,
+    lastBackupAt: '2026-08-20T08:00:00.000Z',
+    changedAt: '2026-08-20T11:00:00.000Z',
+    now: NOW,
+  });
+  assert.equal(s.unsaved, true, 'the timestamp, not the date, decides');
+  assert.equal(s.level, 'ok', 'but it is not overdue yet, so no nag');
+});
+
+test('backupState: a legacy date-only backup stamp errs towards nagging', () => {
+  const s = backupState({
+    hasData: true,
+    lastBackupAt: '2026-08-20',                 // old date-only key
+    changedAt: '2026-08-20T11:00:00.000Z',
+    now: NOW,
+  });
+  assert.equal(s.unsaved, true);
+});
+
+test('backupState: never backed up escalates from first use', () => {
+  const fresh = backupState({ hasData: true, lastBackupAt: '', firstUseAt: '2026-08-18', now: NOW });
+  assert.equal(fresh.never, true);
+  assert.equal(fresh.unsaved, true);
+  assert.equal(fresh.level, 'ok', 'two days in, do not pounce on a new user');
+
+  const old = backupState({ hasData: true, lastBackupAt: '', firstUseAt: '2026-01-01', now: NOW });
+  assert.equal(old.level, 'urgent', 'months of use and no file ever saved is the worst case');
+  assert.ok(old.days > BACKUP_URGENT_DAYS);
+});
+
+test('backupSnoozeDays: dismissing buys less time the more overdue you are', () => {
+  assert.equal(backupSnoozeDays('due'), 7);
+  assert.equal(backupSnoozeDays('urgent'), 1);
+});
+
+test('oldestCreatedAt: dates a device from its earliest trip, not the newest', () => {
+  const events = [{ createdAt: '2026-03-01T00:00:00.000Z' }, { createdAt: '2025-07-14T00:00:00.000Z' }];
+  const lists = [{ createdAt: '2026-01-05T00:00:00.000Z' }];
+  assert.equal(oldestCreatedAt(events, lists), '2025-07-14T00:00:00.000Z');
+  assert.equal(oldestCreatedAt([], [{}]), '', 'rows with no stamp contribute nothing');
 });

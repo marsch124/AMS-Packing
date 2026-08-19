@@ -2073,3 +2073,79 @@ export function totalListRows(event, lists) {
   return rows;
 }
 
+// --- Backup reminders (#13) --------------------------------------------------
+// Safari has no File System Access API, so the app CANNOT silently write a backup
+// file into a folder on the Mac — that trick is Chrome/Edge only. The Safari-honest
+// answer is to make the reminder do the work instead: it escalates until you save,
+// and saving is one tap from wherever you happen to see it.
+//
+// The signal is deliberately "have you changed anything since your last backup?",
+// not the calendar alone. A quiet month with nothing edited is not a risk and
+// should stay silent; a busy fortnight with no saved file is, and should not.
+
+export const BACKUP_DUE_DAYS = 14;     // amber: worth saving a fresh file
+export const BACKUP_URGENT_DAYS = 45;  // red: this is now a real risk
+
+// How long the dismiss (x) buys, in days — deliberately shorter the more overdue
+// you are, so a badly-out-of-date backup can't be waved away week after week.
+export function backupSnoozeDays(level) {
+  return level === 'urgent' ? 1 : 7;
+}
+
+// The oldest `createdAt` across the same groups — how long this device has been
+// in real use. Matters for someone who has NEVER saved a backup: without it, the
+// reminder would start counting from the day this version was installed and give
+// a years-old unprotected catalogue a clean bill of health for a fortnight.
+export function oldestCreatedAt(...groups) {
+  let oldest = '';
+  for (const group of groups || []) {
+    for (const row of group || []) {
+      const v = row && typeof row.createdAt === 'string' ? row.createdAt : '';
+      if (v && (!oldest || v < oldest)) oldest = v;
+    }
+  }
+  return oldest;
+}
+
+// The newest timestamp across everything the user can change, from any number of
+// row groups (events, templates, to-dos, kits). Lets the reminder tell "nothing
+// has happened since the backup" from "a fortnight of work is unsaved".
+export function newestChangeAt(...groups) {
+  let newest = '';
+  for (const group of groups || []) {
+    for (const row of group || []) {
+      if (!row) continue;
+      for (const key of ['updatedAt', 'createdAt']) {
+        const v = typeof row[key] === 'string' ? row[key] : '';
+        if (v > newest) newest = v;
+      }
+    }
+  }
+  return newest;
+}
+
+// Where the user stands on backups.
+//   level   'ok'      nothing to nag about (no data, or nothing changed since)
+//           'due'     unsaved changes and no fresh file for a while
+//           'urgent'  unsaved changes and badly overdue
+//   days    whole days since the last backup — or since first use, when there
+//           has never been one, so "never backed up" escalates too
+//   never   true when no backup file has ever been saved
+//   unsaved true when something changed after the last backup was taken
+export function backupState({
+  lastBackupAt = '', changedAt = '', firstUseAt = '', hasData = false, now = '',
+} = {}) {
+  const today = (now || new Date().toISOString()).slice(0, 10);
+  const never = !lastBackupAt;
+  if (!hasData) return { level: 'ok', days: null, never, unsaved: false };
+  // A backup timestamp may be a legacy date-only string; comparing ISO text still
+  // orders correctly, and same-day edits read as unsaved — the safe direction.
+  const unsaved = never || !changedAt || changedAt > lastBackupAt;
+  const since = lastBackupAt || firstUseAt || changedAt || today;
+  const raw = daysBetween(String(since).slice(0, 10), today);
+  const days = raw == null ? 0 : Math.max(0, raw);
+  if (!unsaved) return { level: 'ok', days, never, unsaved: false };
+  const level = days >= BACKUP_URGENT_DAYS ? 'urgent' : days >= BACKUP_DUE_DAYS ? 'due' : 'ok';
+  return { level, days, never, unsaved: true };
+}
+

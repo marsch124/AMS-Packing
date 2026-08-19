@@ -18,6 +18,7 @@ import {
   PERSON_COLORS, coercePerson, newPerson, personColor, assignedPeople,
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
+  backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
 } from './model.js';
 import * as db from './db.js';
 import * as weather from './weather.js';
@@ -27,7 +28,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v105';
+const APP_VERSION = 'v106';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -106,9 +107,9 @@ const STORAGE_LOC_KEY = 'ams-storage-locations';
 //  (2) keep track of when the user last exported a backup and nudge them when
 //      it's been a while, since a saved file is the real insurance.
 const LAST_BACKUP_KEY = 'ams-last-backup';        // YYYY-MM-DD of the last JSON export
+const LAST_BACKUP_AT_KEY = 'ams-last-backup-at';  // full ISO timestamp of the same, so a same-day edit still counts as unsaved
+const FIRST_USE_KEY = 'ams-first-use';            // YYYY-MM-DD first launch, so "never backed up" can escalate too
 const BACKUP_NUDGE_SNOOZE_KEY = 'ams-backup-snooze'; // YYYY-MM-DD until which the home nudge stays hidden
-const BACKUP_STALE_DAYS = 30;                     // remind if the last backup is older than this
-const BACKUP_SNOOZE_DAYS = 7;                     // after "remind me later", stay quiet this long
 
 // Ask the browser to protect our storage from automatic eviction. Safe to call
 // every launch: it's a no-op once granted, and silently unsupported elsewhere.
@@ -124,7 +125,32 @@ async function storageProtected() {
   catch { return false; }
 }
 function lastBackupISO() { try { return localStorage.getItem(LAST_BACKUP_KEY) || ''; } catch { return ''; } }
-function markBackedUp() { try { localStorage.setItem(LAST_BACKUP_KEY, todayISO()); } catch { /* ignore */ } }
+// The precise moment of the last backup. Falls back to the older date-only key so
+// an existing install doesn't suddenly look as if it has never backed up.
+function lastBackupAt() {
+  try { return localStorage.getItem(LAST_BACKUP_AT_KEY) || lastBackupISO(); } catch { return ''; }
+}
+function markBackedUp() {
+  try {
+    localStorage.setItem(LAST_BACKUP_KEY, todayISO());
+    localStorage.setItem(LAST_BACKUP_AT_KEY, new Date().toISOString());
+    localStorage.removeItem(BACKUP_NUDGE_SNOOZE_KEY); // a fresh file clears any snooze
+  } catch { /* ignore */ }
+}
+// Remember when this device started being used, so someone who has never saved a
+// file still sees the reminder escalate instead of sitting on a gentle amber for
+// ever. On an install that predates this key, we date it from the OLDEST trip or
+// template rather than today — otherwise a years-old unprotected catalogue would
+// look brand new the day this version arrives, which is exactly backwards.
+function firstUseAt(oldestKnown = '') {
+  try {
+    const stored = localStorage.getItem(FIRST_USE_KEY) || '';
+    const seed = (oldestKnown && (!stored || oldestKnown < stored) ? oldestKnown : stored) || todayISO();
+    const ymd = String(seed).slice(0, 10);
+    if (ymd !== stored) localStorage.setItem(FIRST_USE_KEY, ymd);
+    return ymd;
+  } catch { return ''; }
+}
 // Whole days since the last backup, or null if one has never been made.
 function daysSinceBackup() {
   const iso = lastBackupISO();
@@ -132,21 +158,43 @@ function daysSinceBackup() {
   const ms = Date.now() - new Date(`${iso}T00:00:00`).getTime();
   return ms >= 0 ? Math.floor(ms / 86400000) : 0;
 }
-function snoozeBackupNudge() {
-  const until = new Date(Date.now() + BACKUP_SNOOZE_DAYS * 86400000).toISOString().slice(0, 10);
+function snoozeBackupNudge(level) {
+  const days = backupSnoozeDays(level);
+  const until = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
   try { localStorage.setItem(BACKUP_NUDGE_SNOOZE_KEY, until); } catch { /* ignore */ }
 }
 function backupNudgeSnoozed() {
   try { const u = localStorage.getItem(BACKUP_NUDGE_SNOOZE_KEY); return !!u && u > todayISO(); }
   catch { return false; }
 }
-// Show the home reminder only when there's real work to lose (at least one event)
-// and either no backup exists yet or it's gone stale — and it isn't snoozed.
-function shouldRemindBackup(events) {
-  if (!events || !events.length) return false;
-  if (backupNudgeSnoozed()) return false;
-  const d = daysSinceBackup();
-  return d === null || d >= BACKUP_STALE_DAYS;
+// Where this device stands on backups, from the data already loaded for the screen.
+// `hasData` is deliberately "at least one trip" — an empty install has nothing to lose.
+function currentBackupState(events, lists, actions) {
+  return backupState({
+    lastBackupAt: lastBackupAt(),
+    changedAt: newestChangeAt(events, lists, actions, ALL_KITS),
+    firstUseAt: firstUseAt(oldestCreatedAt(events, lists)),
+    hasData: !!(events && events.length),
+  });
+}
+
+// Save a dated backup FILE, in one tap, from wherever the user is. This is the
+// whole point of the reminder: Safari can't be handed a folder to write into, but
+// it can put a file straight in Downloads with no dialog, which is just as good a
+// safety net as long as it actually happens. Returns the filename, or '' on failure.
+async function saveBackupFile({ quiet = false } = {}) {
+  try {
+    const json = await db.exportJSON({ prefs: collectPrefs() });
+    const filename = `ams-packing-list-backup-${todayISO()}.json`;
+    downloadBlob(new Blob([json], { type: 'application/json' }), filename);
+    markBackedUp();  // note when we last backed up, to keep the reminder honest
+    if (!quiet) showToast(`Backup saved — look in your Downloads folder for ${filename}`, 5000);
+    return filename;
+  } catch (err) {
+    logDiag('backup-save-failed', err);
+    if (!quiet) showToast('Could not save the backup — please try again from Settings.', 5000);
+    return '';
+  }
 }
 
 // A plain-language one-liner for a set of backup counts ({items,templates,events,actions}).
@@ -972,16 +1020,40 @@ async function renderHome() {
     </a>`));
   }
 
-  // Backup reminder: a saved file is the real insurance for on-device data.
-  if (shouldRemindBackup(events)) {
-    const d = daysSinceBackup();
-    const msg = d === null ? 'you haven’t saved a backup yet' : `it’s been ${d} day${d === 1 ? '' : 's'} since your last one`;
-    const nudge = h(`<div class="nudge backup">
-      <span class="nudge-ic">${ic('save','md')}</span>
-      <a class="nudge-body" href="#/settings"><b>Back up your data</b> — ${esc(msg)}<span class="nudge-sub">Tap to open Settings → Export backup</span></a>
-      <button class="nudge-x" type="button" aria-label="Remind me later" title="Remind me later">${ic('close','sm')}</button>
+  // Backup reminder: a saved file is the real insurance for on-device data. It
+  // escalates (amber -> red) and saves the file itself in one tap, because the
+  // browser can't be trusted to do it silently — see saveBackupFile().
+  const bstate = currentBackupState(events, lists, actions);
+  if (bstate.level !== 'ok' && !backupNudgeSnoozed()) {
+    const urgent = bstate.level === 'urgent';
+    const d = bstate.days;
+    const msg = bstate.never
+      ? `you have never saved one — and you’ve been packing here for ${d} day${d === 1 ? '' : 's'}`
+      : `it’s been ${d} day${d === 1 ? '' : 's'}, and you’ve made changes since`;
+    const title = urgent ? 'Your data is not backed up' : 'Back up your data';
+    const sub = urgent
+      ? 'If this browser loses its data, everything since your last file goes with it. One tap saves it now.'
+      : 'One tap saves a dated file to your Downloads folder.';
+    const laterLabel = `Remind me ${backupSnoozeDays(bstate.level) === 1 ? 'tomorrow' : 'next week'}`;
+    const nudge = h(`<div class="nudge backup${urgent ? ' urgent' : ''}">
+      <span class="nudge-ic">${ic(urgent ? 'warn' : 'save','md')}</span>
+      <span class="nudge-body"><b>${esc(title)}</b> — ${esc(msg)}<span class="nudge-sub">${esc(sub)}</span></span>
+      <span class="nudge-acts">
+        <button class="btn sm nudge-save" type="button">${ic('save','sm')}<span>Save backup now</span></button>
+        <button class="nudge-x" type="button" aria-label="${esc(laterLabel)}" title="${esc(laterLabel)}">${ic('close','sm')}</button>
+      </span>
     </div>`);
-    nudge.querySelector('.nudge-x').addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); snoozeBackupNudge(); render(); });
+    nudge.querySelector('.nudge-save').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      const saved = await saveBackupFile();
+      if (saved) render(); else btn.disabled = false;
+    });
+    nudge.querySelector('.nudge-x').addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      snoozeBackupNudge(bstate.level);
+      render();
+    });
     wrap.appendChild(nudge);
   }
 
@@ -4469,7 +4541,9 @@ function howtoCard() {
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
- <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Export backup (JSON)</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. The app remembers your last backup and gives a gentle <b></b> reminder on the Home screen when it’s been a while. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
+ <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Save backup file</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
+        <p><b>The backup reminder, and why it nags.</b> Other browsers let an app write a backup file into a folder on your Mac by itself, silently, for ever. <b>Safari does not</b> — and Safari is where your packing list lives. So the app does the next best thing: instead of saving quietly behind your back, it <b>asks, and gets more insistent until you do it</b>. On the Home screen you’ll see an amber <b>Back up your data</b> card once you have unsaved changes and your last file is more than <b>${BACKUP_DUE_DAYS} days</b> old; past <b>${BACKUP_URGENT_DAYS} days</b> it turns <b>red</b> and says so plainly. Its <b>Save backup now</b> button does the whole job on the spot — no trip to Settings — and drops a dated file straight into your <b>Downloads</b> folder. The <b>×</b> hides it for a week while it’s amber, but only until <b>tomorrow</b> once it’s red, so a badly out-of-date backup can’t be waved away indefinitely.</p>
+        <p>Two things make the reminder honest rather than annoying. It counts <b>changes, not days</b>: if you haven’t touched anything since your last file, it stays silent however long that was — and it speaks up after a busy fortnight even though that feels recent. And <b>Settings → Your data</b> now tells you which of the two you are, saying either “nothing has changed since, so it’s still current” or “you’ve made changes since”. A date on its own was misleading: “3 days ago” looks perfectly safe even when you’ve built a whole trip since.</p>
         <p><b>Automatic backups.</b> On top of the file backups, the app quietly keeps recent <b>copies of your data on this device</b> — about one a day, and always one <b>just before any restore</b> — so a mistaken edit, an accidental delete or a wrong import is easy to undo. They’re in <b>Settings → Your data → Automatic backups</b>, each labelled with when it was taken and what it holds; tap <b>Restore</b> on any copy, or <b>Save a copy now</b> whenever you like. This safety net is careful never to record an empty database over real data and never to clear your richest copy. And when you tap <b>Import backup</b>, the app now <b>shows exactly what’s in the file</b> — items, templates, trips, photos and the date — before changing anything, warning you first if a Replace would wipe most of your data. These on-device copies protect against mistakes; a saved backup <b>file</b> is still your insurance against losing the device itself.</p>
 
         <h3>Maintenance mode — the whole-database overview</h3>
@@ -4491,6 +4565,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v106', '2026-08-20 · 09:00 UTC', false, 'A backup reminder that won’t let you forget — and saves the file in one tap',
+      'Your data lives in the browser, so a saved backup <b>file</b> is the one thing that survives losing it. Other browsers let an app write that file into a folder on your Mac by itself; <b>Safari does not</b>, and Safari is where your packing list lives. So rather than a silent backup that would never actually run, this release makes the <b>reminder</b> do the work. <b>(1) One tap, wherever you see it.</b> The Home reminder now carries its own <b>Save backup now</b> button — no more opening Settings and hunting for the export. The dated file lands straight in your <b>Downloads</b> folder. <b>(2) It escalates.</b> Amber once you have unsaved changes and no file for a fortnight; <b>red</b>, and worded plainly, past six weeks. Dismissing it buys a week while it is amber, but only until tomorrow once it is red — so an old backup can no longer be waved away month after month. <b>(3) It counts changes, not days.</b> If you have not touched anything since your last file, the app stays quiet however long it has been; if you have built a trip since this morning, it says so. <b>(4) Settings tells you the truth.</b> The data card no longer just prints a date — it says either “nothing has changed since, so it’s still current” or “you’ve made changes since”. A bare date was misleading: “3 days ago” looks perfectly safe even when a whole trip has been added since.',
+      'The backup that actually protects you is the one you remember to take — so the app now remembers for you, and makes it a single tap.'),
     v('v105', '2026-08-19 · 23:30 UTC', false, 'Photos stay on their own device — and the guide explains why',
       'A decision, now settled and written down. <b>Photos stay on the device that took them</b> and are never uploaded. What travels instead is the small <b>thumbnail</b> each item carries \u2014 so your lists, your Care screen and your item rows look identical on both devices; you just cannot open a full-size photo on a device that did not take it. The reason is size: your entire catalogue \u2014 hundreds of items with every template, trip, to-do and kit \u2014 is about a megabyte, while the photos can be twenty or thirty times that. Syncing them would make every sync slow and eat the storage allowance many times over, to show you a picture the thumbnail already identifies. Photos are still saved in full inside your <b>exported backup file</b>, so they remain properly backed up. The <b>How it works</b> guide now covers all of this in its own section, and \u2014 for future reference \u2014 records what the syncing actually <em>is</em>: <b>Dexie Cloud</b>, a small hosted service built for offline-first apps, tied to your e-mail address, on its free tier. It also notes the reassuring part: the app is local-first, so if that service ever disappeared, everything would keep working exactly as it does now.',
       'The one place your devices deliberately differ is now explained properly \u2014 and a future you will be able to find out what the sync service is without having to go digging.'),
@@ -5234,14 +5311,19 @@ async function renderSettings() {
   wrap.appendChild(h('<div class="topbar"><h1>Settings</h1></div>'));
 
   const protectedNow = await storageProtected();
-  const [curCounts, usedLabel, snapshots] = await Promise.all([
+  const [curCounts, usedLabel, snapshots, bEvents, bLists, bActions] = await Promise.all([
     db.currentCounts(), storageUsedLabel(), db.listSnapshots(),
+    db.getEvents(), db.getLists(), db.getActions(),
   ]);
   const dsb = daysSinceBackup();
+  const bstate = currentBackupState(bEvents, bLists, bActions);
+  // Say plainly whether the saved file still matches what's in the app — "3 days
+  // ago" reads as safe even when a whole trip has been built since.
   const backupStatus = dsb === null
-    ? '<b class="warn-txt">No backup saved yet</b> — export one and keep it somewhere safe (Files / iCloud Drive).'
-    : dsb === 0 ? 'Last backup: <b>today</b>.'
-    : `Last backup: <b>${dsb} day${dsb === 1 ? '' : 's'} ago</b>${dsb >= BACKUP_STALE_DAYS ? ' — <b class="warn-txt">time for a fresh one</b>.' : '.'}`;
+    ? `${ic('warn','sm')}<b class="warn-txt">No backup file saved yet</b> — save one and keep it somewhere safe (Files / iCloud Drive).`
+    : bstate.unsaved
+      ? `${ic('warn','sm')}Last backup: <b>${dsb === 0 ? 'today' : `${dsb} day${dsb === 1 ? '' : 's'} ago`}</b> — <b class="warn-txt">you’ve made changes since</b>, so save a fresh one.`
+      : `${ic('lock','sm')}Last backup: <b>${dsb === 0 ? 'today' : `${dsb} day${dsb === 1 ? '' : 's'} ago`}</b> — nothing has changed since, so it’s still current.`;
   const protectStatus = protectedNow
     ? `${ic('lock','sm')}<b>Storage protected</b> — the browser has been asked not to auto-delete your data.`
     : `${ic('warn','sm')}<b>Storage not yet protected</b> — <b>install</b> the app (iPhone: Share → Add to Home Screen; Mac: File → Add to Dock) so your data isn’t auto-deleted, and take regular backups.`;
@@ -5262,8 +5344,9 @@ async function renderSettings() {
     <p class="data-status">${ic('box','sm')}<b>${esc(countsSummary(curCounts))}</b>${usedLabel ? ` · ${esc(usedLabel)} used` : ''}</p>
     <p class="data-status">${protectStatus}</p>
     <p class="data-status">${backupStatus}</p>
+    <p class="muted small">Safari can’t be given a folder to save into automatically, so the app asks instead — the reminder on Home gets more insistent the longer your file is out of date, and saves it in one tap. The file lands in your <b>Downloads</b> folder; keep a copy in iCloud Drive.</p>
     <div class="btnrow">
-      <button class="btn" data-x="export">Export backup (JSON)</button>
+      <button class="btn" data-x="export">${ic('save','sm')}<span>Save backup file</span></button>
       <button class="btn" data-x="import">Import backup</button>
       <button class="btn" data-x="xlsxall">Export all events (Excel)</button>
       <button class="btn ghost" data-x="tidyphotos">Tidy up photos</button>
@@ -5565,9 +5648,7 @@ async function renderSettings() {
   card.addEventListener('click', async (e) => {
     const x = e.target.closest('[data-x]')?.dataset.x; if (!x) return;
     if (x === 'export') {
-      const json = await db.exportJSON({ prefs: collectPrefs() });
-      downloadBlob(new Blob([json], { type: 'application/json' }), `ams-packing-list-backup-${todayISO()}.json`);
-      markBackedUp();       // note when we last backed up, to keep the reminder honest
+      await saveBackupFile();
       render();             // refresh the "Last backup" status shown below
     } else if (x === 'import') { file.click(); }
     else if (x === 'xlsxall') { await exportAllEventsXlsx(); }
