@@ -4809,3 +4809,11 @@ table.grid {
 }
 @keyframes photo-wait { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .care-photo-wait { animation: none; } }
+
+/* Sub-headings inside the How-it-works guide (used by the sync section). */
+.howto h4 {
+  margin: 16px 0 6px;
+  font-size: .96rem;
+  font-weight: 700;
+  color: var(--brand);
+}

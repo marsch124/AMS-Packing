@@ -27,7 +27,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v104';
+const APP_VERSION = 'v105';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4322,11 +4322,34 @@ function howtoCard() {
         <p>Your catalogue can be kept in step across every device you use. Open <b>Settings \u2192 Sync your devices</b> and tap <b>Sign in to sync</b>: you type your e-mail, a <b>one-time code</b> arrives, and that's it \u2014 there is no password. Do the same on your other device and from then on the two match each other automatically.</p>
         <ul>
           <li><b>What travels:</b> your templates, items, trips, to-dos and kits \u2014 everything that makes up the catalogue.</li>
-          <li><b>What stays put:</b> your <b>photos</b> and the <b>automatic backups</b>. Photos are far bigger than everything else combined, and each item keeps its own small thumbnail (which does travel), so your lists still look right on both devices. The automatic backups are each device's private safety net \u2014 there is nothing to gain from copying them across.</li>
+          <li><b>What stays on the device:</b> your <b>photos</b> and the <b>automatic backups</b> (see below).</li>
           <li><b>Offline is fine.</b> Changes you make with no signal are queued and sent the moment you're back online.</li>
           <li><b>You are never locked out.</b> The app works fully without signing in \u2014 signing in only starts the sharing. Signing out on a device stops it syncing but leaves everything on it untouched.</li>
         </ul>
-        <p>None of this replaces your <b>backup file</b>. Syncing keeps two devices matched \u2014 which means a deletion travels too. An exported backup is still the thing that lets you go back to how it was.</p>
+
+        <h4>Photos stay on the device that took them \u2014 on purpose</h4>
+        <p>This is a deliberate decision, not a limitation, and it is worth understanding because it is the one place where your two devices are <em>meant</em> to differ.</p>
+        <p>When you photograph an item, the picture is stored on <b>that</b> device and stays there. It is never uploaded, and it will not appear on your other device.</p>
+        <p><b>What you do see everywhere:</b> every item carries a small <b>thumbnail</b> of its first photo, and that thumbnail <em>does</em> travel. So your lists, your Care screen and your item rows look exactly the same on both devices \u2014 you still see the little picture that tells you which jacket or which torch this is. What you cannot do is open the <b>full-size</b> photo on a device that did not take it.</p>
+        <p><b>Why it works this way:</b></p>
+        <ul>
+          <li><b>Size.</b> Photos are far larger than everything else put together. The whole rest of your catalogue \u2014 hundreds of items, every template, trip, to-do and kit \u2014 is around a megabyte. Your photos can be twenty or thirty times that. Syncing them would make every sync slow and would consume the storage allowance many times over, for pictures you can already identify from the thumbnail.</li>
+          <li><b>They rarely need to be shared.</b> A photo is usually taken to remind <em>you</em> what a thing looks like or where it lives. The thumbnail already does that job on the other device.</li>
+          <li><b>Nothing is lost.</b> Photos are still included in full in your <b>exported backup file</b>, so they are backed up properly \u2014 they simply do not travel over the wire between devices.</li>
+        </ul>
+        <p>The same reasoning applies to the <b>automatic backups</b>: those are each device's private safety net, and copying every device's backups onto every other device would help nobody.</p>
+        <p>If you want a photo on both devices, take it on both \u2014 or restore a backup file onto the second device, which does carry them.</p>
+
+        <h4>What the syncing actually is</h4>
+        <p>For future reference, since this is the one part of the app that is not entirely self-contained: syncing is provided by <b>Dexie Cloud</b> (<b>dexie.org/cloud</b>), a small hosted service built for exactly this kind of offline-first app. Your app database is <b>Dexie</b>, and Dexie Cloud is its own sync add-on \u2014 so the two fit together natively rather than being bolted on.</p>
+        <ul>
+          <li>The account is tied to <b>your e-mail address</b>, and signing in uses a one-time code rather than a password.</li>
+          <li>You are on the <b>free tier</b>, which covers a handful of users and a modest amount of storage \u2014 comfortably more than one person with two devices needs, especially with photos staying local.</li>
+          <li>Management, if it is ever needed, is at <b>manager.dexie.cloud</b>.</li>
+          <li><b>Nothing depends on it continuing to exist.</b> The app is local-first: your data lives on your devices and works offline whether or not the service is reachable. If Dexie Cloud ever went away, the app would carry on exactly as it does now \u2014 you would simply be back to moving a backup file between devices by hand.</li>
+        </ul>
+
+        <p><b>None of this replaces your backup file.</b> Syncing keeps two devices matched \u2014 which means a deletion travels too: delete something on the Mac and it goes on the iPhone as well. An exported backup is still the only thing that lets you go back to how it was.</p>
 
         <h3>Icons: the app's language vs your gear</h3>
         <p>There are two kinds of symbol in the app, and the difference is deliberate.</p>
@@ -4468,6 +4491,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v105', '2026-08-19 · 23:30 UTC', false, 'Photos stay on their own device — and the guide explains why',
+      'A decision, now settled and written down. <b>Photos stay on the device that took them</b> and are never uploaded. What travels instead is the small <b>thumbnail</b> each item carries \u2014 so your lists, your Care screen and your item rows look identical on both devices; you just cannot open a full-size photo on a device that did not take it. The reason is size: your entire catalogue \u2014 hundreds of items with every template, trip, to-do and kit \u2014 is about a megabyte, while the photos can be twenty or thirty times that. Syncing them would make every sync slow and eat the storage allowance many times over, to show you a picture the thumbnail already identifies. Photos are still saved in full inside your <b>exported backup file</b>, so they remain properly backed up. The <b>How it works</b> guide now covers all of this in its own section, and \u2014 for future reference \u2014 records what the syncing actually <em>is</em>: <b>Dexie Cloud</b>, a small hosted service built for offline-first apps, tied to your e-mail address, on its free tier. It also notes the reassuring part: the app is local-first, so if that service ever disappeared, everything would keep working exactly as it does now.',
+      'The one place your devices deliberately differ is now explained properly \u2014 and a future you will be able to find out what the sync service is without having to go digging.'),
     v('v104', '2026-08-19 · 22:30 UTC', false, 'Reset now works with the app open twice',
       'On the iPhone, <b>Replace this device with the account copy</b> could fail with "another tab or window still has the app open" — because emptying a browser database outright requires <b>exclusive</b> access, and on iOS the app is very often open in two places at once (a Safari tab <em>and</em> the Home Screen app). Rather than asking you to hunt down every open copy, the app now simply empties everything itself instead, which needs no exclusivity: your data, the sync bookkeeping, and any changes still queued to upload \u2014 so the next sign-in downloads a clean copy from your account. Your <b>automatic backups are deliberately kept</b>, since they live only on that device and are its own safety net.',
       'Starting a device fresh from your account now works first time, without having to close other windows.'),
