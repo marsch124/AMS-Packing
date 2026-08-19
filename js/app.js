@@ -27,7 +27,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v98';
+const APP_VERSION = 'v99';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4458,6 +4458,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v99', '2026-08-19 · 15:00 UTC', false, 'New engine room (groundwork for syncing your devices)',
+      'Nothing you can see changed in this release — but underneath, the part of the app that stores your data has been rebuilt on <b>Dexie</b>, a well-established database library. Your data itself was <b>not touched, moved or converted</b>: the app simply took over the database already on your device, exactly as it was. Every screen, every button and every backup behaves identically. <b>Why bother?</b> Because this is the foundation that makes <b>syncing your iPhone and your Mac</b> possible. The old hand-written storage code had no way to reconcile changes made in two places; Dexie does, and it is what the sync service builds on. Doing it as its own release — with <b>no syncing switched on yet and nothing leaving your device</b> — means the risky part (changing where your data lives) is proven on its own, before anything touches the internet. It was verified by taking a complete fingerprint of a full catalogue before the change and confirming it came back <b>identical</b> afterwards, down to every item, template, membership, trip, to-do, kit, snapshot and photograph.',
+      'The last piece of groundwork before your two devices can share a catalogue — done as an isolated, provable step so your data is never riding on two big changes at once.'),
     v('v98', '2026-08-19 · 12:00 UTC', false, 'Photos moved out of your items — and a real bug fixed',
       'Groundwork for syncing your iPhone and Mac, plus a genuine fix. <b>(1) Photos now live in their own place.</b> Until now every picture was stored <em>inside</em> the item that owned it, which meant the whole image was dragged along every time the app read your catalogue, saved a backup or took an automatic snapshot. Pictures are now kept once, on their own, and each item simply points at them — with a small thumbnail kept on the item so your lists still show a picture instantly. Nothing changes for you: photos look and work exactly as before. But an item is now roughly <b>eight times smaller</b>, and the automatic snapshots no longer carry a full copy of every photograph — which is what made them so big. The change happens by itself the first time you open this version. <b>(2) A real bug, fixed.</b> While testing the above I found that <b>restoring a backup or a snapshot silently threw away every item photo and every maintenance record</b>. The pictures and care schedules vanished with no warning, and it has been that way for a long time. Restores now keep both — with tests to make sure it stays fixed. <b>(3) Tidy up photos.</b> A new button in <b>Settings → Your data</b> frees any picture no item (and no snapshot) still needs — what gets left behind when you delete a photo or an item. Your data count now shows how many photos you have.',
       'Your catalogue got dramatically lighter — and a long-standing flaw that quietly stripped photos and care schedules out of every restore is now fixed and tested.'),

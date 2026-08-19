@@ -20,9 +20,13 @@ import {
   id as newId, isPhotoRef, inlinePhotos,
 } from './model.js';
 import { seedLists } from './seed.js';
+import Dexie from './vendor/dexie.mjs';
 
 const DB_NAME = 'ams-packing-list';
-const DB_VERSION = 6;               // v6: `photos` store (images split off the items); v5: `kits`; v4: `snapshots`; v3: `actions`; v2: relational stores
+// Dexie multiplies this by ten to get the IndexedDB version, so 1 → 10. The
+// hand-built database went up to 6; adopting it is therefore a normal upgrade.
+// Bump this (not the old DB_VERSION) when the SCHEMA below changes.
+const DEXIE_VERSION = 1;
 const ITEMS = 'items';
 const MEMBERSHIPS = 'memberships';
 const TEMPLATES = 'templates';
@@ -37,61 +41,71 @@ const MAX_SNAPSHOTS = 8;            // how many automatic snapshots to keep (plu
 const SEED_VERSION = 16;            // v16: rain-tagged Rain jacket in Hiking; v15: cold-tagged Insulated gloves/beanie + Balaclava in Hiking; v14: cold-tagged Warm gloves/beanie/hat in Travel base (for the Force-pack Cold toggle); v13: storage place on every item; v12: weights on every item; v11: seeded Containers catalogue
 const SEED_KEY = 'ams-seed-version';
 
+// Every store keyed by a plain `id` string — no secondary indexes, which matches
+// exactly how these stores were created by hand before Dexie. Declaring ALL of
+// them (including the legacy `lists` store) matters: Dexie DELETES any object
+// store missing from the schema when it upgrades.
+const SCHEMA = {
+  [LISTS]: 'id',
+  [EVENTS]: 'id',
+  [ITEMS]: 'id',
+  [MEMBERSHIPS]: 'id',
+  [TEMPLATES]: 'id',
+  [ACTIONS]: 'id',
+  [KITS]: 'id',
+  [SNAPSHOTS]: 'id',
+  [PHOTOS]: 'id',
+};
+
+let _db = null;
+// Opens (and on first run, adopts) the database. Dexie can take over a database
+// created by hand — which is what this one is — as long as the schema it declares
+// matches the stores already there. It multiplies its own version by ten, so
+// DEXIE_VERSION 1 means IndexedDB version 10; the hand-built database stopped at
+// 6, so the first open with this build is a plain additive upgrade that creates
+// nothing and drops nothing.
 function open() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      // Additive migrations — existing data (incl. the legacy `lists` store) is preserved.
-      if (!db.objectStoreNames.contains(LISTS)) db.createObjectStore(LISTS, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(EVENTS)) db.createObjectStore(EVENTS, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(ITEMS)) db.createObjectStore(ITEMS, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(MEMBERSHIPS)) db.createObjectStore(MEMBERSHIPS, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(TEMPLATES)) db.createObjectStore(TEMPLATES, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(ACTIONS)) db.createObjectStore(ACTIONS, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(KITS)) db.createObjectStore(KITS, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(SNAPSHOTS)) db.createObjectStore(SNAPSHOTS, { keyPath: 'id' });
-      if (!db.objectStoreNames.contains(PHOTOS)) db.createObjectStore(PHOTOS, { keyPath: 'id' });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  if (_db) return _db.isOpen() ? Promise.resolve(_db) : _db.open().then(() => _db);
+  const d = new Dexie(DB_NAME);
+  d.version(DEXIE_VERSION).stores(SCHEMA);
+  _db = d;
+  return d.open().then(() => d);
 }
 
-// --- Low-level promise helpers ---
-function reqP(req) { return new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); }); }
-function txP(tx) { return new Promise((res, rej) => { tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); }); }
+// The live Dexie instance, for callers that want to run their own transaction.
+export function dexie() { return open(); }
 
+// --- Low-level helpers (same names and contracts as the hand-rolled versions) ---
 async function getAllRaw(store) {
   const db = await open();
-  return reqP(db.transaction(store, 'readonly').objectStore(store).getAll());
+  return db.table(store).toArray();
 }
 async function getOneRaw(store, key) {
   const db = await open();
-  return reqP(db.transaction(store, 'readonly').objectStore(store).get(key));
+  return db.table(store).get(key);
 }
 async function putOne(store, value) {
   const db = await open();
-  const tx = db.transaction(store, 'readwrite');
-  tx.objectStore(store).put(value);
-  await txP(tx);
+  await db.table(store).put(value);
   return value;
 }
 async function delOne(store, key) {
   const db = await open();
-  const tx = db.transaction(store, 'readwrite');
-  tx.objectStore(store).delete(key);
-  return txP(tx);
+  return db.table(store).delete(key);
 }
 // Apply a set of puts ({store,value}) and deletes ({store,key}) in ONE transaction.
 async function writeBatch(puts = [], dels = []) {
   const stores = [...new Set([...puts, ...dels].map((o) => o.store))];
   if (!stores.length) return;
   const db = await open();
-  const tx = db.transaction(stores, 'readwrite');
-  for (const p of puts) tx.objectStore(p.store).put(p.value);
-  for (const d of dels) tx.objectStore(d.store).delete(d.key);
-  return txP(tx);
+  return db.transaction('rw', stores, async () => {
+    for (const st of stores) {
+      const vals = puts.filter((x) => x.store === st).map((x) => x.value);
+      const keys = dels.filter((x) => x.store === st).map((x) => x.key);
+      if (vals.length) await db.table(st).bulkPut(vals);
+      if (keys.length) await db.table(st).bulkDelete(keys);
+    }
+  });
 }
 
 // --- Photos -----------------------------------------------------------------
@@ -115,8 +129,7 @@ export async function getPhotoMap(ids = []) {
   const out = new Map();
   if (!want.length) return out;
   const db = await open();
-  const store = db.transaction(PHOTOS, 'readonly').objectStore(PHOTOS);
-  const recs = await Promise.all(want.map((k) => reqP(store.get(k))));
+  const recs = await db.table(PHOTOS).bulkGet(want);   // aligned with `want`
   recs.forEach((rec, i) => { if (rec && typeof rec.data === 'string') out.set(want[i], rec.data); });
   return out;
 }
@@ -377,14 +390,14 @@ export async function getCatalogItems() {
 
 async function replaceCatalog(catalog) {
   const db = await open();
-  const tx = db.transaction([ITEMS, MEMBERSHIPS, TEMPLATES], 'readwrite');
-  tx.objectStore(ITEMS).clear();
-  tx.objectStore(MEMBERSHIPS).clear();
-  tx.objectStore(TEMPLATES).clear();
-  for (const i of catalog.items) tx.objectStore(ITEMS).put(i);
-  for (const m of catalog.memberships) tx.objectStore(MEMBERSHIPS).put(m);
-  for (const t of catalog.templates) tx.objectStore(TEMPLATES).put(coerceList({ ...t, items: [] }));
-  return txP(tx);
+  return db.transaction('rw', [ITEMS, MEMBERSHIPS, TEMPLATES], async () => {
+    await db.table(ITEMS).clear();
+    await db.table(MEMBERSHIPS).clear();
+    await db.table(TEMPLATES).clear();
+    await db.table(ITEMS).bulkPut(catalog.items);
+    await db.table(MEMBERSHIPS).bulkPut(catalog.memberships);
+    await db.table(TEMPLATES).bulkPut(catalog.templates.map((t) => coerceList({ ...t, items: [] })));
+  });
 }
 
 // Refresh built-in templates from the seed while preserving user-created templates,
@@ -502,23 +515,23 @@ async function applyBackup({ lists = [], events = [], actions = [], kits = [], p
   if (!merge) {
     await replaceCatalog(buildCatalog(L));
     const db = await open();
-    const tx = db.transaction([EVENTS, ACTIONS, KITS], 'readwrite');
-    tx.objectStore(EVENTS).clear();
-    for (const e of E) tx.objectStore(EVENTS).put(e);
-    tx.objectStore(ACTIONS).clear();
-    for (const a of A) tx.objectStore(ACTIONS).put(a);
-    tx.objectStore(KITS).clear();
-    for (const k of K) tx.objectStore(KITS).put(k);
-    await txP(tx);
+    await db.transaction('rw', [EVENTS, ACTIONS, KITS], async () => {
+      await db.table(EVENTS).clear();
+      if (E.length) await db.table(EVENTS).bulkPut(E);
+      await db.table(ACTIONS).clear();
+      if (A.length) await db.table(ACTIONS).bulkPut(A);
+      await db.table(KITS).clear();
+      if (K.length) await db.table(KITS).bulkPut(K);
+    });
   } else {
     for (const l of L) await saveList(l);
     if (E.length || A.length || K.length) {
       const db = await open();
-      const tx = db.transaction([EVENTS, ACTIONS, KITS], 'readwrite');
-      for (const e of E) tx.objectStore(EVENTS).put(e);
-      for (const a of A) tx.objectStore(ACTIONS).put(a);
-      for (const k of K) tx.objectStore(KITS).put(k);
-      await txP(tx);
+      await db.transaction('rw', [EVENTS, ACTIONS, KITS], async () => {
+        if (E.length) await db.table(EVENTS).bulkPut(E);
+        if (A.length) await db.table(ACTIONS).bulkPut(A);
+        if (K.length) await db.table(KITS).bulkPut(K);
+      });
     }
   }
   return { lists: L.length, events: E.length, actions: A.length, kits: K.length, photos: P.length };
