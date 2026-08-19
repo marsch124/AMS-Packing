@@ -17,11 +17,12 @@ import {
   coerceList, coerceEvent, coerceItem, coerceMembership, coerceAction, coerceKit, normName,
   resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
+  id as newId, isPhotoRef, inlinePhotos,
 } from './model.js';
 import { seedLists } from './seed.js';
 
 const DB_NAME = 'ams-packing-list';
-const DB_VERSION = 5;               // v5: adds the `kits` store (reusable bundles); v4: `snapshots`; v3: `actions`; v2: relational stores
+const DB_VERSION = 6;               // v6: `photos` store (images split off the items); v5: `kits`; v4: `snapshots`; v3: `actions`; v2: relational stores
 const ITEMS = 'items';
 const MEMBERSHIPS = 'memberships';
 const TEMPLATES = 'templates';
@@ -29,6 +30,7 @@ const EVENTS = 'events';
 const ACTIONS = 'actions';          // standalone to-do store (tied-to-item or loose)
 const KITS = 'kits';                // reusable bundles of items always packed together
 const SNAPSHOTS = 'snapshots';      // automatic on-device backup snapshots (a ring buffer)
+const PHOTOS = 'photos';            // item images, held once and referenced by id from items
 const LISTS = 'lists';              // legacy v1 store — read once to migrate, then ignored
 const MAX_SNAPSHOTS = 8;            // how many automatic snapshots to keep (plus the richest is never evicted)
 // Bump when the built-in seed data changes, to refresh the built-in templates on next load.
@@ -49,6 +51,7 @@ function open() {
       if (!db.objectStoreNames.contains(ACTIONS)) db.createObjectStore(ACTIONS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(KITS)) db.createObjectStore(KITS, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(SNAPSHOTS)) db.createObjectStore(SNAPSHOTS, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(PHOTOS)) db.createObjectStore(PHOTOS, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -89,6 +92,102 @@ async function writeBatch(puts = [], dels = []) {
   for (const p of puts) tx.objectStore(p.store).put(p.value);
   for (const d of dels) tx.objectStore(d.store).delete(d.key);
   return txP(tx);
+}
+
+// --- Photos -----------------------------------------------------------------
+// Item images used to live inline on the item as `data:` URLs. They now live
+// here, once each, and items reference them by id. The reason is size: a single
+// 900px JPEG is tens of KB, and inline they were copied into every catalog read,
+// every backup and every snapshot — which is what made snapshots enormous.
+//
+// An item still carries a small `thumb` (a few KB) so list rows render instantly
+// without touching this store; only the editor and the lightbox load full images.
+
+export async function getPhoto(photoId) {
+  if (!isPhotoRef(photoId)) return photoId || '';   // already an inline image (pre-migration)
+  const rec = await getOneRaw(PHOTOS, photoId);
+  return (rec && typeof rec.data === 'string') ? rec.data : '';
+}
+
+// Resolve many at once — one transaction, for the item editor.
+export async function getPhotoMap(ids = []) {
+  const want = [...new Set(ids.filter(isPhotoRef))];
+  const out = new Map();
+  if (!want.length) return out;
+  const db = await open();
+  const store = db.transaction(PHOTOS, 'readonly').objectStore(PHOTOS);
+  const recs = await Promise.all(want.map((k) => reqP(store.get(k))));
+  recs.forEach((rec, i) => { if (rec && typeof rec.data === 'string') out.set(want[i], rec.data); });
+  return out;
+}
+
+// Store one image and hand back its id.
+export async function savePhoto(dataURL) {
+  const rec = { id: newId(), data: String(dataURL || ''), createdAt: new Date().toISOString() };
+  await putOne(PHOTOS, rec);
+  return rec.id;
+}
+
+export async function photoCount() {
+  const all = await getAllRaw(PHOTOS);
+  return (all || []).length;
+}
+
+// Every photo id referenced by anything we must not break: live catalog items,
+// and the automatic snapshots (which store ids, not images). Used by the pruner
+// so restoring an old snapshot never lands on a missing picture.
+async function referencedPhotoIds() {
+  const [items, snaps] = await Promise.all([getAllRaw(ITEMS), getAllRaw(SNAPSHOTS)]);
+  const refs = new Set();
+  for (const it of (items || [])) for (const p of (it.photos || [])) if (isPhotoRef(p)) refs.add(p);
+  for (const s of (snaps || [])) {
+    for (const l of ((s.data && s.data.lists) || [])) {
+      for (const it of (l.items || [])) for (const p of (it.photos || [])) if (isPhotoRef(p)) refs.add(p);
+    }
+  }
+  return refs;
+}
+
+// Delete photo records nothing points at any more. Safe to call at any time;
+// returns how many were freed.
+export async function pruneOrphanPhotos() {
+  const [all, refs] = await Promise.all([getAllRaw(PHOTOS), referencedPhotoIds()]);
+  const dead = (all || []).filter((rec) => !refs.has(rec.id)).map((rec) => rec.id);
+  if (dead.length) await writeBatch([], dead.map((k) => ({ store: PHOTOS, key: k })));
+  return dead.length;
+}
+
+// One-time (and idempotent) move of any still-inline images into the photos
+// store, replacing them on the item with an id and generating the small thumb.
+//
+// Deliberately NOT done inside the IndexedDB upgrade transaction: making a
+// thumbnail needs a canvas, which is async, and an upgrade transaction cannot
+// wait. Instead this runs as a normal pass after open — so a half-finished run
+// simply resumes next time, and `coerceItem` tolerates both shapes meanwhile.
+//
+// `makeThumb` is injected by the caller (app.js owns the canvas work); without
+// it the images still move, they just don't get a thumbnail yet.
+export async function migrateInlinePhotos({ makeThumb } = {}) {
+  const items = (await getAllRaw(ITEMS)) || [];
+  const todo = items.filter((it) => inlinePhotos(it).length > 0 || (!it.thumb && (it.photos || []).length));
+  if (!todo.length) return { items: 0, photos: 0 };
+  let moved = 0;
+  for (const raw of todo) {
+    const it = coerceItem(raw);
+    const ids = [];
+    for (const p of (it.photos || [])) {
+      if (isPhotoRef(p)) { ids.push(p); continue; }
+      ids.push(await savePhoto(p));
+      moved++;
+    }
+    it.photos = ids;
+    if (!it.thumb && ids.length && typeof makeThumb === 'function') {
+      const first = await getPhoto(ids[0]);
+      if (first) { try { it.thumb = await makeThumb(first); } catch { /* a missing thumb is cosmetic */ } }
+    }
+    await putOne(ITEMS, it);
+  }
+  return { items: todo.length, photos: moved };
 }
 
 // --- Catalog read + resolve ---
@@ -332,9 +431,14 @@ export async function ensureSeeded() {
 // is a complete restore point. Photos/care/all item detail are already inside
 // `lists` because getLists() resolves the full item shape.
 export async function exportJSON(extra = {}) {
-  const [lists, events, actions, kits] = await Promise.all([getLists(), getEvents(), getActions(), getKits()]);
+  const [lists, events, actions, kits, photos] = await Promise.all([
+    getLists(), getEvents(), getActions(), getKits(), getAllRaw(PHOTOS),
+  ]);
+  // Items now reference their images by id, so the images must travel in their
+  // own array or a restore would come back picture-less. A backup stays a
+  // COMPLETE restore point — that is worth the file size.
   return JSON.stringify(
-    { app: 'ams-packing-list', version: 1, exportedAt: new Date().toISOString(), lists, events, actions, kits, ...extra },
+    { app: 'ams-packing-list', version: 2, exportedAt: new Date().toISOString(), lists, events, actions, kits, photos: photos || [], ...extra },
     null, 2,
   );
 }
@@ -357,32 +461,44 @@ export function inspectBackup(text) {
   const actions = Array.isArray(data.actions) ? data.actions.map(coerceAction) : [];
   const kits = Array.isArray(data.kits) ? data.kits.map(coerceKit) : [];
   const prefs = (data.prefs && typeof data.prefs === 'object') ? data.prefs : null;
-  let photos = 0;
-  for (const l of lists) for (const it of (l.items || [])) photos += (it.photos || []).length;
+  // Version 2 backups carry images in their own array; version 1 had them inline
+  // on the items. Count whichever this file uses so the "restoring N photos"
+  // guard reads correctly for both.
+  const photoRecs = Array.isArray(data.photos)
+    ? data.photos.filter((r) => r && typeof r.id === 'string' && typeof r.data === 'string')
+    : [];
+  let photos = photoRecs.length;
+  if (!photos) for (const l of lists) for (const it of (l.items || [])) photos += (it.photos || []).length;
   return {
     counts: backupCounts({ lists, events, actions }),
     exportedAt: typeof data.exportedAt === 'string' ? data.exportedAt : '',
     photos,
-    data: { lists, events, actions, kits, prefs },
+    data: { lists, events, actions, kits, prefs, photos: photoRecs },
   };
 }
 
 // Live counts of what's currently stored, for the "you'd be replacing …" guard.
 export async function currentCounts() {
-  const [items, tmpls, events, actions, kits] = await Promise.all([
-    getAllRaw(ITEMS), getAllRaw(TEMPLATES), getAllRaw(EVENTS), getAllRaw(ACTIONS), getAllRaw(KITS),
+  const [items, tmpls, events, actions, kits, photos] = await Promise.all([
+    getAllRaw(ITEMS), getAllRaw(TEMPLATES), getAllRaw(EVENTS), getAllRaw(ACTIONS), getAllRaw(KITS), getAllRaw(PHOTOS),
   ]);
-  return { items: (items || []).length, templates: (tmpls || []).length, events: (events || []).length, actions: (actions || []).length, kits: (kits || []).length };
+  return { items: (items || []).length, templates: (tmpls || []).length, events: (events || []).length, actions: (actions || []).length, kits: (kits || []).length, photos: (photos || []).length };
 }
 
 // Write an already-parsed backup payload into the stores. Shared by file import
 // and snapshot restore. Never called without the caller having taken (or chosen
 // to skip) a safety snapshot first.
-async function applyBackup({ lists = [], events = [], actions = [], kits = [] }, { merge = false } = {}) {
+async function applyBackup({ lists = [], events = [], actions = [], kits = [], photos = [] }, { merge = false } = {}) {
   const L = lists.map(coerceList);
   const E = events.map(coerceEvent);
   const A = actions.map(coerceAction);
   const K = kits.map(coerceKit);
+  // Images first, so the items that reference them never point at nothing — even
+  // if the write below fails half-way. Photos are keyed by id and never edited,
+  // so restoring them is always additive: a replace-restore must NOT clear this
+  // store, or a snapshot taken before the restore would lose its pictures.
+  const P = (photos || []).filter((r) => r && typeof r.id === 'string' && typeof r.data === 'string');
+  if (P.length) await writeBatch(P.map((r) => ({ store: PHOTOS, value: r })));
   if (!merge) {
     await replaceCatalog(buildCatalog(L));
     const db = await open();
@@ -405,7 +521,7 @@ async function applyBackup({ lists = [], events = [], actions = [], kits = [] },
       await txP(tx);
     }
   }
-  return { lists: L.length, events: E.length, actions: A.length, kits: K.length };
+  return { lists: L.length, events: E.length, actions: A.length, kits: K.length, photos: P.length };
 }
 
 export async function importJSON(text, { merge = false } = {}) {
@@ -429,6 +545,11 @@ export async function importJSON(text, { merge = false } = {}) {
 
 async function snapshotData(prefs) {
   const [lists, events, actions, kits] = await Promise.all([getLists(), getEvents(), getActions(), getKits()]);
+  // NOTE: no `photos` array here on purpose. Items reference images by id and the
+  // photos store is shared, so a snapshot only needs the ids — which is what
+  // `referencedPhotoIds()` reads, keeping any image an old snapshot still needs
+  // safe from the pruner. Before the split, every snapshot carried a full copy of
+  // every image; eight of those was the bulk of the app's storage use.
   return { lists, events, actions, kits, prefs: prefs || null };
 }
 

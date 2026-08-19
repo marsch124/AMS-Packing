@@ -23,6 +23,7 @@ import {
   newAction, coerceAction, shoppingReason, shoppingSuggestions, openShoppingCount, EXPIRY_SOON_DAYS,
   coercePerson, newPerson, personColor, assignedPeople, PERSON_COLORS,
   listEmoji, listColor, TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS,
+  isPhotoRef, photoRefs, inlinePhotos, hasInlinePhotos,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1688,4 +1689,73 @@ test('listColor: custom colour wins, else a stable palette pick from the id', ()
   const c2 = listColor(l);
   assert.equal(c1, c2);                       // stable
   assert.ok(TEMPLATE_COLORS.includes(c1));     // from the palette
+});
+
+// --- Photos split out of the item (v98) ---
+const DATA_URL = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
+
+test('isPhotoRef: ids are refs, data URLs are not', () => {
+  assert.equal(isPhotoRef('abc123'), true);
+  assert.equal(isPhotoRef(DATA_URL), false);
+  assert.equal(isPhotoRef(''), false);
+  assert.equal(isPhotoRef(null), false);
+});
+
+test('photoRefs / inlinePhotos split a mixed (mid-migration) item', () => {
+  const it = newItem({ name: 'Tent', photos: ['id-1', DATA_URL, 'id-2'] });
+  assert.deepEqual(photoRefs(it), ['id-1', 'id-2']);
+  assert.deepEqual(inlinePhotos(it), [DATA_URL]);
+  assert.equal(hasInlinePhotos([newItem({ name: 'A' }), it]), true);
+  assert.equal(hasInlinePhotos([newItem({ name: 'A', photos: ['id-9'] })]), false);
+});
+
+test('coerceItem keeps both photo shapes and defaults thumb to a string', () => {
+  const it = coerceItem(newItem({ name: 'Stove', photos: ['id-1', DATA_URL] }));
+  assert.deepEqual(it.photos, ['id-1', DATA_URL]);   // migration converts the inline one later
+  assert.equal(it.thumb, '');
+  assert.equal(coerceItem({ name: 'X', thumb: DATA_URL }).thumb, DATA_URL);
+});
+
+test('thumb + photo ids survive the catalog round-trip (edit propagates everywhere)', () => {
+  const src = newItem({ name: 'Lamp', photos: ['id-7'], thumb: DATA_URL });
+  const cat = catalogItemFromResolved(src);
+  assert.deepEqual(cat.photos, ['id-7']);
+  assert.equal(cat.thumb, DATA_URL);
+  // An edit to the shared item must carry both fields through applyIntrinsic.
+  const edited = newItem({ name: 'Lamp', photos: ['id-7', 'id-8'], thumb: 'data:image/jpeg;base64,QQ==' });
+  const back = applyIntrinsic(cat, edited);
+  assert.deepEqual(back.photos, ['id-7', 'id-8']);
+  assert.equal(back.thumb, 'data:image/jpeg;base64,QQ==');
+});
+
+// Regression: a replace-import and every snapshot restore rebuild the catalog
+// through buildCatalog(). Photos and the care record are intrinsic to the object,
+// so they MUST survive that rebuild — they used to be dropped silently, which
+// quietly stripped every picture and maintenance schedule from a restore.
+test('buildCatalog keeps photos, thumb and the care record through a restore', () => {
+  const withPhoto = newItem({
+    name: 'Dive light', photos: ['pid-1', 'pid-2'], thumb: DATA_URL,
+    maintenance: { notes: 'rinse in fresh water', intervalDays: 90, lastDone: '2026-06-01', log: [] },
+  });
+  const lists = [newList({ name: 'Diving', items: [withPhoto] })];
+  const { items } = buildCatalog(lists);
+  const back = items.find((i) => i.name === 'Dive light');
+  assert.deepEqual(back.photos, ['pid-1', 'pid-2']);
+  assert.equal(back.thumb, DATA_URL);
+  assert.ok(back.maintenance, 'the care record must survive the rebuild');
+  assert.equal(back.maintenance.intervalDays, 90);
+  assert.equal(back.maintenance.notes, 'rinse in fresh water');
+});
+
+test('buildCatalog merges same-named copies without losing the one that has a photo', () => {
+  const bare = newItem({ name: 'Torch' });
+  const rich = newItem({ name: 'Torch', photos: ['pid-9'], thumb: DATA_URL });
+  const { items } = buildCatalog([
+    newList({ name: 'A', items: [bare] }),
+    newList({ name: 'B', items: [rich] }),
+  ]);
+  const merged = items.filter((i) => i.name === 'Torch');
+  assert.equal(merged.length, 1, 'same-named items merge into one catalog entry');
+  assert.deepEqual(merged[0].photos, ['pid-9']);
+  assert.equal(merged[0].thumb, DATA_URL);
 });

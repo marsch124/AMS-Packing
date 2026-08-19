@@ -212,6 +212,30 @@ const todayYMD = (todayISO) => (todayISO || new Date().toISOString()).slice(0, 1
 
 // --- Shape guards (applied when reading from storage) ---
 
+// --- Photo references ------------------------------------------------------
+// Photos used to be stored inline on the item as `data:image/jpeg;base64,…`
+// strings. They are now held once in their own store and referenced by id, so
+// an item stays small: reading, writing, backing up or syncing the catalogue no
+// longer drags tens of megabytes of JPEG along with it.
+//
+// `isPhotoRef` is the discriminator both shapes are read through, so a database
+// part-way through the migration (or an old backup file) still renders.
+export function isPhotoRef(s) {
+  return typeof s === 'string' && !!s && !s.startsWith('data:');
+}
+// The ids on an item, ignoring anything still inline.
+export function photoRefs(item) {
+  return asArray(item && item.photos).filter(isPhotoRef);
+}
+// The inline `data:` images still on an item — what the migration has to move.
+export function inlinePhotos(item) {
+  return asArray(item && item.photos).filter((p) => typeof p === 'string' && p.startsWith('data:'));
+}
+// Does anything in this collection still carry an inline image?
+export function hasInlinePhotos(items) {
+  return asArray(items).some((it) => inlinePhotos(it).length > 0);
+}
+
 // How many photos a single item may hold — keeps the editor tidy and bounds
 // how large an exported/shared trip bundle can grow.
 export const MAX_PHOTOS = 5;
@@ -251,12 +275,22 @@ export function coerceItem(it) {
   // share bundle, and drives the "whose stuff" filter. Blank on catalog items.
   it.packer = typeof it.packer === 'string' ? it.packer : '';
   it.storage = typeof it.storage === 'string' ? it.storage : '';   // where it lives at home (free text)
-  // Pictures of the item, as resized data URLs. Canonical field is `photos`;
-  // a legacy single `photo` string is folded in and then dropped.
+  // Pictures of the item. `photos` holds REFERENCES (ids into the `photos` store),
+  // not the images themselves — the full JPEGs are far too big to ride along in
+  // every item read, write and (soon) sync. A legacy single `photo` string is
+  // folded in and then dropped.
+  //
+  // During the one-time migration this array may still hold inline `data:` URLs
+  // from before the split, so both shapes are tolerated here and `isPhotoRef()`
+  // tells them apart. Anything left inline is converted on next load.
   it.photos = asArray(it.photos).filter((p) => typeof p === 'string' && p);
   if (!it.photos.length && typeof it.photo === 'string' && it.photo) it.photos = [it.photo];
   if (it.photos.length > MAX_PHOTOS) it.photos = it.photos.slice(0, MAX_PHOTOS);
   delete it.photo;
+  // A small (≈140px) thumbnail of the first photo, kept ON the item so list rows
+  // — which are built synchronously in the hundreds — can show a picture without
+  // loading anything. A few KB each; the full images stay in the photos store.
+  it.thumb = typeof it.thumb === 'string' ? it.thumb : '';
   it.maintenance = normalizeMaintenance(it.maintenance);           // care record, or null when unused
   // Optional descriptive / ownership metadata (all intrinsic to the item itself).
   it.color = typeof it.color === 'string' ? it.color : '';
@@ -605,7 +639,8 @@ export function newItem(partial = {}) {
     kit: '',         // kit name this item is packed as part of ('' = none; contextual, like section)
     packer: '',      // who packs this on a trip (person name; '' = anyone) — trip-line only
     storage: '',     // where the physical item is kept at home (free text)
-    photos: [],      // pictures of the item, as resized data URLs (max MAX_PHOTOS)
+    photos: [],      // ids into the photos store (max MAX_PHOTOS)
+    thumb: '',       // small inline thumbnail of the first photo, for list rows
     maintenance: null, // care record (notes/link/schedule/log) — see normalizeMaintenance
     // Optional descriptive / ownership metadata (all intrinsic to the item):
     color: '', size: '', manufacturer: '', model: '', owner: '',
@@ -1644,6 +1679,7 @@ export function applyIntrinsic(cat, it) {
   cat.storage = it.storage || '';
   cat.sub = asArray(it.sub).slice();
   cat.photos = asArray(it.photos).slice();
+  cat.thumb = typeof it.thumb === 'string' ? it.thumb : '';
   cat.maintenance = it.maintenance || null;
   // Descriptive / ownership metadata — intrinsic, so it lives on the shared item.
   cat.color = it.color || '';
@@ -1677,7 +1713,7 @@ export function catalogItemFromResolved(it) {
     charging: !!it.charging, chargeType: it.chargeType || '',
     liquid: !!it.liquid, restricted: !!it.restricted, perNight: !!it.perNight, consumable: !!it.consumable, shortList: !!it.shortList,
     weight: it.weight || 0, storage: it.storage || '', sub: asArray(it.sub).slice(),
-    photos: asArray(it.photos).slice(), maintenance: it.maintenance || null, stats: it.stats,
+    photos: asArray(it.photos).slice(), thumb: it.thumb || '', maintenance: it.maintenance || null, stats: it.stats,
     color: it.color || '', size: it.size || '', manufacturer: it.manufacturer || '', model: it.model || '',
     owner: it.owner || '', acquired: it.acquired || '', price: it.price || 0, currency: it.currency || '',
     purchaseLink: it.purchaseLink || '', expiry: it.expiry || '', condition: it.condition || '',
@@ -1803,6 +1839,14 @@ function buildCatalogItem(copies) {
     weight: (copies.map((c) => Number(c.weight)).find((w) => w > 0)) || 0,
     storage: _firstNonEmpty(copies.map((c) => c.storage)),
     sub: longestSub.slice(),
+    // Photos and the care record are INTRINSIC — they describe the physical object,
+    // so they must survive being rebuilt from a backup. They were missing here,
+    // which meant a replace-import (and every snapshot restore, which uses the same
+    // path) silently dropped every picture and every maintenance schedule. Same
+    // "first copy that has one wins" rule as the metadata above.
+    photos: (copies.map((c) => asArray(c.photos)).find((a) => a.length) || []).slice(),
+    thumb: _firstNonEmpty(copies.map((c) => c.thumb)),
+    maintenance: copies.map((c) => c.maintenance).find((m) => m && typeof m === 'object') || null,
     // Descriptive / ownership metadata: first known value wins (intrinsic to the item).
     color: _firstNonEmpty(copies.map((c) => c.color)),
     size: _firstNonEmpty(copies.map((c) => c.size)),

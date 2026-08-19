@@ -3,6 +3,7 @@ import {
   CATEGORIES, CONTAINERS, CONTAINER_ROLE, CONTAINER_LIST_NAME, containerNames, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, normName, newItem, newList, newEvent,
   TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS, listEmoji, listColor,
+  isPhotoRef,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
@@ -26,7 +27,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v97';
+const APP_VERSION = 'v98';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -55,6 +56,29 @@ function readImageResized(file, maxEdge = 900, quality = 0.72) {
     img.src = url;
   });
 }
+
+// Shrink an existing data URL. Used to make the small `thumb` an item carries for
+// list rows — the full image stays in the photos store and is only loaded when
+// you actually open the item or the lightbox.
+const THUMB_EDGE = 140;
+function resizeDataURL(dataURL, maxEdge = THUMB_EDGE, quality = 0.6) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const hgt = Math.max(1, Math.round(img.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = hgt;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, hgt);
+      try { resolve(canvas.toDataURL('image/jpeg', quality)); }
+      catch (err) { reject(err); }
+    };
+    img.onerror = () => reject(new Error('Could not read that image.'));
+    img.src = dataURL;
+  });
+}
+const makeThumb = (dataURL) => resizeDataURL(dataURL);
 
 // Full-screen photo viewer: tap a thumbnail to enlarge, tap anywhere (or Esc) to close.
 function openPhotoLightbox(src) {
@@ -134,6 +158,7 @@ function countsSummary(c) {
     `${c.events} trip${c.events === 1 ? '' : 's'}`,
   ];
   if (c.actions) parts.push(`${c.actions} to-do${c.actions === 1 ? '' : 's'}`);
+  if (c.photos) parts.push(`${c.photos} photo${c.photos === 1 ? '' : 's'}`);
   return parts.join(' · ');
 }
 // Best-effort on-device storage used, for the data card. '' when unavailable.
@@ -3316,7 +3341,7 @@ function listItemRow(list, it, getOpen, setOpen, draw) {
     + `${openActionsForItem(it._itemId) ? `<span class="badge act" title="${esc(`${openActionsForItem(it._itemId)} open to-do${openActionsForItem(it._itemId) === 1 ? '' : 's'}`)}">${ic('checkbox','xs')}${openActionsForItem(it._itemId)}</span>` : ''}`
     + `${it.retired ? `<span class="badge retired" title="${esc('Not in use' + (it.retiredReason ? ` — ${retireReasonLabel(it.retiredReason)}` : '') + ' — kept on record, never added to a trip')}">${ic('ban','xs')}Not in use</span>` : ''}`
     + conditionBadgeHTML(it);
-  const thumb = (it.photos || []).length ? `<img class="row-thumb" src="${esc(it.photos[0])}" alt="">` : '';
+  const thumb = it.thumb ? `<img class="row-thumb" src="${esc(it.thumb)}" alt="">` : '';
   const row = h(`<div class="entry${it.retired ? ' retired' : ''}">
     ${thumb}
     <button class="entry-main" type="button">
@@ -3375,7 +3400,11 @@ function itemEditor(list, it, setOpen, draw) {
   // Care state that can't be read straight back from the DOM on save:
   //  - the photos are held here and only committed to the item on Save (so Cancel discards them),
   //  - the maintenance history log is edited via "Log done" and committed on Save.
-  let photos = (it.photos || []).slice();
+  // Each entry is { id, data }: `id` is the photos-store key ('' for one just
+  // added in this editor), `data` the full image. Existing photos start blank and
+  // are loaded in the background — the editor is built synchronously, so it draws
+  // once immediately and again when the images arrive.
+  let photos = (it.photos || []).map((ref) => (isPhotoRef(ref) ? { id: ref, data: '' } : { id: '', data: ref }));
   const m = it.maintenance || { notes: '', link: '', intervalDays: 0, lastDone: '', log: [] };
   let careLog = (m.log || []).slice();
   // Actions (to-dos) tied to this item, buffered here and committed on Save (so
@@ -3576,8 +3605,8 @@ function itemEditor(list, it, setOpen, draw) {
   const drawPhotos = () => {
     const box = $('[data-photos]', ed);
     const tiles = photos.map((p, i) => `
-      <div class="care-photo-tile">
-        <img src="${esc(p)}" alt="Photo ${i + 1}" data-photo-view="${i}">
+      <div class="care-photo-tile${p.data ? '' : ' loading'}">
+        ${p.data ? `<img src="${esc(p.data)}" alt="Photo ${i + 1}" data-photo-view="${i}">` : '<span class="care-photo-wait" aria-label="Loading photo"></span>'}
         <button type="button" class="care-photo-rm" data-photo-rm="${i}" title="Remove photo" aria-label="Remove photo ${i + 1}">${IC.close}</button>
       </div>`).join('');
     const addTile = photos.length < MAX_PHOTOS
@@ -3586,6 +3615,18 @@ function itemEditor(list, it, setOpen, draw) {
     box.innerHTML = tiles + addTile;
   };
   drawPhotos();
+  // Pull the full images in for the tiles above. Fire-and-forget: a failure just
+  // leaves the placeholder, and the ids on the item are untouched either way.
+  {
+    const needed = photos.filter((p) => p.id && !p.data).map((p) => p.id);
+    if (needed.length) {
+      db.getPhotoMap(needed).then((map) => {
+        let got = false;
+        for (const p of photos) if (p.id && !p.data && map.has(p.id)) { p.data = map.get(p.id); got = true; }
+        if (got) drawPhotos();
+      }).catch((err) => logDiag('photo-load', err));
+    }
+  }
   const drawHistory = () => {
     const box = $('[data-history]', ed);
     if (!careLog.length) { box.innerHTML = ''; return; }
@@ -3667,7 +3708,7 @@ function itemEditor(list, it, setOpen, draw) {
       let hitCap = false;
       for (const f of files) {
         if (photos.length >= MAX_PHOTOS) { hitCap = true; break; }
-        try { photos.push(await readImageResized(f)); }
+        try { photos.push({ id: '', data: await readImageResized(f) }); }
         catch { alert('Sorry — that image could not be read.'); }
       }
       drawPhotos();
@@ -3686,7 +3727,7 @@ function itemEditor(list, it, setOpen, draw) {
     const delRow = e.target.closest('[data-act-del]')?.closest('.act-row');
     if (delRow) { syncActionsFromDOM(); actions.splice(+delRow.dataset.actI, 1); drawActions(); return; }
     const viewIdx = e.target.closest('[data-photo-view]')?.dataset.photoView;
-    if (viewIdx != null) { openPhotoLightbox(photos[+viewIdx]); return; }
+    if (viewIdx != null) { const p = photos[+viewIdx]; if (p && p.data) openPhotoLightbox(p.data); return; }
     const rmIdx = e.target.closest('[data-photo-rm]')?.dataset.photoRm;
     if (rmIdx != null) { photos.splice(+rmIdx, 1); drawPhotos(); return; }
     const care = e.target.closest('[data-care]')?.dataset.care;
@@ -3742,7 +3783,18 @@ function itemEditor(list, it, setOpen, draw) {
         ? ($('input[name=storage-new]', ed).value || '').trim()
         : storageSel;
       if (it.storage) rememberStorageLoc(it.storage); // a new place joins the saved set
-      it.photos = photos.slice();
+      // Commit photos: anything new is written to the photos store and becomes an
+      // id, existing ones keep theirs. The item then holds only ids, plus a small
+      // thumbnail of the first for list rows.
+      const photoIds = [];
+      for (const p of photos) {
+        if (p.id) { photoIds.push(p.id); continue; }
+        if (!p.data) continue;
+        photoIds.push(await db.savePhoto(p.data));
+      }
+      it.photos = photoIds;
+      const firstData = photos.length ? (photos[0].data || await db.getPhoto(photos[0].id)) : '';
+      it.thumb = firstData ? await makeThumb(firstData).catch(() => '') : '';
       const isel = $('select[name=interval]', ed).value;
       const intervalDays = isel === 'custom' ? Math.max(0, parseInt($('input[name=customDays]', ed).value, 10) || 0) : (parseInt(isel, 10) || 0);
       it.maintenance = normalizeMaintenance({
@@ -4025,8 +4077,8 @@ function allItemsSection(lists) {
 function aiRow(it, list) {
   const care = maintenanceStatus(it);
   const nPhotos = (it.photos || []).length;
-  const thumb = nPhotos
-    ? `<span class="ai-thumb"><img src="${esc(it.photos[0])}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
+  const thumb = (nPhotos && it.thumb)
+    ? `<span class="ai-thumb"><img src="${esc(it.thumb)}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
     : `<span class="ai-thumb ph">${IC.wrench}</span>`;
   const bits = [esc(list.name)];
   if (it.owner) bits.push(`${ic('person','xs')}${esc(it.owner)}`);
@@ -4065,8 +4117,8 @@ function careRow(row, markDone) {
   const { item, listId, listName, status } = row;
   const m = item.maintenance || {};
   const nPhotos = (item.photos || []).length;
-  const thumb = nPhotos
-    ? `<span class="care-thumb"><img src="${esc(item.photos[0])}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
+  const thumb = (nPhotos && item.thumb)
+    ? `<span class="care-thumb"><img src="${esc(item.thumb)}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
     : `<span class="care-thumb ph ${status.state}">${careIcon(status.state)}</span>`;
   const bits = [esc(listName)];
   if (item.storage) bits.push(`${ic('pin','xs')}${esc(item.storage)}`);
@@ -4330,7 +4382,7 @@ function howtoCard() {
         <p>Every item can carry a few extra things about the <em>physical object</em>, set in its editor (in the <b>Templates</b> tab) — its <b>photos sit right beside the item name</b>, while where it's stored and how to look after it live in the <b>Storage &amp; maintenance</b> panel below:</p>
         <ul>
  <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b> or remove places — under <b>Storage places</b> in <b>Settings</b>.</li>
- <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one.</li>
+ <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one. Pictures are kept in their own place and the item just points at them, so your lists and backups stay quick; if you ever want to reclaim space, <b>Settings → Your data → Tidy up photos</b> frees any picture nothing uses any more.</li>
           <li><b>Maintenance</b> — how and how often to look after it: a <b>maintenance cadence</b> (monthly … every 2 years, or a custom number of days), when it was <b>last done</b>, free-text <b>how-to notes</b> (steps, products, settings), and a <b>how-to link</b>. Tap <b>Log done today</b> to record a service — it resets the schedule and adds a dated entry to the item's maintenance history.</li>
           <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b>, <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
  <li><b>Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>Not in use</b> tag, and the new <b>Not in use</b> filter chip rounds them all up. (This is different from <b>Condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
@@ -4406,6 +4458,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v98', '2026-08-19 · 12:00 UTC', false, 'Photos moved out of your items — and a real bug fixed',
+      'Groundwork for syncing your iPhone and Mac, plus a genuine fix. <b>(1) Photos now live in their own place.</b> Until now every picture was stored <em>inside</em> the item that owned it, which meant the whole image was dragged along every time the app read your catalogue, saved a backup or took an automatic snapshot. Pictures are now kept once, on their own, and each item simply points at them — with a small thumbnail kept on the item so your lists still show a picture instantly. Nothing changes for you: photos look and work exactly as before. But an item is now roughly <b>eight times smaller</b>, and the automatic snapshots no longer carry a full copy of every photograph — which is what made them so big. The change happens by itself the first time you open this version. <b>(2) A real bug, fixed.</b> While testing the above I found that <b>restoring a backup or a snapshot silently threw away every item photo and every maintenance record</b>. The pictures and care schedules vanished with no warning, and it has been that way for a long time. Restores now keep both — with tests to make sure it stays fixed. <b>(3) Tidy up photos.</b> A new button in <b>Settings → Your data</b> frees any picture no item (and no snapshot) still needs — what gets left behind when you delete a photo or an item. Your data count now shows how many photos you have.',
+      'Your catalogue got dramatically lighter — and a long-standing flaw that quietly stripped photos and care schedules out of every restore is now fixed and tested.'),
     v('v97', '2026-08-18 · 20:00 UTC', false, 'One unified icon set',
       'The app now speaks in <b>one visual language</b>. Every symbol that belongs to the <em>interface</em> — the item flags (charging, liquid, restricted, consumable, not-in-use, photo, owner, per-night), the badges, the quick-filter chips, the Home nudges, the Care states, the trip-setup tiles, the search results and the buttons — has been redrawn as a <b>hand-drawn line icon</b> in a single consistent weight, replacing the mixed bag of emoji that had built up over 96 versions. Because they’re drawn rather than typed, they <b>take on the colour of whatever section you’re in</b> (blue on Home, green on Events, purple on Templates…) and they look <b>exactly the same on every device</b> — no more Apple-vs-Android emoji roulette, and no more glyphs that sat slightly too high or too low next to their label. Around <b>45 new icons</b> were drawn for this. What deliberately <b>stays</b> as emoji is anything that identifies <b>your things</b>: the group headings on a packing list (Clothing, Checked luggage, Golf bag, Morning list), your <b>template covers</b> and your <b>kits</b> — those are colourful, instantly recognisable, and you choose them yourself. The rule is simple: <b>a line icon is the app talking; an emoji is your gear.</b> Weather keeps its own coloured glyphs. The <b>How it works</b> guide gains a short section explaining the distinction, and its wording no longer quotes icons that might change. Nothing about how the app works changed — it just looks like one designed thing now.',
       'The interface finally looks like a single designed product rather than 96 versions of accumulated emoji — and every icon renders identically on your Mac and your iPhone, in the colour of the section you’re in.'),
@@ -5099,6 +5154,7 @@ async function renderSettings() {
       <button class="btn" data-x="export">Export backup (JSON)</button>
       <button class="btn" data-x="import">Import backup</button>
       <button class="btn" data-x="xlsxall">Export all events (Excel)</button>
+      <button class="btn ghost" data-x="tidyphotos">Tidy up photos</button>
     </div>
     <input type="file" accept="application/json,.json" hidden>
   </div>`);
@@ -5403,6 +5459,13 @@ async function renderSettings() {
       render();             // refresh the "Last backup" status shown below
     } else if (x === 'import') { file.click(); }
     else if (x === 'xlsxall') { await exportAllEventsXlsx(); }
+    else if (x === 'tidyphotos') {
+      // Free images no item (and no snapshot) points at any more — what's left
+      // behind when you remove a photo or delete an item.
+      const freed = await db.pruneOrphanPhotos();
+      showToast(freed ? `Tidied up — ${freed} unused photo${freed === 1 ? '' : 's'} removed.` : 'Nothing to tidy — every photo is still in use.');
+      render();
+    }
   });
   file.addEventListener('change', async () => {
     const f = file.files[0]; if (!f) return;
@@ -6001,6 +6064,14 @@ function watchForUpdate(reg) {
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
   await db.ensureSeeded();
   ensurePersistentStorage(); // ask the browser to protect our data (non-blocking)
+  // Move any still-inline item photos into the photos store (one-time, resumable).
+  // Awaited BEFORE the first render so lists draw with their thumbnails already in
+  // place; it is a no-op on every load after the first, and a failure here must
+  // never stop the app from opening.
+  try {
+    const moved = await db.migrateInlinePhotos({ makeThumb });
+    if (moved.photos) logDiag('photos', { migrated: moved });
+  } catch (err) { logDiag('photo-migration', err); }
   // Quietly keep an automatic on-device backup (roughly one a day), so a bad edit
   // or accidental delete is always recoverable. Non-blocking and self-guarded.
   db.maybeAutoSnapshot(collectPrefs()).catch(() => {});

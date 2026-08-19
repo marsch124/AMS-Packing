@@ -4792,3 +4792,20 @@ table.grid {
 .pack-cta span { display: inline-flex; align-items: center; gap: 6px; }
 .rd-val { display: inline-flex; align-items: center; gap: 4px; }
 .rd-val .ic { width: 18px; height: 18px; }
+
+/* A photo tile whose full image is still being read from the photos store. */
+.care-photo-tile.loading {
+  display: grid;
+  place-items: center;
+  background: var(--line);
+}
+.care-photo-wait {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--muted) 45%, transparent);
+  border-top-color: var(--muted);
+  animation: photo-wait .7s linear infinite;
+}
+@keyframes photo-wait { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .care-photo-wait { animation: none; } }
