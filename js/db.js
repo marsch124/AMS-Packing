@@ -130,6 +130,7 @@ export async function signIn() {
 // connected would be read as "the user deleted all of this" and dutifully
 // replicated to every other device. Signing out first makes it a purely local act.
 const AWAITING_CLOUD_KEY = 'ams-awaiting-cloud';
+function logResetFailure(err) { try { console.error('AMS Packing: reset failed', err); } catch { /* ignore */ } }
 export async function resetFromCloud() {
   if (!syncEnabled()) throw new Error('Syncing is not switched on in this build.');
   // Set BEFORE the wipe. After the reload this device is empty AND signed out,
@@ -140,28 +141,39 @@ export async function resetFromCloud() {
   try { localStorage.setItem(AWAITING_CLOUD_KEY, '1'); } catch { /* ignore */ }
   const db = await open();
   // Signing out must never be able to strand the reset. `logout()` can hang
-  // (offline, or already signed out), and an un-awaited hang here would mean the
-  // database is never closed and therefore never deleted — leaving the device in
-  // exactly the broken half-state this button exists to fix. Cap it and move on.
+  // (offline, or already signed out), and an un-awaited hang here would leave the
+  // device in exactly the broken half-state this button exists to fix. Cap it.
   const withTimeout = (p, ms) => Promise.race([
     Promise.resolve(p).catch(() => {}),
     new Promise((res) => setTimeout(res, ms)),
   ]);
-  try { await withTimeout(db.cloud.logout(), 5000); } catch { /* the delete below is the point */ }
-  try { db.close(); } catch { /* ignore */ }
-  _db = null;
-  // `deleteDatabase` blocks while any connection is still open, so give it a
-  // deadline too and report honestly rather than hanging.
-  const deleted = await new Promise((res) => {
-    let settled = false;
-    const done = (v) => { if (!settled) { settled = true; res(v); } };
-    const req = indexedDB.deleteDatabase(DB_NAME);
-    req.onsuccess = () => done(true);
-    req.onerror = () => done(false);
-    req.onblocked = () => done(false);
-    setTimeout(() => done(false), 8000);
-  });
-  return deleted;
+  try { await withTimeout(db.cloud.logout(), 5000); } catch { /* clearing below is the point */ }
+  // NOTE: this deliberately does NOT call `indexedDB.deleteDatabase()`.
+  //
+  // Deleting requires EXCLUSIVE access, and on iOS the app is routinely open in
+  // two places at once (a Safari tab and the Home Screen app), so the delete just
+  // blocks. Worse, a blocked delete request stays QUEUED and then blocks every
+  // later transaction — including any attempt to clean up a gentler way — which
+  // wedges the app completely. Emptying the tables achieves exactly the same
+  // result, needs no exclusivity, and cannot deadlock.
+  //
+  // Everything goes: the app's own tables, the addon's sync bookkeeping
+  // ($baseRevs / $syncState / $logins / realms / members / roles) so the next
+  // sign-in re-downloads from scratch instead of believing it is already current,
+  // and every `$<table>_mutations` queue so nothing pending is ever pushed up.
+  // `snapshots` is deliberately KEPT — it is this device's own local safety net
+  // and never syncs, so there is no reason to destroy it.
+  try {
+    const db2 = await open();
+    const targets = db2.tables.filter((t) => t.name !== SNAPSHOTS);
+    await db2.transaction('rw', targets, async () => {
+      for (const t of targets) await t.clear();
+    });
+    return true;
+  } catch (err) {
+    logResetFailure(err);
+    return false;
+  }
 }
 
 // Sign out on THIS device. Local data stays; it simply stops syncing.

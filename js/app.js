@@ -27,7 +27,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v103';
+const APP_VERSION = 'v104';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4468,6 +4468,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v104', '2026-08-19 · 22:30 UTC', false, 'Reset now works with the app open twice',
+      'On the iPhone, <b>Replace this device with the account copy</b> could fail with "another tab or window still has the app open" — because emptying a browser database outright requires <b>exclusive</b> access, and on iOS the app is very often open in two places at once (a Safari tab <em>and</em> the Home Screen app). Rather than asking you to hunt down every open copy, the app now simply empties everything itself instead, which needs no exclusivity: your data, the sync bookkeeping, and any changes still queued to upload \u2014 so the next sign-in downloads a clean copy from your account. Your <b>automatic backups are deliberately kept</b>, since they live only on that device and are its own safety net.',
+      'Starting a device fresh from your account now works first time, without having to close other windows.'),
     v('v103', '2026-08-19 · 21:30 UTC', false, 'Finishing the sync safety net',
       'A follow-up to v102. <b>Replace this device with the account copy</b> empties the device and then reloads it \u2014 at which point the app saw an empty database and helpfully filled it with the starter templates again, which would then have been uploaded as a second catalogue the next time you signed in. The app now remembers that the device is <b>deliberately</b> waiting for the account\u2019s copy, and will not put anything in its place: it stays empty until you sign in and your real catalogue arrives. Nothing else changed.',
       'The "start this device again from the account" button now actually leaves you with the account\u2019s catalogue, instead of quietly recreating the one you just cleared.'),
