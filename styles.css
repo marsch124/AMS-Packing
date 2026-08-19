@@ -2598,30 +2598,104 @@ a.rd-stat.rd-link::after {
 }
 
 /* Settings group heading — a quiet label separating the runs of folds, so the
-   tab reads as an index rather than one long stack of cards. */
+   tab reads as an index rather than one long stack of cards. It borrows the
+   colour of the section below it and hangs a short rule off the text. */
 .set-group {
-  margin: 22px 4px 8px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 22px 4px 9px;
   font-size: .72rem;
   font-weight: 700;
   letter-spacing: .09em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--tone) 78%, var(--muted));
+}
+.set-group::after {
+  content: '';
+  flex: 1;
+  height: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to right, color-mix(in srgb, var(--tone) 40%, transparent), transparent);
 }
 .set-group:first-of-type { margin-top: 16px; }
 
-/* A folded settings card sits tighter than the guide it borrows its look from,
-   and its summary line stays on one line rather than wrapping the whole width.
-   The tighter padding is what lets thirteen sections read as one index. */
-.card.block.sset-card { padding: 11px 14px; margin-bottom: 8px; }
-.sset > summary { padding: 2px 0; }
+/* --- A folded settings section ------------------------------------------------
+   Each carries its own signature colour as `--tone`, set on the card. Closed, the
+   colour shows as a tinted icon chip; open, it takes over the card — border,
+   a faint wash, the chip filling solid — so you can see at a glance which section
+   you are inside. Tighter padding than a normal card is what lets thirteen of
+   these read as a single index. */
+.card.block.sset-card {
+  padding: 10px 13px;
+  margin-bottom: 8px;
+  border-left: 3px solid color-mix(in srgb, var(--tone) 30%, var(--line));
+  transition: background .16s, border-color .16s;
+}
+.card.block.sset-card.on {
+  border-color: color-mix(in srgb, var(--tone) 45%, var(--line));
+  border-left-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 5%, var(--card));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--tone) 15%, transparent);
+}
+
+/* The summary row: chip, text, chevron. Overrides the stacked guide layout. */
+.sset > summary {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 11px;
+  padding: 2px 0;
+}
+.sset-ic {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  transition: background .16s, color .16s;
+}
+.sset[open] .sset-ic { background: var(--tone); color: #fff; }
+.sset-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* The guide's inline ▸/▾ marker is dropped — these folds put the chevron on the
+   right instead. Written to out-specify `.howto[open] .howto-h::before`. */
+.howto.sset .howto-h::before,
+.howto.sset[open] .howto-h::before { content: none; }
+.sset[open] .howto-h { color: color-mix(in srgb, var(--tone) 72%, var(--ink)); }
 .sset .howto-sum {
+  margin-left: 0;
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* The wrapped card keeps its own spacing; drop the leading margin it had as a card. */
-.sset > .howto-body > p:first-child { margin-top: 0; }
+.sset-chev { flex: none; color: color-mix(in srgb, var(--tone) 55%, var(--muted)); display: inline-flex; }
+.sset-chev .ic { width: 18px; height: 18px; transition: transform .18s ease; }
+.sset[open] .sset-chev .ic { transform: rotate(90deg); }
+
+/* ...and the colour carries on INSIDE the open panel. Diagnostics brings its own
+   `.diag-body` rather than the shared `.howto-body`, so both are named here — miss
+   it and that one section silently loses its colour. */
+.sset[open] > .howto-body,
+.sset[open] > .diag-body {
+  border-top: 2px solid color-mix(in srgb, var(--tone) 32%, var(--line));
+  margin-top: 10px;
+  padding-top: 6px;
+}
+.sset[open] > .howto-body h3 { color: color-mix(in srgb, var(--tone) 75%, var(--ink)); }
+.sset[open] .btn:not(.primary):not(.danger-txt) {
+  border-color: color-mix(in srgb, var(--tone) 32%, var(--line));
+}
+.sset[open] .btn:not(.primary):not(.danger-txt):hover {
+  border-color: var(--tone);
+  color: var(--tone);
+}
+.sset[open] > .howto-body > p:first-child,
+.sset[open] > .diag-body > p:first-child { margin-top: 0; }
 
 .howto-body h3 {
   font-size: .95rem;

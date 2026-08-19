@@ -4541,6 +4541,7 @@ function howtoCard() {
 
         <h3>Finding your way round Settings</h3>
         <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
+        <p>Each section has its <b>own colour and icon</b>, fixed for good, so you come to know them by sight rather than by reading. Closed, the colour sits in the little icon tile; <b>open, it takes over the panel</b> — the tile fills in, and the heading, the edge and a faint wash of the background all follow — so you always know which section you are inside. The colour is an <em>identity</em>, not a warning light: it never changes to tell you something is wrong. When something does need attention, the app says so in words, and on the Home screen.</p>
         <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Storage places</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
         <h3>Your data &amp; privacy</h3>
@@ -4569,9 +4570,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
-    v('v107', '2026-08-20 · 12:00 UTC', false, 'Settings tidied — an index instead of a long stack',
-      'Settings had quietly grown to <b>thirteen cards</b>, and the three you touch least — syncing, backup files and the automatic on-device copies — sat right at the <b>top</b>, pushing Kits, People and Storage places below the fold. Two changes. <b>(1) Everything folds.</b> Each section is now a single line with a <b>summary of what’s inside</b> — “People: Martin, Anna”, “Storage places: 12 places”, “Backed up today — still current” — so you can take in the whole tab at a glance and open only what you need. Whatever you leave open <b>stays open next time</b>, so the sections you use often settle where you want them. The whole tab is now about <b>a page and a half instead of thirty</b>. <b>(2) A sensible running order.</b> Four groups: <b>Your packing setup</b> (Kits, People, Storage places, Trip presets, Shared trips) first because that is what you actually come here to change; then <b>Appearance</b>; then <b>Your data</b> (syncing, backup &amp; restore, automatic backups) — as important as ever, but touched about twice a year; and finally <b>Help &amp; about</b>. The database overview stays pinned at the top where it was. Nothing was removed and nothing moved out of Settings — every button is exactly where it was, one tap deeper.',
-      'You can see the whole of Settings at once again, and the things you actually change are at the top instead of buried under the things you don’t.'),
+    v('v107', '2026-08-20 · 12:00 UTC', false, 'Settings tidied — a colour-coded index instead of a long stack',
+      'Settings had quietly grown to <b>thirteen cards</b>, and the three you touch least — syncing, backup files and the automatic on-device copies — sat right at the <b>top</b>, pushing Kits, People and Storage places below the fold. Two changes. <b>(1) Everything folds.</b> Each section is now a single line with a <b>summary of what’s inside</b> — “People: Martin, Anna”, “Storage places: 12 places”, “Backed up today — still current” — so you can take in the whole tab at a glance and open only what you need. Whatever you leave open <b>stays open next time</b>, so the sections you use often settle where you want them. The whole tab is now about <b>a page and a half instead of thirty</b>. <b>(2) A sensible running order.</b> Four groups: <b>Your packing setup</b> (Kits, People, Storage places, Trip presets, Shared trips) first because that is what you actually come here to change; then <b>Appearance</b>; then <b>Your data</b> (syncing, backup &amp; restore, automatic backups) — as important as ever, but touched about twice a year; and finally <b>Help &amp; about</b>. The database overview stays pinned at the top where it was. Nothing was removed and nothing moved out of Settings — every button is exactly where it was, one tap deeper. <b>(3) A colour each.</b> Every section has its own <b>signature colour</b> and its own hand-drawn icon — violet Kits, blue People, teal Storage places, amber Trip presets, green Shared trips, and so on down. Closed, it shows as a tinted icon; <b>open, the colour takes over the whole panel</b> — the icon fills in solid, the heading and edge take the colour, and the panel itself carries a faint wash of it — so there is never any doubt which section you are inside, however far you have scrolled. The colours are fixed identities, not status lights: a section is the same colour whatever state it is in, so you learn it by sight.',
+      'You can see the whole of Settings at once again, the things you actually change are at the top instead of buried under the things you don’t, and each section is recognisable by colour before you have read a word.'),
     v('v106', '2026-08-20 · 09:00 UTC', false, 'A backup reminder that won’t let you forget — and saves the file in one tap',
       'Your data lives in the browser, so a saved backup <b>file</b> is the one thing that survives losing it. Other browsers let an app write that file into a folder on your Mac by itself; <b>Safari does not</b>, and Safari is where your packing list lives. So rather than a silent backup that would never actually run, this release makes the <b>reminder</b> do the work. <b>(1) One tap, wherever you see it.</b> The Home reminder now carries its own <b>Save backup now</b> button — no more opening Settings and hunting for the export. The dated file lands straight in your <b>Downloads</b> folder. <b>(2) It escalates.</b> Amber once you have unsaved changes and no file for a fortnight; <b>red</b>, and worded plainly, past six weeks. Dismissing it buys a week while it is amber, but only until tomorrow once it is red — so an old backup can no longer be waved away month after month. <b>(3) It counts changes, not days.</b> If you have not touched anything since your last file, the app stays quiet however long it has been; if you have built a trip since this morning, it says so. <b>(4) Settings tells you the truth.</b> The data card no longer just prints a date — it says either “nothing has changed since, so it’s still current” or “you’ve made changes since”. A bare date was misleading: “3 days ago” looks perfectly safe even when a whole trip has been added since.',
       'The backup that actually protects you is the one you remember to take — so the app now remembers for you, and makes it a single tap.'),
@@ -5327,9 +5328,15 @@ function settingsOpen(id, dflt = false) {
   const m = loadSettingsOpen();
   return id in m ? !!m[id] : dflt;
 }
-// `toggle` does not bubble, so this is wired per-fold rather than delegated.
+// `toggle` does not bubble, so this is wired per-fold rather than delegated. The
+// card also gets an `.on` class while open — the colour treatment hangs off that
+// rather than off `:has()`, which keeps it working on older Safari.
 function rememberFold(det, id) {
+  const card = det.closest('.sset-card');
+  const sync = () => { if (card) card.classList.toggle('on', det.open); };
+  sync();
   det.addEventListener('toggle', () => {
+    sync();
     try {
       const m = loadSettingsOpen();
       m[id] = det.open;
@@ -5338,36 +5345,77 @@ function rememberFold(det, id) {
   });
   return det;
 }
+// Every fold has its OWN signature colour — a fixed identity, not a status light,
+// so a section is recognisable by colour before you have read a word of it. The
+// colour is set once on the card as `--tone` and everything downstream reads it:
+// the icon chip, the card when open, and the panel inside it. Group headings take
+// the colour of the first section beneath them so the runs read as blocks.
+const SETTINGS_TONES = {
+  kits:        '#7c5cd6',  // violet
+  people:      '#2f6fe0',  // blue
+  places:      '#0a92a6',  // teal (the app's brand)
+  presets:     '#c9821a',  // amber
+  sharedtrips: '#2f9e63',  // green
+  theme:       '#d9459b',  // magenta
+  sync:        '#0ea5e9',  // sky
+  data:        '#dd7324',  // orange
+  snapshots:   '#0d9488',  // deep turquoise
+  howto:       '#4f46e5',  // indigo
+  vhist:       '#9333ea',  // purple
+  diag:        '#e11d48',  // rose
+  about:       '#64748b',  // slate
+};
+const toneOf = (t) => SETTINGS_TONES[t] || t || '#64748b';
+
+// The summary line shared by every fold: coloured icon chip, title + one-line
+// state, and a chevron that turns as it opens.
+function foldSummary(title, summaryText, icon) {
+  return `<summary>
+    <span class="sset-ic">${ic(icon || 'dot', 'md')}</span>
+    <span class="sset-txt">
+      <span class="howto-h">${esc(title)}</span>
+      <span class="howto-sum">${esc(summaryText || '')}</span>
+    </span>
+    <span class="sset-chev">${IC.fwd}</span>
+  </summary>`;
+}
+
 // Wrap an existing settings card in a fold WITHOUT moving its children: the card
 // element keeps every child (and therefore every handler already bound to it) and
 // simply becomes the fold's body. Its <h2> is lifted into the summary.
-function foldCard(id, cardEl, summaryText, defaultOpen = false) {
+function foldCard(id, cardEl, summaryText, { icon = 'dot', tone = null, open = false } = {}) {
   const h2 = cardEl.querySelector(':scope > h2');
   const title = h2 ? h2.textContent.trim() : id;
   if (h2) h2.remove();
   cardEl.classList.remove('card', 'block');
   cardEl.classList.add('howto-body');
-  const outer = h(`<div class="card block sset-card"><details class="howto sset" data-sset="${esc(id)}"${settingsOpen(id, defaultOpen) ? ' open' : ''}>
-    <summary><span class="howto-h">${esc(title)}</span><span class="howto-sum">${esc(summaryText || '')}</span></summary>
-  </details></div>`);
+  const outer = h(`<div class="card block sset-card" style="--tone:${toneOf(tone || id)}">
+    <details class="howto sset" data-sset="${esc(id)}"${settingsOpen(id, open) ? ' open' : ''}>
+      ${foldSummary(title, summaryText, icon)}
+    </details></div>`);
   const det = outer.querySelector('details');
   det.appendChild(cardEl);
   rememberFold(det, id);
   return outer;
 }
-// One of the already-folded cards (the guide, version history, diagnostics) —
-// they carry their own <details>, so they only need the id and the memory.
-function adoptFold(cardEl, id, defaultOpen = false) {
+// One of the already-folded cards (the guide, version history, diagnostics) — they
+// carry their own <details>, so their summary is rebuilt in place to match.
+function adoptFold(cardEl, id, { icon = 'dot', tone = null, open = false } = {}) {
   const det = cardEl.querySelector('details');
   if (!det) return cardEl;
   cardEl.classList.add('sset-card');
+  cardEl.style.setProperty('--tone', toneOf(tone || id));
   det.classList.add('sset');
   det.dataset.sset = id;
-  det.open = settingsOpen(id, defaultOpen);
+  const old = det.querySelector('summary');
+  const title = old?.querySelector('.howto-h')?.textContent.trim() || id;
+  const sum = old?.querySelector('.howto-sum')?.textContent.trim() || '';
+  if (old) old.outerHTML = foldSummary(title, sum, icon);
+  det.open = settingsOpen(id, open);
   rememberFold(det, id);
   return cardEl;
 }
-const settingsGroup = (label) => h(`<h3 class="set-group">${esc(label)}</h3>`);
+const settingsGroup = (label, tone) => h(`<h3 class="set-group" style="--tone:${toneOf(tone)}">${esc(label)}</h3>`);
 
 async function renderSettings() {
   const wrap = h('<section class="screen"></section>');
@@ -5772,41 +5820,46 @@ async function renderSettings() {
 
   wrap.appendChild(overviewLink);
 
-  wrap.appendChild(settingsGroup('Your packing setup'));
+  wrap.appendChild(settingsGroup('Your packing setup', 'kits'));
   wrap.appendChild(foldCard('kits', kitCard,
-    kits2.length ? nOf(kits2.length, 'kit', 'kits') : 'None yet — bundles you pack as one'));
+    kits2.length ? nOf(kits2.length, 'kit', 'kits') : 'None yet — bundles you pack as one',
+    { icon: 'toolbox' }));
   wrap.appendChild(foldCard('people', peopleCard,
-    people.length ? people.map((p) => p.name).join(', ') : 'None yet — for splitting who packs what'));
+    people.length ? people.map((p) => p.name).join(', ') : 'None yet — for splitting who packs what',
+    { icon: 'person' }));
   wrap.appendChild(foldCard('places', places, places2.length
     ? `${nOf(places2.length, 'place', 'places')} · ${places2.slice(0, 3).join(', ')}${places2.length > 3 ? '…' : ''}`
-    : 'None yet'));
+    : 'None yet', { icon: 'box' }));
   wrap.appendChild(foldCard('presets', presetCard,
-    presets2.length ? nOf(presets2.length, 'preset', 'presets') : 'None yet — save a trip’s setup to reuse'));
-  wrap.appendChild(foldCard('sharedtrips', trips, 'Import a trip someone sent you'));
+    presets2.length ? nOf(presets2.length, 'preset', 'presets') : 'None yet — save a trip’s setup to reuse',
+    { icon: 'star' }));
+  wrap.appendChild(foldCard('sharedtrips', trips, 'Import a trip someone sent you', { icon: 'share' }));
 
-  wrap.appendChild(settingsGroup('Appearance'));
-  wrap.appendChild(foldCard('theme', theme, themeLabel));
+  wrap.appendChild(settingsGroup('Appearance', 'theme'));
+  wrap.appendChild(foldCard('theme', theme, themeLabel, { icon: 'moon' }));
 
-  wrap.appendChild(settingsGroup('Your data'));
+  wrap.appendChild(settingsGroup('Your data', 'sync'));
   if (syncEl) {
     const syncSum = syncSt && syncSt.signedIn
       ? `Syncing as ${syncSt.user}`
       : 'Not syncing on this device';
-    wrap.appendChild(foldCard('sync', syncEl, syncSum));
+    wrap.appendChild(foldCard('sync', syncEl, syncSum, { icon: 'refresh' }));
   }
   wrap.appendChild(foldCard('data', card, dsb === null
     ? 'No backup file saved yet'
     : bstate.unsaved
       ? `Last backup ${dsb === 0 ? 'today' : `${nOf(dsb, 'day', 'days')} ago`} — changes since`
-      : `Backed up ${dsb === 0 ? 'today' : `${nOf(dsb, 'day', 'days')} ago`} — still current`));
+      : `Backed up ${dsb === 0 ? 'today' : `${nOf(dsb, 'day', 'days')} ago`} — still current`,
+    { icon: 'save' }));
   wrap.appendChild(foldCard('snapshots', snapCard,
-    snapshots.length ? `${nOf(snapshots.length, 'copy', 'copies')} on this device` : 'None yet'));
+    snapshots.length ? `${nOf(snapshots.length, 'copy', 'copies')} on this device` : 'None yet',
+    { icon: 'clock' }));
 
-  wrap.appendChild(settingsGroup('Help & about'));
-  wrap.appendChild(adoptFold(howtoEl, 'howto'));
-  wrap.appendChild(adoptFold(vhistEl, 'vhist'));
-  wrap.appendChild(adoptFold(diagCard, 'diag'));
-  wrap.appendChild(foldCard('about', about, `AMS Packing List · ${APP_VERSION}`));
+  wrap.appendChild(settingsGroup('Help & about', 'howto'));
+  wrap.appendChild(adoptFold(howtoEl, 'howto', { icon: 'list' }));
+  wrap.appendChild(adoptFold(vhistEl, 'vhist', { icon: 'sparkle' }));
+  wrap.appendChild(adoptFold(diagCard, 'diag', { icon: 'wrench' }));
+  wrap.appendChild(foldCard('about', about, `AMS Packing List · ${APP_VERSION}`, { icon: 'globe' }));
 
   return wrap;
 }
