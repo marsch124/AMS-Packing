@@ -20,7 +20,8 @@ import {
   id as newId, isPhotoRef, inlinePhotos,
 } from './model.js';
 import { seedLists } from './seed.js';
-import Dexie from './vendor/dexie.mjs';
+import { Dexie, dexieCloud } from './vendor/dexie-cloud.mjs';
+import { CLOUD, UNSYNCED_TABLES, syncEnabled } from './cloud-config.js';
 
 const DB_NAME = 'ams-packing-list';
 // Dexie multiplies this by ten to get the IndexedDB version, so 1 → 10. The
@@ -64,12 +65,59 @@ let _db = null;
 // DEXIE_VERSION 1 means IndexedDB version 10; the hand-built database stopped at
 // 6, so the first open with this build is a plain additive upgrade that creates
 // nothing and drops nothing.
+//
+// The cloud addon is attached ONLY when a database URL is configured. With none —
+// which is the shipped default — this is byte-for-byte the offline-only database
+// of the previous release: no addon, no network, nothing leaving the device.
 function open() {
   if (_db) return _db.isOpen() ? Promise.resolve(_db) : _db.open().then(() => _db);
-  const d = new Dexie(DB_NAME);
+  const cloud = syncEnabled();
+  const d = cloud ? new Dexie(DB_NAME, { addons: [dexieCloud] }) : new Dexie(DB_NAME);
   d.version(DEXIE_VERSION).stores(SCHEMA);
+  if (cloud) {
+    d.cloud.configure({
+      databaseUrl: CLOUD.databaseUrl,
+      // The app must stay fully usable without an account: everything works
+      // offline and locally, and signing in is what starts sharing it between
+      // devices — never a gate in front of your own data.
+      requireAuth: false,
+      unsyncedTables: UNSYNCED_TABLES,
+    });
+  }
   _db = d;
   return d.open().then(() => d);
+}
+
+// Is this build wired to a cloud database at all? (False in the shipped default.)
+export const cloudConfigured = () => syncEnabled();
+
+// A snapshot of the sync state for the Settings screen: whether sync is switched
+// on, who is signed in, and what the connection is doing. Safe to call when sync
+// is off — it simply reports that.
+export async function syncStatus() {
+  if (!syncEnabled()) return { enabled: false, signedIn: false, user: '', state: 'off' };
+  const db = await open();
+  const user = db.cloud.currentUser?.value || null;
+  return {
+    enabled: true,
+    signedIn: !!(user && user.isLoggedIn),
+    user: (user && (user.email || user.userId)) || '',
+    state: db.cloud.syncState?.value?.phase || 'unknown',
+  };
+}
+
+// Start the e-mail sign-in flow (Dexie Cloud sends a one-time code).
+export async function signIn() {
+  if (!syncEnabled()) throw new Error('Syncing is not switched on in this build.');
+  const db = await open();
+  return db.cloud.login();
+}
+
+// Sign out on THIS device. Local data stays; it simply stops syncing.
+export async function signOut() {
+  if (!syncEnabled()) return;
+  const db = await open();
+  return db.cloud.logout();
 }
 
 // The live Dexie instance, for callers that want to run their own transaction.

@@ -1,3 +1,8 @@
 .DS_Store
 node_modules/
 _source-lists/
+
+# Dexie Cloud credentials — MUST NOT reach this public repo.
+# dexie-cloud.key holds the client id + secret for the cloud database.
+dexie-cloud.key
+dexie-cloud.json

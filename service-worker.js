@@ -1,6 +1,6 @@
 // service-worker.js — offline app shell caching.
 // Bump CACHE when you change any of the cached files to force an update.
-const CACHE = 'ams-packing-list-v99';
+const CACHE = 'ams-packing-list-v100';
 const ASSETS = [
   './',
   './index.html',
@@ -9,7 +9,8 @@ const ASSETS = [
   './js/app.js',
   './js/model.js',
   './js/db.js',
-  './js/vendor/dexie.mjs',
+  './js/cloud-config.js',
+  './js/vendor/dexie-cloud.mjs',
   './js/seed.js',
   './js/xlsx.js',
   './js/weather.js',

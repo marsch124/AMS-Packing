@@ -27,7 +27,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v99';
+const APP_VERSION = 'v100';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4318,6 +4318,16 @@ function howtoCard() {
         </ul>
         <p>When you open a detail screen (an item, a trip), it keeps the colour of the tab you came from and shows a <b>← Back</b> arrow to return.</p>
 
+        <h3>Syncing your devices</h3>
+        <p>Your catalogue can be kept in step across every device you use. Open <b>Settings \u2192 Sync your devices</b> and tap <b>Sign in to sync</b>: you type your e-mail, a <b>one-time code</b> arrives, and that's it \u2014 there is no password. Do the same on your other device and from then on the two match each other automatically.</p>
+        <ul>
+          <li><b>What travels:</b> your templates, items, trips, to-dos and kits \u2014 everything that makes up the catalogue.</li>
+          <li><b>What stays put:</b> your <b>photos</b> and the <b>automatic backups</b>. Photos are far bigger than everything else combined, and each item keeps its own small thumbnail (which does travel), so your lists still look right on both devices. The automatic backups are each device's private safety net \u2014 there is nothing to gain from copying them across.</li>
+          <li><b>Offline is fine.</b> Changes you make with no signal are queued and sent the moment you're back online.</li>
+          <li><b>You are never locked out.</b> The app works fully without signing in \u2014 signing in only starts the sharing. Signing out on a device stops it syncing but leaves everything on it untouched.</li>
+        </ul>
+        <p>None of this replaces your <b>backup file</b>. Syncing keeps two devices matched \u2014 which means a deletion travels too. An exported backup is still the thing that lets you go back to how it was.</p>
+
         <h3>Icons: the app's language vs your gear</h3>
         <p>There are two kinds of symbol in the app, and the difference is deliberate.</p>
         <ul>
@@ -4458,6 +4468,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v100', '2026-08-19 · 17:00 UTC', false, 'Sync between your iPhone and your Mac',
+      'The big one: your <b>templates, items, trips, to-dos and kits</b> can now stay in step across every device you sign in on. Open <b>Settings → Sync your devices</b> and tap <b>Sign in to sync</b>. You enter your e-mail and get a <b>one-time code</b> back — there is no password to invent or remember. Do the same on your other device and the two keep themselves matched from then on. Edits made while you are <b>offline</b> are queued and sent the moment you are back, so a plane or a tunnel changes nothing. <b>You are never locked out of your own data:</b> the app works exactly as before without signing in — signing in is only what starts sharing between devices, and signing out on a device leaves everything on it intact. Two things deliberately <b>stay on the device that made them</b>: your <b>photos</b> (they are far larger than everything else put together, and each item still carries its small thumbnail, which does travel — so your lists look right everywhere) and the <b>automatic backups</b> (those are each device\u2019s own safety net; copying them between devices would help nobody). Your JSON backup still contains everything, as always.',
+      'Add a jacket to a template on the Mac and it is on your iPhone before you have put the kettle on — with no password, no accounts to manage, and everything still working offline.'),
     v('v99', '2026-08-19 · 15:00 UTC', false, 'New engine room (groundwork for syncing your devices)',
       'Nothing you can see changed in this release — but underneath, the part of the app that stores your data has been rebuilt on <b>Dexie</b>, a well-established database library. Your data itself was <b>not touched, moved or converted</b>: the app simply took over the database already on your device, exactly as it was. Every screen, every button and every backup behaves identically. <b>Why bother?</b> Because this is the foundation that makes <b>syncing your iPhone and your Mac</b> possible. The old hand-written storage code had no way to reconcile changes made in two places; Dexie does, and it is what the sync service builds on. Doing it as its own release — with <b>no syncing switched on yet and nothing leaving your device</b> — means the risky part (changing where your data lives) is proven on its own, before anything touches the internet. It was verified by taking a complete fingerprint of a full catalogue before the change and confirming it came back <b>identical</b> afterwards, down to every item, template, membership, trip, to-do, kit, snapshot and photograph.',
       'The last piece of groundwork before your two devices can share a catalogue — done as an isolated, provable step so your data is never riding on two big changes at once.'),
@@ -5124,6 +5137,45 @@ async function renderSearch() {
 // ============================================================
 // Settings
 // ============================================================
+// The "Sync your devices" card. Shows where this device stands, and offers the
+// one action that matters (sign in / sign out). Dexie Cloud supplies its own
+// e-mail-code dialog, so there is no password to invent or remember here.
+async function syncCard() {
+  const st = await db.syncStatus().catch(() => ({ enabled: true, signedIn: false, user: '', state: 'error' }));
+  const body = st.signedIn
+    ? `<p class="data-status">${ic('check', 'sm')}<b>Syncing as ${esc(st.user)}</b></p>
+       <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on. Changes made offline are sent as soon as you're back online.</p>
+       <p class="muted sync-note">Photos and the automatic backups deliberately stay on the device that made them.</p>`
+    : `<p class="data-status">${ic('warn', 'sm')}<b>Not syncing on this device</b></p>
+       <p class="muted">Sign in with your e-mail to keep this device in step with your others. You'll get a one-time code by e-mail — there's no password. Everything here keeps working offline either way.</p>`;
+  const el = h(`<div class="card block sync-card">
+    <h2>Sync your devices</h2>
+    ${body}
+    <div class="btnrow">
+      ${st.signedIn
+        ? '<button class="btn ghost" data-sync="out">Sign out of this device</button>'
+        : '<button class="btn primary" data-sync="in">Sign in to sync</button>'}
+    </div>
+  </div>`);
+  el.addEventListener('click', async (e) => {
+    const act = e.target.closest('[data-sync]')?.dataset.sync;
+    if (!act) return;
+    try {
+      if (act === 'in') { await db.signIn(); showToast('Signed in — syncing now.'); }
+      else {
+        if (!confirm('Sign out of syncing on this device?\n\nYour data stays here — it just stops being kept in step with your other devices.')) return;
+        await db.signOut();
+        showToast('Signed out. This device no longer syncs.');
+      }
+    } catch (err) {
+      logDiag('sync', err);
+      alert(`Could not ${act === 'in' ? 'sign in' : 'sign out'}: ${err && err.message ? err.message : 'unknown error'}`);
+    }
+    render();
+  });
+  return el;
+}
+
 async function renderSettings() {
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h('<div class="topbar"><h1>Settings</h1></div>'));
@@ -5147,9 +5199,13 @@ async function renderSettings() {
     <span class="care-link-go">${IC.fwd}</span>
   </a>`));
 
+  // --- Sync between your devices (only shown when this build is wired to a
+  // cloud database; with none, the whole card is absent and nothing is uploaded).
+  if (db.cloudConfigured()) wrap.appendChild(await syncCard());
+
   const card = h(`<div class="card block">
     <h2>Your data</h2>
-    <p class="muted">Everything is stored <b>on this device only</b> — nothing is uploaded. Because it lives in the browser, a saved backup file is your real safety net.</p>
+    <p class="muted">Everything is stored <b>on this device</b>. Because it lives in the browser, a saved backup file is your real safety net.</p>
     <p class="data-status">${ic('box','sm')}<b>${esc(countsSummary(curCounts))}</b>${usedLabel ? ` · ${esc(usedLabel)} used` : ''}</p>
     <p class="data-status">${protectStatus}</p>
     <p class="data-status">${backupStatus}</p>
