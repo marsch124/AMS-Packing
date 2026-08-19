@@ -28,7 +28,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v106';
+const APP_VERSION = 'v107';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4539,6 +4539,10 @@ function howtoCard() {
         <h3>Spreadsheet export</h3>
         <p><b>Excel</b> exports a trip as an .xlsx (phase, container, item, qty, packed, note). Settings can export every event at once.</p>
 
+        <h3>Finding your way round Settings</h3>
+        <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
+        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Storage places</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
+
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
  <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Save backup file</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
@@ -4565,6 +4569,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v107', '2026-08-20 · 12:00 UTC', false, 'Settings tidied — an index instead of a long stack',
+      'Settings had quietly grown to <b>thirteen cards</b>, and the three you touch least — syncing, backup files and the automatic on-device copies — sat right at the <b>top</b>, pushing Kits, People and Storage places below the fold. Two changes. <b>(1) Everything folds.</b> Each section is now a single line with a <b>summary of what’s inside</b> — “People: Martin, Anna”, “Storage places: 12 places”, “Backed up today — still current” — so you can take in the whole tab at a glance and open only what you need. Whatever you leave open <b>stays open next time</b>, so the sections you use often settle where you want them. The whole tab is now about <b>a page and a half instead of thirty</b>. <b>(2) A sensible running order.</b> Four groups: <b>Your packing setup</b> (Kits, People, Storage places, Trip presets, Shared trips) first because that is what you actually come here to change; then <b>Appearance</b>; then <b>Your data</b> (syncing, backup &amp; restore, automatic backups) — as important as ever, but touched about twice a year; and finally <b>Help &amp; about</b>. The database overview stays pinned at the top where it was. Nothing was removed and nothing moved out of Settings — every button is exactly where it was, one tap deeper.',
+      'You can see the whole of Settings at once again, and the things you actually change are at the top instead of buried under the things you don’t.'),
     v('v106', '2026-08-20 · 09:00 UTC', false, 'A backup reminder that won’t let you forget — and saves the file in one tap',
       'Your data lives in the browser, so a saved backup <b>file</b> is the one thing that survives losing it. Other browsers let an app write that file into a folder on your Mac by itself; <b>Safari does not</b>, and Safari is where your packing list lives. So rather than a silent backup that would never actually run, this release makes the <b>reminder</b> do the work. <b>(1) One tap, wherever you see it.</b> The Home reminder now carries its own <b>Save backup now</b> button — no more opening Settings and hunting for the export. The dated file lands straight in your <b>Downloads</b> folder. <b>(2) It escalates.</b> Amber once you have unsaved changes and no file for a fortnight; <b>red</b>, and worded plainly, past six weeks. Dismissing it buys a week while it is amber, but only until tomorrow once it is red — so an old backup can no longer be waved away month after month. <b>(3) It counts changes, not days.</b> If you have not touched anything since your last file, the app stays quiet however long it has been; if you have built a trip since this morning, it says so. <b>(4) Settings tells you the truth.</b> The data card no longer just prints a date — it says either “nothing has changed since, so it’s still current” or “you’ve made changes since”. A bare date was misleading: “3 days ago” looks perfectly safe even when a whole trip has been added since.',
       'The backup that actually protects you is the one you remember to take — so the app now remembers for you, and makes it a single tap.'),
@@ -5306,6 +5313,62 @@ async function syncCard() {
   return el;
 }
 
+// --- Settings sections (#crowding) -------------------------------------------
+// Settings grew to thirteen cards, with the three you touch least — sync, backup
+// file, automatic backups — sitting at the very top. Every card is now a fold with
+// a one-line summary, so the tab reads as an index you can take in at a glance,
+// and whichever sections you leave open stay open next time.
+const SETTINGS_OPEN_KEY = 'ams-settings-open';
+function loadSettingsOpen() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_OPEN_KEY) || '{}') || {}; }
+  catch { return {}; }
+}
+function settingsOpen(id, dflt = false) {
+  const m = loadSettingsOpen();
+  return id in m ? !!m[id] : dflt;
+}
+// `toggle` does not bubble, so this is wired per-fold rather than delegated.
+function rememberFold(det, id) {
+  det.addEventListener('toggle', () => {
+    try {
+      const m = loadSettingsOpen();
+      m[id] = det.open;
+      localStorage.setItem(SETTINGS_OPEN_KEY, JSON.stringify(m));
+    } catch { /* ignore */ }
+  });
+  return det;
+}
+// Wrap an existing settings card in a fold WITHOUT moving its children: the card
+// element keeps every child (and therefore every handler already bound to it) and
+// simply becomes the fold's body. Its <h2> is lifted into the summary.
+function foldCard(id, cardEl, summaryText, defaultOpen = false) {
+  const h2 = cardEl.querySelector(':scope > h2');
+  const title = h2 ? h2.textContent.trim() : id;
+  if (h2) h2.remove();
+  cardEl.classList.remove('card', 'block');
+  cardEl.classList.add('howto-body');
+  const outer = h(`<div class="card block sset-card"><details class="howto sset" data-sset="${esc(id)}"${settingsOpen(id, defaultOpen) ? ' open' : ''}>
+    <summary><span class="howto-h">${esc(title)}</span><span class="howto-sum">${esc(summaryText || '')}</span></summary>
+  </details></div>`);
+  const det = outer.querySelector('details');
+  det.appendChild(cardEl);
+  rememberFold(det, id);
+  return outer;
+}
+// One of the already-folded cards (the guide, version history, diagnostics) —
+// they carry their own <details>, so they only need the id and the memory.
+function adoptFold(cardEl, id, defaultOpen = false) {
+  const det = cardEl.querySelector('details');
+  if (!det) return cardEl;
+  cardEl.classList.add('sset-card');
+  det.classList.add('sset');
+  det.dataset.sset = id;
+  det.open = settingsOpen(id, defaultOpen);
+  rememberFold(det, id);
+  return cardEl;
+}
+const settingsGroup = (label) => h(`<h3 class="set-group">${esc(label)}</h3>`);
+
 async function renderSettings() {
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h('<div class="topbar"><h1>Settings</h1></div>'));
@@ -5328,18 +5391,21 @@ async function renderSettings() {
     ? `${ic('lock','sm')}<b>Storage protected</b> — the browser has been asked not to auto-delete your data.`
     : `${ic('warn','sm')}<b>Storage not yet protected</b> — <b>install</b> the app (iPhone: Share → Add to Home Screen; Mac: File → Add to Dock) so your data isn’t auto-deleted, and take regular backups.`;
 
-  wrap.appendChild(h(`<a class="care-link" href="#/overview">
+  const overviewLink = h(`<a class="care-link" href="#/overview">
     <span class="care-link-ic">${ic('folder','md')}</span>
     <span class="care-link-body"><b>Maintenance mode — database overview</b><span class="care-link-sub">Every item on one line, the templates it’s in, its flags &amp; storage — with look-alikes flagged, so you can keep the whole catalog tidy</span></span>
     <span class="care-link-go">${IC.fwd}</span>
-  </a>`));
+  </a>`);
 
   // --- Sync between your devices (only shown when this build is wired to a
   // cloud database; with none, the whole card is absent and nothing is uploaded).
-  if (db.cloudConfigured()) wrap.appendChild(await syncCard());
+  const syncSt = db.cloudConfigured()
+    ? await db.syncStatus().catch(() => ({ signedIn: false, user: '' }))
+    : null;
+  const syncEl = db.cloudConfigured() ? await syncCard() : null;
 
   const card = h(`<div class="card block">
-    <h2>Your data</h2>
+    <h2>Backup &amp; restore</h2>
     <p class="muted">Everything is stored <b>on this device</b>. Because it lives in the browser, a saved backup file is your real safety net.</p>
     <p class="data-status">${ic('box','sm')}<b>${esc(countsSummary(curCounts))}</b>${usedLabel ? ` · ${esc(usedLabel)} used` : ''}</p>
     <p class="data-status">${protectStatus}</p>
@@ -5353,7 +5419,6 @@ async function renderSettings() {
     </div>
     <input type="file" accept="application/json,.json" hidden>
   </div>`);
-  wrap.appendChild(card);
 
   // Automatic on-device safety net — the app keeps recent full copies here.
   const snapCard = h(`<div class="card block">
@@ -5362,7 +5427,6 @@ async function renderSettings() {
     <div class="snap-list" data-snaps></div>
     <div class="btnrow"><button class="btn" data-snap="save">${IC.plus}<span>Save a copy now</span></button></div>
   </div>`);
-  wrap.appendChild(snapCard);
   const drawSnaps = (list) => {
     const box = snapCard.querySelector('[data-snaps]');
     if (!list.length) { box.innerHTML = '<p class="muted">No automatic backups yet — one is saved as you use the app (about once a day).</p>'; return; }
@@ -5414,7 +5478,6 @@ async function renderSettings() {
     </div>
     <input type="file" accept="application/json,.json" hidden>
   </div>`);
-  wrap.appendChild(trips);
 
   const places = h(`<div class="card block">
     <h2>Storage places</h2>
@@ -5422,7 +5485,6 @@ async function renderSettings() {
     <div class="places-list" data-places></div>
     <div class="btnrow"><button class="btn" data-place="add">${IC.plus}<span>Add a place</span></button></div>
   </div>`);
-  wrap.appendChild(places);
   const drawPlaces = () => {
     const box = places.querySelector('[data-places]');
     const locs = loadStorageLocs().sort((a, b) => a.localeCompare(b));
@@ -5469,7 +5531,6 @@ async function renderSettings() {
     <p class="muted">Saved trip setups — the activities and conditions, not the dates or packed items. Start a new trip from one on the <b>Home</b> screen; save a new one from any trip via its <b>Save as preset</b> button.</p>
     <div class="snap-list" data-presets></div>
   </div>`);
-  wrap.appendChild(presetCard);
   const drawPresets = () => {
     const box = presetCard.querySelector('[data-presets]');
     const list = loadPresets().sort((a, b) => a.name.localeCompare(b.name));
@@ -5499,7 +5560,6 @@ async function renderSettings() {
     <div class="kit-list" data-kits></div>
     <div class="btnrow"><button class="btn" data-kit="add">${IC.plus}<span>New kit</span></button></div>
   </div>`);
-  wrap.appendChild(kitCard);
   const drawKits = () => {
     const box = kitCard.querySelector('[data-kits]');
     const kits = (ALL_KITS || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
@@ -5540,7 +5600,6 @@ async function renderSettings() {
     <div class="people-list" data-people></div>
     <div class="btnrow"><button class="btn" data-person="add">${IC.plus}<span>Add person</span></button></div>
   </div>`);
-  wrap.appendChild(peopleCard);
   const drawPeople = () => {
     const box = peopleCard.querySelector('[data-people]');
     const people = loadPeople();
@@ -5603,10 +5662,8 @@ async function renderSettings() {
     <h2>Appearance</h2>
     ${radioRow('theme', [{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }], currentTheme())}
   </div>`);
-  wrap.appendChild(theme);
-
-  wrap.appendChild(howtoCard());
-  wrap.appendChild(versionHistoryCard());
+  const howtoEl = howtoCard();
+  const vhistEl = versionHistoryCard();
 
   // Diagnostics — a private on-device error log for troubleshooting.
   const diag = loadDiag();
@@ -5623,7 +5680,6 @@ async function renderSettings() {
       </div>
     </details>
   </div>`);
-  wrap.appendChild(diagCard);
   diagCard.addEventListener('click', async (e) => {
     const act = e.target.closest('[data-diag]')?.dataset.diag;
     if (!act) return;
@@ -5642,7 +5698,6 @@ async function renderSettings() {
     <h2>About</h2>
     <p class="muted">AMS Packing List — a private, offline packing-list builder. Combine reusable templates into one Packing List per event, organised by when to pack and where it goes.</p>
   </div>`);
-  wrap.appendChild(about);
 
   const file = card.querySelector('input[type=file]');
   card.addEventListener('click', async (e) => {
@@ -5703,6 +5758,56 @@ async function renderSettings() {
     tripFile.value = '';
   });
   theme.addEventListener('change', (e) => { if (e.target.name === 'theme') setTheme(e.target.value); });
+
+  // --- Assemble, most-used first -------------------------------------------
+  // Everything above only BUILT its card; the running order lives here, in one
+  // readable place. Sync/backup deliberately sit near the bottom: they matter
+  // enormously and are touched about twice a year.
+  const people = loadPeople();
+  const places2 = loadStorageLocs();
+  const presets2 = loadPresets();
+  const kits2 = ALL_KITS || [];
+  const themeLabel = { system: 'Auto (follows your Mac)', light: 'Light', dark: 'Dark' }[currentTheme()] || 'Auto';
+  const nOf = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  wrap.appendChild(overviewLink);
+
+  wrap.appendChild(settingsGroup('Your packing setup'));
+  wrap.appendChild(foldCard('kits', kitCard,
+    kits2.length ? nOf(kits2.length, 'kit', 'kits') : 'None yet — bundles you pack as one'));
+  wrap.appendChild(foldCard('people', peopleCard,
+    people.length ? people.map((p) => p.name).join(', ') : 'None yet — for splitting who packs what'));
+  wrap.appendChild(foldCard('places', places, places2.length
+    ? `${nOf(places2.length, 'place', 'places')} · ${places2.slice(0, 3).join(', ')}${places2.length > 3 ? '…' : ''}`
+    : 'None yet'));
+  wrap.appendChild(foldCard('presets', presetCard,
+    presets2.length ? nOf(presets2.length, 'preset', 'presets') : 'None yet — save a trip’s setup to reuse'));
+  wrap.appendChild(foldCard('sharedtrips', trips, 'Import a trip someone sent you'));
+
+  wrap.appendChild(settingsGroup('Appearance'));
+  wrap.appendChild(foldCard('theme', theme, themeLabel));
+
+  wrap.appendChild(settingsGroup('Your data'));
+  if (syncEl) {
+    const syncSum = syncSt && syncSt.signedIn
+      ? `Syncing as ${syncSt.user}`
+      : 'Not syncing on this device';
+    wrap.appendChild(foldCard('sync', syncEl, syncSum));
+  }
+  wrap.appendChild(foldCard('data', card, dsb === null
+    ? 'No backup file saved yet'
+    : bstate.unsaved
+      ? `Last backup ${dsb === 0 ? 'today' : `${nOf(dsb, 'day', 'days')} ago`} — changes since`
+      : `Backed up ${dsb === 0 ? 'today' : `${nOf(dsb, 'day', 'days')} ago`} — still current`));
+  wrap.appendChild(foldCard('snapshots', snapCard,
+    snapshots.length ? `${nOf(snapshots.length, 'copy', 'copies')} on this device` : 'None yet'));
+
+  wrap.appendChild(settingsGroup('Help & about'));
+  wrap.appendChild(adoptFold(howtoEl, 'howto'));
+  wrap.appendChild(adoptFold(vhistEl, 'vhist'));
+  wrap.appendChild(adoptFold(diagCard, 'diag'));
+  wrap.appendChild(foldCard('about', about, `AMS Packing List · ${APP_VERSION}`));
+
   return wrap;
 }
 

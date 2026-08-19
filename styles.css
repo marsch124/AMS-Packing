@@ -2597,6 +2597,32 @@ a.rd-stat.rd-link::after {
   padding-top: 6px;
 }
 
+/* Settings group heading — a quiet label separating the runs of folds, so the
+   tab reads as an index rather than one long stack of cards. */
+.set-group {
+  margin: 22px 4px 8px;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.set-group:first-of-type { margin-top: 16px; }
+
+/* A folded settings card sits tighter than the guide it borrows its look from,
+   and its summary line stays on one line rather than wrapping the whole width.
+   The tighter padding is what lets thirteen sections read as one index. */
+.card.block.sset-card { padding: 11px 14px; margin-bottom: 8px; }
+.sset > summary { padding: 2px 0; }
+.sset .howto-sum {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The wrapped card keeps its own spacing; drop the leading margin it had as a card. */
+.sset > .howto-body > p:first-child { margin-top: 0; }
+
 .howto-body h3 {
   font-size: .95rem;
   font-weight: 600;
