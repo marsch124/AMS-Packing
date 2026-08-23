@@ -26,6 +26,7 @@ import {
   isPhotoRef, photoRefs, inlinePhotos, hasInlinePhotos,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
   INTRINSIC_FIELDS, linkFromResolved, itemFromEntry, containerDefaultsFrom, templateDefaults, planContainerMigration, containerOverrideFor, mapSectionAcrossTemplates, orderActivities, ACTIVITY_ORDER,
+  sortRowsBy, groupRowsBy, itemConditionLabel, ITEM_CONDITIONS,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -2173,4 +2174,66 @@ test('the seed ships Mobility, not Yoga / Mobility', () => {
   for (const want of ACTIVITY_ORDER.WET) {
     assert.ok(names.includes(want), `WET order names a list that does not exist: ${want}`);
   }
+});
+
+// ---- All-items index: sorting & grouping ----------------------------------
+
+test('sortRowsBy: text sorts A–Z, case-insensitively', () => {
+  const rows = [{ n: 'zebra' }, { n: 'Apple' }, { n: 'mango' }];
+  assert.deepEqual(sortRowsBy(rows, (r) => r.n).map((r) => r.n), ['Apple', 'mango', 'zebra']);
+  assert.deepEqual(sortRowsBy(rows, (r) => r.n, { dir: 'desc' }).map((r) => r.n), ['zebra', 'mango', 'Apple']);
+});
+
+test('sortRowsBy: blanks sink to the bottom in BOTH directions', () => {
+  const rows = [{ m: '' }, { m: 'Osprey' }, { m: '  ' }, { m: 'Arcteryx' }];
+  const asc = sortRowsBy(rows, (r) => r.m).map((r) => r.m.trim());
+  const desc = sortRowsBy(rows, (r) => r.m, { dir: 'desc' }).map((r) => r.m.trim());
+  assert.deepEqual(asc, ['Arcteryx', 'Osprey', '', '']);
+  assert.deepEqual(desc, ['Osprey', 'Arcteryx', '', ''], 'a reversed sort must not lead with blanks');
+});
+
+test('sortRowsBy: numbers compare arithmetically and 0 counts as unrecorded', () => {
+  const rows = [{ w: 90 }, { w: 0 }, { w: 1200 }, { w: 7 }];
+  assert.deepEqual(sortRowsBy(rows, (r) => r.w, { num: true }).map((r) => r.w), [7, 90, 1200, 0]);
+  assert.deepEqual(sortRowsBy(rows, (r) => r.w, { num: true, dir: 'desc' }).map((r) => r.w), [1200, 90, 7, 0]);
+});
+
+test('sortRowsBy: ties settle by the tie-breaker, and never flip with direction', () => {
+  const rows = [{ c: 'Duffel bag', n: 'Towel' }, { c: 'Duffel bag', n: 'Cap' }, { c: 'Day pack', n: 'Map' }];
+  const tie = (a, b) => a.n.localeCompare(b.n);
+  assert.deepEqual(sortRowsBy(rows, (r) => r.c, { tie }).map((r) => r.n), ['Map', 'Cap', 'Towel']);
+  assert.deepEqual(sortRowsBy(rows, (r) => r.c, { tie, dir: 'desc' }).map((r) => r.n), ['Cap', 'Towel', 'Map']);
+});
+
+test('sortRowsBy: does not mutate the rows it is given', () => {
+  const rows = [{ n: 'b' }, { n: 'a' }];
+  sortRowsBy(rows, (r) => r.n);
+  assert.deepEqual(rows.map((r) => r.n), ['b', 'a']);
+});
+
+test('groupRowsBy: known buckets first in order, the rest A–Z, "not set" last', () => {
+  const rows = [
+    { c: '' }, { c: 'Zulu bag' }, { c: 'Duffel bag' }, { c: 'Toiletry bag' }, { c: 'Alpha bag' }, { c: '' },
+  ];
+  const out = groupRowsBy(rows, (r) => r.c, { order: CONTAINERS, emptyLabel: 'No bag chosen' });
+  assert.deepEqual(out.map((g) => g.label), ['Toiletry bag', 'Duffel bag', 'Alpha bag', 'Zulu bag', 'No bag chosen']);
+  assert.equal(out[out.length - 1].rows.length, 2);
+});
+
+test('groupRowsBy: keeps the incoming order inside each bucket (so the sort still applies)', () => {
+  const rows = [{ c: 'A', n: 1 }, { c: 'B', n: 2 }, { c: 'A', n: 3 }, { c: 'A', n: 4 }];
+  const out = groupRowsBy(rows, (r) => r.c);
+  assert.deepEqual(out[0].rows.map((r) => r.n), [1, 3, 4]);
+});
+
+test('groupRowsBy: every row lands in exactly one bucket', () => {
+  const rows = Array.from({ length: 40 }, (_, i) => ({ c: i % 5 ? `bag ${i % 5}` : '' }));
+  const out = groupRowsBy(rows, (r) => r.c);
+  assert.equal(out.reduce((s, g) => s + g.rows.length, 0), 40);
+});
+
+test('itemConditionLabel: every condition has a label, unrated has none', () => {
+  for (const c of ITEM_CONDITIONS) assert.equal(itemConditionLabel(c.id), c.label);
+  assert.equal(itemConditionLabel(''), '');
+  assert.equal(itemConditionLabel('nonsense'), '');
 });

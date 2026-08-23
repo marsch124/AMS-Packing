@@ -5,6 +5,7 @@ import {
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, normName, newItem, newList, newEvent,
   TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS, listEmoji, listColor,
   isPhotoRef,
+  ITEM_CONDITION_IDS, itemConditionLabel, sectionName, sortRowsBy, groupRowsBy,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
@@ -30,7 +31,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v110';
+const APP_VERSION = 'v111';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -675,13 +676,16 @@ const ITEM_FILTER_CATS = [
 // Chip-bar HTML for the given items and active filter Set. Only categories that
 // actually occur are shown, each with a live count; a dashed "Show all" clears.
 // `excludeLoose` drops the "No template" chip where it's meaningless (the Loose
-// bin itself, where every item is unfiled).
-function itemFilterChipsHTML(items, filter, excludeLoose) {
+// bin itself, where every item is unfiled). An ACTIVE chip is always kept even
+// at zero, or a chip could disappear while still narrowing the list.
+// `anyActive` decides whether "Show all" shows — the Care page passes its other
+// filter groups in, so the clear button appears whatever kind of filter is on.
+function itemFilterChipsHTML(items, filter, excludeLoose, anyActive = filter.size) {
   const cats = ITEM_FILTER_CATS.filter((c) => !(excludeLoose && c.key === 'loose'));
-  const chips = cats.map((c) => ({ c, n: items.filter(c.test).length })).filter((x) => x.n)
+  const chips = cats.map((c) => ({ c, n: items.filter(c.test).length })).filter((x) => x.n || filter.has(x.c.key))
     .map(({ c, n }) => `<button class="fchip${filter.has(c.key) ? ' on' : ''}" type="button" data-cat="${c.key}">${c.icon ? ic(c.icon, 'sm') : ''}${c.label} <em>${n}</em></button>`)
     .join('');
-  return chips ? `${chips}<button class="fchip clear" type="button" data-cat="__clear"${filter.size ? '' : ' hidden'}>Show all</button>` : '';
+  return chips ? `${chips}<button class="fchip clear" type="button" data-cat="__clear"${anyActive ? '' : ' hidden'}>Show all</button>` : '';
 }
 
 // Does an item pass the active category filter? (OR across the chosen chips.)
@@ -689,6 +693,62 @@ function itemMatchesFilter(it, filter) {
   if (!filter.size) return true;
   return [...filter].some((k) => { const c = ITEM_FILTER_CATS.find((x) => x.key === k); return c ? c.test(it) : false; });
 }
+
+// ---- Sorting & grouping for the Care tab's "All items" index ----------------
+// A row there is { it, list, section } — a resolved item, the template it sits
+// in, and that template's section name resolved for display. 545 rows is a lot
+// to read as one alphabetical wall, so the index can be ordered and bucketed.
+
+// The care state of an item, as a readable bucket name.
+const AI_CARE_LABELS = { overdue: 'Overdue', soon: 'Due soon', ok: 'Upcoming', reference: 'Care notes only' };
+const AI_CARE_ORDER = ['Overdue', 'Due soon', 'Upcoming', 'Care notes only'];
+const aiCareLabel = (it) => { const s = maintenanceStatus(it); return s ? (AI_CARE_LABELS[s.state] || '') : ''; };
+
+// Sort choices. `val(row)` pulls the comparable value; `num` compares
+// arithmetically. Blanks always sink to the bottom (see sortRowsBy).
+const AI_SORTS = [
+  { key: 'name',         label: 'Alphabetically',    val: (r) => r.it.name || '' },
+  { key: 'container',    label: 'Container',         val: (r) => r.it.container || '' },
+  { key: 'storage',      label: 'Where it’s stored', val: (r) => r.it.storage || '' },
+  { key: 'weight',       label: 'Weight',            val: (r) => r.it.weight || 0, num: true },
+  { key: 'manufacturer', label: 'Manufacturer',      val: (r) => r.it.manufacturer || '' },
+  { key: 'acquired',     label: 'Acquired',          val: (r) => r.it.acquired || '' },
+  { key: 'warranty',     label: 'Warranty until',    val: (r) => r.it.warranty || '' },
+  { key: 'section',      label: 'Section',           val: (r) => r.section || '' },
+];
+
+// Grouping choices. `of(row)` names the bucket ('' = not set, always shown last
+// under `empty`); `order` pins the buckets that have a natural running order.
+const AI_GROUPS = [
+  { key: '',             label: 'No grouping' },
+  { key: 'container',    label: 'Container',         of: (r) => r.it.container || '',    order: CONTAINERS,                          empty: 'No bag chosen' },
+  { key: 'storage',      label: 'Where it’s stored', of: (r) => r.it.storage || '',                                                  empty: 'Storage place not set' },
+  { key: 'section',      label: 'Section',           of: (r) => r.section || '',                                                     empty: 'No section' },
+  { key: 'manufacturer', label: 'Manufacturer',      of: (r) => r.it.manufacturer || '',                                             empty: 'No maker recorded' },
+  { key: 'condition',    label: 'Condition',         of: (r) => itemConditionLabel(r.it.condition), order: ITEM_CONDITIONS.map((c) => c.label), empty: 'Not rated' },
+  { key: 'template',     label: 'Template',          of: (r) => r.list.name || '',                                                   empty: 'No template' },
+  { key: 'category',     label: 'Category',          of: (r) => r.it.category || '',     order: CATEGORIES,                          empty: 'No category' },
+  { key: 'owner',        label: 'Whose it is',       of: (r) => r.it.owner || '',                                                    empty: 'Nobody named' },
+  { key: 'care',         label: 'Care status',       of: (r) => aiCareLabel(r.it),       order: AI_CARE_ORDER,                       empty: 'No care record' },
+  { key: 'letter',       label: 'First letter',      of: (r) => (r.it.name || '').trim().charAt(0).toUpperCase() || '',              empty: 'Unnamed' },
+];
+
+const AI_SORT_KEY = 'ams.allitems.sort';
+const AI_GROUP_KEY = 'ams.allitems.group';
+// Sort and grouping are remembered on the device (unlike the filter chips, which
+// start clear each visit): they hide nothing, they only rearrange.
+function loadAiSort() {
+  try { const s = JSON.parse(localStorage.getItem(AI_SORT_KEY) || 'null');
+    if (s && AI_SORTS.some((x) => x.key === s.by)) return { by: s.by, dir: s.dir === 'desc' ? 'desc' : 'asc' };
+  } catch { /* ignore */ }
+  return { by: 'name', dir: 'asc' };
+}
+function saveAiSort(s) { try { localStorage.setItem(AI_SORT_KEY, JSON.stringify(s)); } catch { /* ignore */ } }
+function loadAiGroup() {
+  try { const g = localStorage.getItem(AI_GROUP_KEY) || ''; if (AI_GROUPS.some((x) => x.key === g)) return g; } catch { /* ignore */ }
+  return '';
+}
+function saveAiGroup(g) { try { localStorage.setItem(AI_GROUP_KEY, g); } catch { /* ignore */ } }
 
 // A resolved item shaped for another template — carries the packing-relevant
 // attributes (so a new hat lands with its container, weight, flags, conditions
@@ -3994,6 +4054,12 @@ let careMonth = null;             // 'YYYY-MM' shown in the calendar (defaults t
 let careForceOpenItemId = null;   // when set, the item's editor opens with its care panel expanded
 let careItemSearch = '';          // current text in the "All items" search box on the Care page
 const careItemFilter = new Set();  // active category chips on the Care page ('loose','liquid','charge','restricted','care','photo') — OR'd together
+const careCondFilter = new Set();  // active Condition chips ('new','good','worn','retire','' = not rated) — OR'd within, AND'd with the other groups
+const careSecFilter = new Set();   // active Section chips (section NAMES; '' = no section) — same rule
+let careItemSort = loadAiSort();   // { by, dir } for the All-items index — remembered on this device
+let careItemGroup = loadAiGroup(); // '' = flat, else an AI_GROUPS key — remembered too
+const careItemFolds = new Set();   // collapsed grouping buckets, keyed `${groupKey}|${bucketKey}`
+const careChipsOpen = new Set();   // filter rows showing all their chips rather than the first few ('cond' / 'sec')
 const monthOf = (ymd) => ymd.slice(0, 7);
 
 async function renderMaintenance() {
@@ -4088,10 +4154,12 @@ async function renderMaintenance() {
 // add a brand-new item to any list and edit it right away.
 function allItemsSection(lists) {
   const sec = h('<div class="allitems"></div>');
+  // A row is an item AS IT SITS IN ONE TEMPLATE — the same thing in three
+  // templates is three rows — so `section` (which belongs to the template, not
+  // the item) is resolved to its display name here, once.
   const flat = [];
-  for (const l of lists) for (const it of (l.items || [])) flat.push({ it, list: l });
+  for (const l of lists) for (const it of (l.items || [])) flat.push({ it, list: l, section: sectionName(l, it.section) });
   flat.sort((a, b) => (a.it.name || '').localeCompare(b.it.name || '', undefined, { sensitivity: 'base' }));
-  const listOpts = lists.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}</option>`).join('');
 
   sec.innerHTML = `
     <div class="ai-head">
@@ -4114,6 +4182,16 @@ function allItemsSection(lists) {
     </form>
     <label class="ai-searchbox">${IC.search}<input type="search" class="ai-search" placeholder="Search all items…" value="${esc(careItemSearch)}" autocomplete="off"></label>
     <div class="ai-filterbar"></div>
+    <div class="ai-filtergroups"></div>
+    <div class="ai-arrange">
+      <label class="ai-arr"><span>Sort</span>
+        <select class="ai-sortsel">${AI_SORTS.map((s) => `<option value="${s.key}"${s.key === careItemSort.by ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select>
+      </label>
+      <button type="button" class="iconbtn sm ai-sortdir" aria-label="Toggle sort direction"></button>
+      <label class="ai-arr"><span>Group</span>
+        <select class="ai-groupsel">${AI_GROUPS.map((g) => `<option value="${g.key}"${g.key === careItemGroup ? ' selected' : ''}>${esc(g.label)}</option>`).join('')}</select>
+      </label>
+    </div>
     <div class="ai-count"></div>
     <div class="ai-list"></div>`;
 
@@ -4121,41 +4199,149 @@ function allItemsSection(lists) {
   const countEl = $('.ai-count', sec);
   const searchEl = $('.ai-search', sec);
   const filterEl = $('.ai-filterbar', sec);
+  const groupsEl = $('.ai-filtergroups', sec);
+  const sortSel = $('.ai-sortsel', sec);
+  const dirBtn = $('.ai-sortdir', sec);
+  const groupSel = $('.ai-groupsel', sec);
   const form = $('[data-ai-form]', sec);
 
-  // Category quick-filters for the whole item index (shared with each template's
-  // own list). Picking chips shows items matching ANY chosen category (OR), then
-  // narrowed by the text box.
-  const drawChips = () => { filterEl.innerHTML = itemFilterChipsHTML(flat.map((r) => r.it), careItemFilter, false); };
+  // ---- Filtering ---------------------------------------------------------
+  // Three independent groups: the category chips (liquids, charging…), Condition
+  // and Section. Chips WITHIN a group are OR'd ("either of these"); the groups
+  // are AND'ed together ("…and worn …and in Tech & devices"), which is the only
+  // reading that makes "Liquids + Needs replacing" mean what you'd expect.
+  const textOf = (row) => `${row.it.name || ''}\n${row.it.storage || ''}\n${row.list.name || ''}`.toLowerCase();
+  const passText = (row, q) => !q || textOf(row).includes(q);
+  const passCats = (row) => itemMatchesFilter(row.it, careItemFilter);
+  const passCond = (row) => !careCondFilter.size || careCondFilter.has(row.it.condition || '');
+  const passSec = (row) => !careSecFilter.size || careSecFilter.has(row.section || '');
+  const anyFilter = () => careItemFilter.size || careCondFilter.size || careSecFilter.size;
+
+  // Chip counts are honest: each group is counted against the rows that already
+  // pass the OTHER groups and the search, so a count says how many you'd get.
+  // Long rows (a section chip per section name) are capped so the filters can't
+  // push the list itself off the screen on a phone; the rest are one tap away.
+  const CHIP_CAP = 10;
+  const chipRow = (title, defs, active, attr, rowKey) => {
+    const live = defs.filter((d) => d.n || active.has(d.value));
+    const open = careChipsOpen.has(rowKey);
+    const capped = !open && live.length > CHIP_CAP;
+    const shown = capped ? live.filter((d, i) => i < CHIP_CAP - 1 || active.has(d.value)) : live;
+    const chips = shown
+      .map((d) => `<button class="fchip${active.has(d.value) ? ' on' : ''}" type="button" ${attr}="${esc(d.value)}">${d.icon ? ic(d.icon, 'sm') : ''}${esc(d.label)} <em>${d.n}</em></button>`).join('');
+    const more = capped
+      ? `<button class="fchip more" type="button" data-more="${rowKey}">+${live.length - shown.length} more</button>`
+      : (open && live.length > CHIP_CAP ? `<button class="fchip more" type="button" data-more="${rowKey}">Fewer</button>` : '');
+    return chips ? `<div class="ai-fgroup"><span class="ai-flabel">${esc(title)}</span><div class="ai-fchips">${chips}${more}</div></div>` : '';
+  };
+
+  const drawChips = () => {
+    const q = careItemSearch.trim().toLowerCase();
+    // Pools: everything except the group being counted.
+    const catPool = flat.filter((r) => passText(r, q) && passCond(r) && passSec(r));
+    const condPool = flat.filter((r) => passText(r, q) && passCats(r) && passSec(r));
+    const secPool = flat.filter((r) => passText(r, q) && passCats(r) && passCond(r));
+    // If a Condition/Section filter has narrowed things so far that no category
+    // chip is left, keep a bare "Show all" so there's always a way back out.
+    filterEl.innerHTML = itemFilterChipsHTML(catPool.map((r) => r.it), careItemFilter, false, anyFilter())
+      || (anyFilter() ? '<button class="fchip clear" type="button" data-cat="__clear">Show all</button>' : '');
+
+    const condDefs = [...ITEM_CONDITIONS.map((c) => ({ value: c.id, label: c.label })), { value: '', label: 'Not rated' }]
+      .map((d) => ({ ...d, icon: 'sparkle', n: condPool.filter((r) => (r.it.condition || '') === d.value).length }));
+    const secNames = [...new Set(flat.map((r) => r.section).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    const secDefs = [...secNames.map((s) => ({ value: s, label: s })), { value: '', label: 'No section' }]
+      .map((d) => ({ ...d, icon: 'folder', n: secPool.filter((r) => (r.section || '') === d.value).length }));
+    // Only offer a group when it actually splits the collection in two or more.
+    const useful = (defs) => defs.filter((d) => d.n).length > 1;
+    groupsEl.innerHTML = (useful(condDefs) ? chipRow('Condition', condDefs, careCondFilter, 'data-cond', 'cond') : '')
+      + (useful(secDefs) ? chipRow('Section', secDefs, careSecFilter, 'data-sec', 'sec') : '');
+  };
+
+  // ---- Sorting & grouping -------------------------------------------------
+  const paintDir = () => {
+    const desc = careItemSort.dir === 'desc';
+    dirBtn.textContent = desc ? '▼' : '▲';
+    dirBtn.title = desc ? 'Z–A / largest first' : 'A–Z / smallest first';
+  };
+  paintDir();
+
+  const groupHead = (label, n, collapsed) => `<div class="group-h clickable" role="button" tabindex="0" aria-expanded="${collapsed ? 'false' : 'true'}">
+      <span class="group-caret" aria-hidden="true">▾</span>
+      ${groupIcon(label) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(label)}</span>` : ''}
+      <span class="ph">${esc(label)}</span>
+      <span class="group-count">${n}</span>
+    </div>`;
 
   const drawItems = () => {
     const q = careItemSearch.trim().toLowerCase();
-    const shown = flat.filter((row) => {
-      const { it, list } = row;
-      if (!itemMatchesFilter(it, careItemFilter)) return false;
-      if (!q) return true;
-      return (it.name || '').toLowerCase().includes(q)
-        || (it.storage || '').toLowerCase().includes(q)
-        || (list.name || '').toLowerCase().includes(q);
-    });
-    const filtered = q || careItemFilter.size;
-    countEl.textContent = filtered ? `${shown.length} of ${flat.length} items` : `${flat.length} items`;
-    listEl.innerHTML = '';
-    if (!shown.length) { listEl.appendChild(h('<div class="empty"><p class="empty-s">No items match your search.</p></div>')); return; }
-    for (const { it, list } of shown) listEl.appendChild(aiRow(it, list));
-  };
-  drawChips();
-  drawItems();
+    const shown = flat.filter((r) => passCats(r) && passCond(r) && passSec(r) && passText(r, q));
+    const sd = AI_SORTS.find((s) => s.key === careItemSort.by) || AI_SORTS[0];
+    const byName = (a, b) => (a.it.name || '').localeCompare(b.it.name || '', undefined, { sensitivity: 'base' });
+    const sorted = sortRowsBy(shown, sd.val, { dir: careItemSort.dir, num: !!sd.num, tie: byName });
+    const gd = AI_GROUPS.find((g) => g.key === careItemGroup) || AI_GROUPS[0];
 
-  searchEl.addEventListener('input', () => { careItemSearch = searchEl.value; drawItems(); });
+    listEl.innerHTML = '';
+    if (!shown.length) {
+      countEl.textContent = flat.length ? `0 of ${flat.length} items` : 'No items yet';
+      listEl.appendChild(h(`<div class="empty"><p class="empty-s">${flat.length ? 'No items match your search.' : 'Nothing here yet — add an item to a template and it will appear.'}</p></div>`));
+      return;
+    }
+    const head = (q || anyFilter()) ? `${shown.length} of ${flat.length} items` : `${flat.length} items`;
+
+    if (!gd.key) {
+      countEl.textContent = head;
+      for (const row of sorted) listEl.appendChild(aiRow(row.it, row.list));
+      return;
+    }
+    const buckets = groupRowsBy(sorted, gd.of, { order: gd.order || [], emptyLabel: gd.empty || 'Not set' });
+    countEl.textContent = `${head} · ${buckets.length} group${buckets.length === 1 ? '' : 's'} by ${gd.label}`;
+    for (const b of buckets) {
+      const foldKey = `${gd.key}|${b.key}`;
+      const collapsed = careItemFolds.has(foldKey);
+      const box = h(`<div class="group ai-group${collapsed ? ' collapsed' : ''}">${groupHead(b.label, b.rows.length, collapsed)}<div class="group-body"></div></div>`);
+      const body = $('.group-body', box);
+      for (const row of b.rows) body.appendChild(aiRow(row.it, row.list));
+      const hd = $('.group-h', box);
+      const toggle = () => {
+        const nowC = !careItemFolds.has(foldKey);
+        if (nowC) careItemFolds.add(foldKey); else careItemFolds.delete(foldKey);
+        box.classList.toggle('collapsed', nowC);
+        hd.setAttribute('aria-expanded', String(!nowC));
+      };
+      hd.addEventListener('click', toggle);
+      hd.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+      listEl.appendChild(box);
+    }
+  };
+  const redraw = () => { drawChips(); drawItems(); };
+  redraw();
+
+  searchEl.addEventListener('input', () => { careItemSearch = searchEl.value; redraw(); });
+  const toggleIn = (set, key) => { if (set.has(key)) set.delete(key); else set.add(key); };
   filterEl.addEventListener('click', (e) => {
     const key = e.target.closest('[data-cat]')?.dataset.cat;
-    if (!key) return;
-    if (key === '__clear') careItemFilter.clear();
-    else if (careItemFilter.has(key)) careItemFilter.delete(key); else careItemFilter.add(key);
-    drawChips();
-    drawItems();
+    if (key === undefined) return;
+    // "Show all" clears every group, not just the chips it sits among.
+    if (key === '__clear') { careItemFilter.clear(); careCondFilter.clear(); careSecFilter.clear(); }
+    else toggleIn(careItemFilter, key);
+    redraw();
   });
+  groupsEl.addEventListener('click', (e) => {
+    const more = e.target.closest('[data-more]');
+    if (more) { toggleIn(careChipsOpen, more.dataset.more); drawChips(); return; }
+    const cond = e.target.closest('[data-cond]');
+    const sect = e.target.closest('[data-sec]');
+    if (cond) toggleIn(careCondFilter, cond.dataset.cond);
+    else if (sect) toggleIn(careSecFilter, sect.dataset.sec);
+    else return;
+    redraw();
+  });
+  sortSel.addEventListener('change', () => { careItemSort = { ...careItemSort, by: sortSel.value }; saveAiSort(careItemSort); drawItems(); });
+  dirBtn.addEventListener('click', () => {
+    careItemSort = { ...careItemSort, dir: careItemSort.dir === 'desc' ? 'asc' : 'desc' };
+    saveAiSort(careItemSort); paintDir(); drawItems();
+  });
+  groupSel.addEventListener('change', () => { careItemGroup = groupSel.value; saveAiGroup(careItemGroup); careItemFolds.clear(); drawItems(); });
 
   $('[data-ai-add]', sec).addEventListener('click', () => {
     form.classList.toggle('hidden');
@@ -4541,6 +4727,8 @@ function howtoCard() {
         </ul>
  <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>reminder</b> also shows on the <b>Home</b> screen.</p>
  <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>No template</b> (loose items), <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> and <b>Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
+ <p>Below the category chips sit two more filter rows, <b>Condition</b> and <b>Section</b>, which appear whenever they’d actually split the collection. The rule is worth knowing: chips <b>in the same row</b> mean “either of these”, and the <b>rows combine</b> — so <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn, not liquids plus worn things. Each chip’s number is what you’d get if you tapped it, counted against the filters already on, and <b>Show all</b> clears every row at once. (One item that lives in three templates is three rows here — that’s why a section, which belongs to a template, can be filtered at all.)</p>
+ <p><b>Sort</b> reorders the whole index — <b>Alphabetically</b>, <b>Container</b>, <b>Where it’s stored</b>, <b>Weight</b>, <b>Manufacturer</b>, <b>Acquired</b>, <b>Warranty until</b> or <b>Section</b> — and <b>▲/▼</b> flips the direction. Anything with that field left blank <b>always sinks to the bottom</b>, whichever direction you choose, so “Manufacturer, Z–A” shows you makers rather than three hundred blanks. <b>Group</b> then breaks the list into headed, <b>collapsible</b> sections — by <b>Container</b>, <b>Where it’s stored</b>, <b>Section</b>, <b>Manufacturer</b>, <b>Condition</b>, <b>Template</b>, <b>Category</b>, <b>Whose it is</b>, <b>Care status</b> or <b>First letter</b> — each showing how many it holds, with your sort still applying inside each one and the “not set” bucket always last. Tap a group’s header to fold it away. Sort and grouping are <b>remembered on this device</b>; the filter chips deliberately are not, so the index always opens showing everything.</p>
 
         <h3>Actions — your to-do list</h3>
         <p>The <b>Actions</b> tab (the red one in the bottom bar) is a proper <b>to-do list</b> for the things you need to <em>do</em>, not pack. Actions come in two kinds:</p>
@@ -4612,8 +4800,11 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v111', '2026-08-23 · 18:30 UTC', false, 'All items — filter, sort and group your whole catalogue',
+      'The <b>All items</b> index on the <b>Care</b> tab now bends to what you’re looking for. <b>Two new filter groups</b> join the category chips: <b>Condition</b> (New / Good / Worn / Needs replacing / Not rated) and <b>Section</b> (Clothing, Tech &amp; devices…). Chips <b>within</b> a row still mean “either of these”; the <b>rows combine</b>, so <b>Liquids</b> + <b>Worn</b> means liquids <i>that are</i> worn — and every count tells you how many you’d actually get. <b>Show all</b> clears the lot. A new <b>Sort</b> control orders the whole index by <b>Alphabetically, Container, Where it’s stored, Weight, Manufacturer, Acquired, Warranty until</b> or <b>Section</b>, with <b>▲/▼</b> to flip the direction; anything with that field <b>blank always sinks to the bottom</b>, in both directions, so a sort never buries what you can see under what you haven’t filled in. And a new <b>Group</b> control breaks the list into readable, <b>collapsible</b> sections — by <b>Container, Where it’s stored, Section, Manufacturer, Condition, Template, Category, Whose it is, Care status</b> or <b>First letter</b> — each with its own count, the sort still applying inside each group, and the “not set” bucket always last. Your sort and grouping are <b>remembered on this device</b>; the filter chips still start clear each visit.',
+      'Five hundred rows stop being a wall of names: round up everything worn, everything from the garage, or everything by one maker in two taps.'),
     v('v110', '2026-08-23 · 16:30 UTC', false, 'The New Event form, tidied',
-      'Four changes to the shape of the <b>Create Event</b> form, so related choices sit together. <b>(1)</b> <b>Laundry available on this trip</b> has moved down to sit under <b>Catering</b>, with the other trip-wide practicalities, instead of interrupting the run of name, dates and destination. <b>(2)</b> The <b>WET options</b> — Indoor / Outdoor / Race — no longer float as their own box further down; they now sit <b>inside the WET · Workout, Exercise &amp; Training block</b>, indented under its activities, because that is the only thing they ever qualify. (The block’s <b>select all</b> still ticks activities only, not the options.) <b>(3)</b> <b>Yoga / Mobility</b> is now simply <b>Mobility</b> — renamed <b>in place</b>, so its items, sections and history are untouched. <b>(4)</b> The WET activities are offered in a <b>deliberate order — Swim, Bike, Run, Strength, Mobility, Breath work</b> — rather than alphabetically: race order first, then the gentler things. Any activity you add yourself follows on after those, alphabetically, so nothing can go missing.',
+      'Four changes to the shape of the <b>Create Event</b> form, so related choices sit together. <b>(1)</b> <b>Laundry available on this trip</b> has moved down to sit under <b>Catering</b>, with the other trip-wide practicalities, instead of interrupting the run of name, dates and destination. <b>(2)</b> The <b>WET options</b> — Indoor / Outdoor / Race — no longer float as their own box further down; they now sit <b>inside the WET · Workout, Exercise &amp; Training block</b>, indented under its activities, because that is the only thing they ever qualify. (The block’s <b>select all</b> still ticks activities only, not the options.) <b>(3)</b> <b>Yoga / Mobility</b> is now simply <b>Mobility</b> — renamed <b>in place</b>, so its items, sections and history are untouched. <b>(4)</b> The WET activities are offered in a <b>deliberate order — Swim, Bike, Run, Strength, Mobility, Breath work</b> — rather than alphabetically: race order first, then the gentler things. This applies <b>everywhere they appear grouped</b>: the event form, the <b>Templates</b> tab and a trip’s <b>Trip setup</b> card, so the group reads the same way wherever you meet it. Any activity you add yourself follows on after those, alphabetically, so nothing can go missing. Other groups are unchanged and stay alphabetical.',
       'The form reads in the order you actually think in, and the training activities are no longer shuffled into an order nobody wanted.'),
     v('v109', '2026-08-23 · 15:00 UTC', false, 'Sections now travel with an item into another template',
       'A fix on top of v108, spotted straight away. When you add an item to another template, its <b>section</b> — “Tech &amp; devices”, “Clothing” — now comes with it. A section belongs to <b>one</b> template (your Travel “Tech &amp; devices” and your Hiking “Tech &amp; devices” are two separate things that happen to share a name), so it travels <b>by name</b>: if the destination has a section called the same thing the item lands in it, and if it doesn’t the item arrives under <b>Ungrouped</b>, ready for you to file. It will never invent a new section in a list you have arranged by hand. Your Travel and Hiking templates share <b>all nine</b> section names, so in practice items simply land where you expect. This applies to items added <b>from now on</b> — anything already added to a second template stays put and needs its section set once by hand.',

@@ -194,6 +194,11 @@ export const ITEM_CONDITIONS = [
   { id: 'retire', label: 'Needs replacing' },
 ];
 export const ITEM_CONDITION_IDS = ITEM_CONDITIONS.map((c) => c.id);
+// The display label for a condition id ('' → '' — an unrated item says nothing).
+export function itemConditionLabel(idv) {
+  const c = ITEM_CONDITIONS.find((x) => x.id === idv);
+  return c ? c.label : '';
+}
 // Why an item is "Not in use" (retired from the kit). Distinct from `condition`,
 // which grades a thing you still own & pack; a retired item is no longer packed
 // at all, but its record is kept. Optional — a plain "not in use" needs no reason.
@@ -911,6 +916,60 @@ export function groupItemsBySection(items, sections) {
   const out = defs.filter((s) => buckets.get(s.id).length).map((s) => ({ section: s, items: buckets.get(s.id) }));
   if (loose.length) out.push({ section: null, items: loose });
   return out;
+}
+
+// ---- Generic sort & group helpers for browsable catalogues ------------------
+// Used by the Care tab's "All items" index (and available to any other list that
+// grows big enough to need ordering). Both are pure: they take rows plus a
+// function that pulls the value out of a row, and never touch the DOM.
+
+// Sort rows by one field. `valOf(row)` returns the comparable value.
+//   dir  'asc' | 'desc'
+//   num  compare arithmetically (0 counts as "not recorded")
+//   tie  optional comparator for equal values — never flipped, so ties always
+//        settle the same friendly way (A–Z by name) in both directions.
+// BLANKS ALWAYS SINK. A sort is for finding the things you HAVE recorded; if
+// "Manufacturer, Z–A" led with 300 items that have no maker, the sort would be
+// useless in one of its two directions.
+export function sortRowsBy(rows, valOf, opts = {}) {
+  const { dir = 'asc', num = false, tie = null } = opts;
+  const isBlank = (v) => (num ? !(Number(v) > 0) : !String(v == null ? '' : v).trim());
+  const flip = dir === 'desc' ? -1 : 1;
+  return asArray(rows).slice().sort((a, b) => {
+    const av = valOf(a); const bv = valOf(b);
+    const ab = isBlank(av); const bb = isBlank(bv);
+    if (ab !== bb) return ab ? 1 : -1;
+    if (ab && bb) return tie ? tie(a, b) : 0;
+    const c = num
+      ? (Number(av) - Number(bv))
+      : String(av).localeCompare(String(bv), undefined, { sensitivity: 'base' });
+    if (c === 0) return tie ? tie(a, b) : 0;
+    return c * flip;
+  });
+}
+
+// Bucket rows for readability. `keyOf(row)` returns the bucket's name ('' = not
+// set). Buckets named in `order` come first in that order, the rest follow
+// alphabetically, and the "not set" bucket is ALWAYS last — it teaches nothing,
+// so it should never head the page. Row order within a bucket is preserved, so
+// the chosen sort still applies inside each group.
+export function groupRowsBy(rows, keyOf, opts = {}) {
+  const { order = [], emptyLabel = 'Not set' } = opts;
+  const map = new Map();
+  for (const r of asArray(rows)) {
+    const k = String(keyOf(r) == null ? '' : keyOf(r)).trim();
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(r);
+  }
+  const rank = new Map(asArray(order).map((o, i) => [String(o).toLowerCase(), i]));
+  const rankOf = (k) => (rank.has(k.toLowerCase()) ? rank.get(k.toLowerCase()) : Number.MAX_SAFE_INTEGER);
+  const keys = [...map.keys()].sort((a, b) => {
+    if (!a !== !b) return a ? -1 : 1;                    // the empty bucket last
+    const d = rankOf(a) - rankOf(b);
+    if (d) return d;
+    return a.localeCompare(b, undefined, { sensitivity: 'base' });
+  });
+  return keys.map((k) => ({ key: k, label: k || emptyLabel, rows: map.get(k) }));
 }
 
 // Group trip ENTRIES by their section NAME (first-appearance order), with the

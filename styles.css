@@ -3678,6 +3678,83 @@ details.care[open] .care-h::before {
   margin: 0;
 }
 
+/* The Condition / Section filter groups under the category chips. Each is a
+   labelled row of chips: OR within the row, AND between the rows. */
+.ai-filtergroups {
+  display: grid;
+  gap: 6px;
+}
+
+.ai-filtergroups:not(:empty) {
+  margin-top: 8px;
+}
+
+.ai-fgroup {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ai-flabel {
+  flex: none;
+  min-width: 4.6rem;
+  padding-top: 6px;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.ai-fchips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 12rem;
+}
+
+.fchip.more {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+/* Sort & group controls for the item index. */
+.ai-arrange {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 10px 2px 0;
+}
+
+.ai-arr {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: .8rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ai-arr select {
+  font: inherit;
+  font-size: .8rem;
+  font-weight: 600;
+  padding: 5px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+}
+
+.ai-sortdir {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: .85rem;
+  line-height: 1;
+}
+
 .ai-count {
   color: var(--muted);
   font-size: .78rem;
@@ -3685,6 +3762,21 @@ details.care[open] .care-h::before {
   text-transform: uppercase;
   letter-spacing: .03em;
   margin: 10px 2px 6px;
+}
+
+/* Grouped item index: reuses the packing list's group header, a little tighter. */
+.ai-group {
+  margin-top: 10px;
+}
+
+.ai-group:first-child {
+  margin-top: 0;
+}
+
+.ai-group .group-body {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
 }
 
 .ai-list {
