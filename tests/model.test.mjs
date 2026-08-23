@@ -25,7 +25,7 @@ import {
   listEmoji, listColor, TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS,
   isPhotoRef, photoRefs, inlinePhotos, hasInlinePhotos,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
-  INTRINSIC_FIELDS, linkFromResolved, itemFromEntry, containerDefaultsFrom, templateDefaults, planContainerMigration, containerOverrideFor, mapSectionAcrossTemplates,
+  INTRINSIC_FIELDS, linkFromResolved, itemFromEntry, containerDefaultsFrom, templateDefaults, planContainerMigration, containerOverrideFor, mapSectionAcrossTemplates, orderActivities, ACTIVITY_ORDER,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -368,7 +368,7 @@ test('seedLists: scaffolded empty activities exist under the right groups', () =
   const byName = Object.fromEntries(seedLists().map((l) => [l.name, l]));
   for (const n of ['Diving', 'Freediving']) { assert.ok(byName[n], `${n} exists`); assert.equal(byName[n].group, 'GA'); }
   assert.equal(byName.Freediving.items.length, 0);   // still an empty scaffold
-  for (const n of ['Strength', 'Yoga / Mobility', 'Breath work']) { assert.ok(byName[n], `${n} exists`); assert.equal(byName[n].group, 'WET'); }
+  for (const n of ['Strength', 'Mobility', 'Breath work']) { assert.ok(byName[n], `${n} exists`); assert.equal(byName[n].group, 'WET'); }
 });
 
 test('seedLists: the built-in Diving template ships pre-filled with sections', () => {
@@ -2139,4 +2139,38 @@ test('groupItemsBySection ignores a section id from another template', () => {
   const groups = groupItemsBySection(items, [{ id: 's-hk-9', name: 'Electronics' }]);
   assert.equal(groups.length, 1);
   assert.equal(groups[0].section, null, 'it falls into Ungrouped rather than vanishing');
+});
+
+test('orderActivities: WET follows the deliberate order, not the alphabet', () => {
+  const names = ['Breath work', 'Mobility', 'Run', 'Strength', 'Swim', 'Bike'];  // alphabetical-ish input
+  const out = orderActivities('WET', names.map((n) => ({ id: n, name: n })));
+  assert.deepEqual(out.map((l) => l.name), ['Swim', 'Bike', 'Run', 'Strength', 'Mobility', 'Breath work']);
+});
+
+test('orderActivities: an activity of your own lands after the known ones, A–Z', () => {
+  const lists = ['Padel', 'Swim', 'Breath work', 'Aerial hoop'].map((n) => ({ id: n, name: n }));
+  const out = orderActivities('WET', lists).map((l) => l.name);
+  assert.deepEqual(out, ['Swim', 'Breath work', 'Aerial hoop', 'Padel']);
+  assert.equal(out.length, 4, 'nothing may be dropped');
+});
+
+test('orderActivities: a group with no set order keeps what it was given', () => {
+  const lists = [{ id: 'b', name: 'Golf' }, { id: 'a', name: 'Diving' }];
+  assert.deepEqual(orderActivities('GA', lists).map((l) => l.name), ['Golf', 'Diving']);
+  assert.deepEqual(orderActivities('', lists).map((l) => l.name), ['Golf', 'Diving']);
+});
+
+test('orderActivities: matches names case- and spacing-insensitively', () => {
+  const out = orderActivities('WET', [{ name: 'breath  work' }, { name: 'SWIM' }]);
+  assert.deepEqual(out.map((l) => l.name), ['SWIM', 'breath  work']);
+});
+
+test('the seed ships Mobility, not Yoga / Mobility', () => {
+  const names = seedLists().map((l) => l.name);
+  assert.ok(names.includes('Mobility'), 'the renamed scaffold must be there');
+  assert.ok(!names.some((n) => /yoga/i.test(n)), 'the old name must be gone');
+  // every name in the WET order must actually exist as a seeded list
+  for (const want of ACTIVITY_ORDER.WET) {
+    assert.ok(names.includes(want), `WET order names a list that does not exist: ${want}`);
+  }
 });

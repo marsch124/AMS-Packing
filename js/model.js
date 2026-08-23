@@ -84,10 +84,27 @@ export function phaseOrder(id) { const i = PHASE_IDS.indexOf(id); return i < 0 ?
 // Every building-block list belongs to one of these (or '' = ungrouped / utility list).
 export const GROUPS = [
   { id: 'GA',  label: 'Goal Activity',                  hint: 'Life activities that matter — Travel, Golf, Hiking, Diving…' },
-  { id: 'WET', label: 'Workout, Exercise & Training',   hint: 'Swim, Bike, Run, Strength, Yoga/Mobility, Breath work.' },
+  { id: 'WET', label: 'Workout, Exercise & Training',   hint: 'Swim, Bike, Run, Strength, Mobility, Breath work.' },
   { id: 'OE',  label: 'Other Events',                   hint: 'Small nice things — a coffee, a winter bath, a walk, the movies.' },
 ];
 export const GROUP_IDS = GROUPS.map((g) => g.id);
+
+// The order activities are offered in inside a group. Alphabetical is the wrong
+// order for training: Swim/Bike/Run is race order, and the gentler things belong
+// at the end. Only names listed here are placed; anything else — a list you added
+// or renamed — falls in after them, alphabetically, so nothing can go missing.
+export const ACTIVITY_ORDER = {
+  WET: ['Swim', 'Bike', 'Run', 'Strength', 'Mobility', 'Breath work'],
+};
+export function orderActivities(groupId, lists) {
+  const wanted = ACTIVITY_ORDER[groupId];
+  const arr = asArray(lists).slice();
+  if (!wanted) return arr;
+  const rank = new Map(wanted.map((n, i) => [normName(n), i]));
+  const at = (l) => (rank.has(normName(l && l.name)) ? rank.get(normName(l.name)) : Number.MAX_SAFE_INTEGER);
+  return arr.sort((a, b) => (at(a) - at(b)) || String(a.name || '').localeCompare(String(b.name || '')));
+}
+
 export function group(id) { return GROUPS.find((g) => g.id === id) || null; }
 export function groupLabel(id) { const g = group(id); return g ? g.label : ''; }
 

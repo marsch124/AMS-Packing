@@ -881,6 +881,22 @@ legend {
   margin: 1px 0 7px;
 }
 
+/* v109 — the Indoor/Outdoor/Race options live INSIDE the WET block now, indented
+   under its activities so it reads as "…and how you'll be doing them", rather than
+   as a separate question further down the form. */
+.grp-sub {
+  margin: 9px 0 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-2);
+}
+.grp-sub-t {
+  display: block;
+  margin-bottom: 5px;
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
 .linkbtn {
   background: none;
   border: none;

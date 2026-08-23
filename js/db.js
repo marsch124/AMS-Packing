@@ -657,6 +657,7 @@ export async function ensureSeeded() {
   }
   try { localStorage.setItem(SEED_KEY, String(SEED_VERSION)); } catch { /* ignore */ }
   await migrateContainerModel();
+  await migrateTemplateNames();
   return getLists();
 }
 
@@ -709,6 +710,35 @@ export async function migrateContainerModel() {
   }
   try { localStorage.setItem(CONTAINER_MODEL_KEY, String(CONTAINER_MODEL_VERSION)); } catch { /* ignore */ }
   return { items: putItems.length, memberships: putMems.length };
+}
+
+// Rename the "Yoga / Mobility" starter template to "Mobility" (v109).
+//
+// Deliberately NOT done by bumping SEED_VERSION: `reseedBuiltins()` replaces every
+// built-in template wholesale, which would throw away years of edits to Travel,
+// Hiking and the rest. This touches one field on one template and nothing else —
+// its items, sections, memberships and id all stay exactly as they are.
+// Idempotent: once renamed there is nothing left to match.
+const RENAMES_KEY = 'ams-template-renames';
+const RENAMES_VERSION = 1;
+const TEMPLATE_RENAMES = [{ from: 'yoga / mobility', to: 'Mobility' }];
+
+export async function migrateTemplateNames() {
+  let done = 0;
+  try { done = Number(localStorage.getItem(RENAMES_KEY)) || 0; } catch { /* ignore */ }
+  if (done >= RENAMES_VERSION) return { skipped: true };
+  const tmpls = await getAllRaw(TEMPLATES);
+  const puts = [];
+  for (const t of (tmpls || [])) {
+    const hit = TEMPLATE_RENAMES.find((r) => normName(t.name) === r.from);
+    // Never collide with a list that already carries the new name.
+    if (!hit) continue;
+    if ((tmpls || []).some((o) => o.id !== t.id && normName(o.name) === normName(hit.to))) continue;
+    puts.push({ store: TEMPLATES, value: { ...t, name: hit.to } });
+  }
+  if (puts.length) await writeBatch(puts, []);
+  try { localStorage.setItem(RENAMES_KEY, String(RENAMES_VERSION)); } catch { /* ignore */ }
+  return { renamed: puts.length };
 }
 
 // --- Backup (Export / Import) ---

@@ -881,7 +881,7 @@ const CAT_SEC = {
 const SEC_SKELETONS = {
   'Freediving': ['Wetsuit & exposure', 'Gear & equipment', 'Safety', 'Tech & devices', 'Documents & certification'],
   'Strength': ['Clothing', 'Footwear', 'Equipment', 'Tech & devices'],
-  'Yoga / Mobility': ['Clothing', 'Mat & props', 'Tech & devices'],
+  'Mobility': ['Clothing', 'Mat & props', 'Tech & devices'],
   'Breath work': ['Comfort & misc', 'Tech & devices'],
 };
 const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -923,7 +923,7 @@ export function seedLists() {
     L('Bike', 'WET', BIKE),
     L('Run', 'WET', RUN),
     L('Strength', 'WET', []),         // scaffold — to fill
-    L('Yoga / Mobility', 'WET', []),  // scaffold — to fill
+    L('Mobility', 'WET', []),         // scaffold — to fill
     L('Breath work', 'WET', []),      // scaffold — to fill
     // OE — Other Events: no packing lists for now (kept as an empty group)
     // Containers — the bags themselves (role 'container'; kept out of trips & pickers).

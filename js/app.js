@@ -1,6 +1,7 @@
 // app.js — screens, navigation and wiring for AMS Packing List.
 import {
   CATEGORIES, CONTAINERS, CONTAINER_ROLE, CONTAINER_LIST_NAME, containerNames, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
+  ACTIVITY_ORDER, orderActivities,
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, normName, newItem, newList, newEvent,
   TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS, listEmoji, listColor,
   isPhotoRef,
@@ -29,7 +30,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v109';
+const APP_VERSION = 'v110';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -923,7 +924,7 @@ function checkRow(name, options, selectedArr) {
 }
 
 // The activity picker, grouped under GA / WET / OE (and any ungrouped lists last).
-function activitiesPicker(lists, selected) {
+function activitiesPicker(lists, selected, contexts) {
   const set = new Set(selected || []);
   const byGroup = new Map(GROUP_IDS.map((g) => [g, []]));
   const ungrouped = [];
@@ -934,12 +935,19 @@ function activitiesPicker(lists, selected) {
     (byGroup.has(l.group) ? byGroup.get(l.group) : ungrouped).push(l);
   }
   const box = (l) => `<label class="check${set.has(l.id) ? ' on' : ''}"><input type="checkbox" name="activities" value="${esc(l.id)}"${set.has(l.id) ? ' checked' : ''}>${esc(l.name)}${l.items.length ? '' : ' <em>(empty)</em>'}</label>`;
+  // Indoor / Outdoor / Race only ever qualify WET activities, so the choice belongs
+  // inside the WET block rather than floating as a fieldset of its own.
+  const extraFor = (gid) => (gid !== 'WET' ? '' : `<div class="grp-sub">
+      <span class="grp-sub-t">WET options</span>
+      ${checkRow('contexts', CONTEXTS, contexts)}
+    </div>`);
   const section = (title, hint, gid, arr) => {
     if (!arr.length) return '';
     return `<div class="grp" data-grp="${esc(gid)}">
       <div class="grp-h"><span class="grp-t">${esc(gid ? `${gid} · ${title}` : title)}</span>${gid ? '<button type="button" class="linkbtn" data-selall="1">select all</button>' : ''}</div>
       ${hint ? `<p class="grp-hint">${esc(hint)}</p>` : ''}
-      <div class="checks">${arr.map(box).join('')}</div>
+      <div class="checks">${orderActivities(gid, arr).map(box).join('')}</div>
+      ${extraFor(gid)}
     </div>`;
   };
   let html = GROUPS.map((g) => section(g.label, g.hint, g.id, byGroup.get(g.id))).join('');
@@ -1435,8 +1443,6 @@ function eventForm(ev, lists, isEdit) {
         <input type="date" name="endDate" value="${esc(endVal)}" min="${esc(ev.startDate || '')}"></label>
     </div>
     <p class="nights-hint muted" data-nights-hint></p>
-    <label class="field-check"><input type="checkbox" name="laundry"${ev.laundry ? ' checked' : ''}>
-      <span class="fc-txt"><b>${ic('laundry','sm')}Laundry available on this trip</b><em>Caps per-night items (socks, underwear, tees) at ${LAUNDRY_CAP_NIGHTS} rather than one per night, so a long trip doesn’t demand a dozen. Short trips are unaffected.</em></span></label>
     <label class="field"><span>Destination <em>(optional — for weather)</em></span>
       <input name="destination" value="${esc(ev.destination)}" placeholder="e.g. Chamonix" autocomplete="off"></label>
 
@@ -1446,11 +1452,12 @@ function eventForm(ev, lists, isEdit) {
     <fieldset><legend>Force-pack weather gear</legend>${checkRow('weatherOn', WEATHER_CONDITIONS.map((w) => ({ value: w.id, label: w.label })), ev.weatherOn)}
       <p class="grp-hint">Tick a condition to <b>force in</b> every item tagged for it — packed as a precaution <b>whatever the forecast or season</b>. Handy for cold-weather kit on a summer trip, or a rain layer just in case. Leave them all off and weather gear stays held back until a fetched forecast calls for it.</p></fieldset>
     <fieldset data-trip-only><legend>Catering</legend>${radioRow('catering', CATERING.map((c) => ({ value: c.id, label: c.label })), ev.catering)}</fieldset>
-    <fieldset><legend>WET Options</legend>${checkRow('contexts', CONTEXTS, ev.contexts)}</fieldset>
+    <label class="field-check"><input type="checkbox" name="laundry"${ev.laundry ? ' checked' : ''}>
+      <span class="fc-txt"><b>${ic('laundry','sm')}Laundry available on this trip</b><em>Caps per-night items (socks, underwear, tees) at ${LAUNDRY_CAP_NIGHTS} rather than one per night, so a long trip doesn’t demand a dozen. Short trips are unaffected.</em></span></label>
 
     <fieldset><legend data-activities-legend>Extra activities to pack for</legend>
       <p class="grp-hint" data-activities-hint></p>
-      ${activitiesPicker(lists, ev.activities)}
+      ${activitiesPicker(lists, ev.activities, ev.contexts)}
     </fieldset>
 
     <div class="actions">
@@ -1524,7 +1531,9 @@ function eventForm(ev, lists, isEdit) {
     if (!btn) return;
     e.preventDefault();
     const grp = btn.closest('.grp');
-    const boxes = $$('input[type=checkbox]', grp);
+    // Activities only — the WET block also holds the Indoor/Outdoor/Race options,
+    // and "select all" is about which activities to pack for, not those.
+    const boxes = $$('input[name=activities]', grp);
     const turnOn = boxes.some((b) => !b.checked); // if any off, select all; else clear all
     boxes.forEach((b) => { b.checked = turnOn; b.closest('label')?.classList.toggle('on', turnOn); });
     btn.textContent = turnOn ? 'clear' : 'select all';
@@ -1866,7 +1875,7 @@ function tripSetupCard(ev) {
   if (chosen.length) {
     let inner = '';
     for (const g of GROUPS) {
-      const arr = chosen.filter((l) => l.group === g.id);
+      const arr = orderActivities(g.id, chosen.filter((l) => l.group === g.id));
       if (!arr.length) continue;
       inner += `<div class="setup-grp-lbl">${esc(g.id)} · ${esc(g.label)}</div>`
         + `<div class="setup-tags">${arr.map((l) => `<span class="setup-tag">${ic(GROUP_ICON[g.id] || 'box', 'sm')}${esc(l.name)}</span>`).join('')}</div>`;
@@ -3106,7 +3115,9 @@ async function renderLists() {
     if (!arr.length) continue;
     wrap.appendChild(h(`<h2 class="section-h">${esc(g.id)} · ${esc(g.label)}</h2>`));
     const cards = h('<div class="tmpl-grid"></div>');
-    arr.forEach((l) => cards.appendChild(card(l)));
+    // Same deliberate order as the event picker — a group should read the same way
+    // wherever you meet it, or the two screens teach you different habits.
+    orderActivities(g.id, arr).forEach((l) => cards.appendChild(card(l)));
     wrap.appendChild(cards);
   }
   if (ungrouped.length) {
@@ -4353,7 +4364,7 @@ function howtoCard() {
         <p>Under the <b>Templates</b> tab your reusable templates are grouped three ways:</p>
         <ul>
           <li><b>GA — Goal Activity:</b> the activities that matter — Travel, Golf, Hiking, Diving…</li>
-          <li><b>WET — Workout, Exercise &amp; Training:</b> Swim, Bike, Run, Strength, Yoga/Mobility, Breath work.</li>
+          <li><b>WET — Workout, Exercise &amp; Training:</b> Swim, Bike, Run, Strength, Mobility, Breath work.</li>
           <li><b>OE — Other Events:</b> small nice things (a coffee, a winter bath, a walk).</li>
         </ul>
         <p><b>Covers.</b> Each template shows as a <b>cover card</b> in the grid — a coloured tile with an emoji — so you can pick out Golf, Diving or Travel by look alone. Every template gets a distinct colour automatically; to choose your own, open a template and tap the <b>Cover</b> button in its toolbar, then set an <b>emoji</b> and a <b>colour</b> (or leave the colour on <b>Auto</b>). A live preview shows the card before you save. It’s purely visual — it doesn’t change what the template holds.</p>
@@ -4601,8 +4612,11 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v110', '2026-08-23 · 16:30 UTC', false, 'The New Event form, tidied',
+      'Four changes to the shape of the <b>Create Event</b> form, so related choices sit together. <b>(1)</b> <b>Laundry available on this trip</b> has moved down to sit under <b>Catering</b>, with the other trip-wide practicalities, instead of interrupting the run of name, dates and destination. <b>(2)</b> The <b>WET options</b> — Indoor / Outdoor / Race — no longer float as their own box further down; they now sit <b>inside the WET · Workout, Exercise &amp; Training block</b>, indented under its activities, because that is the only thing they ever qualify. (The block’s <b>select all</b> still ticks activities only, not the options.) <b>(3)</b> <b>Yoga / Mobility</b> is now simply <b>Mobility</b> — renamed <b>in place</b>, so its items, sections and history are untouched. <b>(4)</b> The WET activities are offered in a <b>deliberate order — Swim, Bike, Run, Strength, Mobility, Breath work</b> — rather than alphabetically: race order first, then the gentler things. Any activity you add yourself follows on after those, alphabetically, so nothing can go missing.',
+      'The form reads in the order you actually think in, and the training activities are no longer shuffled into an order nobody wanted.'),
     v('v109', '2026-08-23 · 15:00 UTC', false, 'Sections now travel with an item into another template',
-      'A fix on top of v108, spotted straight away. When you add an item to another template, its <b>section</b> — “Tech &amp; devices”, “Clothing” — now comes with it. A section belongs to <b>one</b> template (your Travel “Tech &amp; devices” and your Hiking “Tech &amp; devices” are two separate things that happen to share a name), so the section travels <b>by name</b>: if the destination has a section called the same thing, the item lands in it; if it doesn’t, the item arrives under <b>Ungrouped</b>, ready for you to file. It will never invent a new section in a list you have arranged by hand. Your Travel and Hiking templates share <b>all nine</b> section names, so in practice items will simply land where you expect. Note this applies to items added <b>from now on</b> — anything you already added to a second template stays where it is, and needs its section set once by hand.',
+      'A fix on top of v108, spotted straight away. When you add an item to another template, its <b>section</b> — “Tech &amp; devices”, “Clothing” — now comes with it. A section belongs to <b>one</b> template (your Travel “Tech &amp; devices” and your Hiking “Tech &amp; devices” are two separate things that happen to share a name), so it travels <b>by name</b>: if the destination has a section called the same thing the item lands in it, and if it doesn’t the item arrives under <b>Ungrouped</b>, ready for you to file. It will never invent a new section in a list you have arranged by hand. Your Travel and Hiking templates share <b>all nine</b> section names, so in practice items simply land where you expect. This applies to items added <b>from now on</b> — anything already added to a second template stays put and needs its section set once by hand.',
       'Adding an item to another template no longer dumps it at the bottom of the list for you to re-file.'),
     v('v108', '2026-08-23 · 12:00 UTC', false, 'One item, everywhere — the shared-item promise finally kept',
       'Your camera is <b>one camera</b>, however many lists it appears in. That has always been true of the database underneath, but two flaws above it broke the promise. <b>(1) “Container” and “When” were lying.</b> They sat under <b>① The item itself</b>, whose whole heading reads “these stay the same everywhere you use it” — but they were the only two fields in that box that <b>didn’t</b>. Worse, an item’s default bag was fixed at the moment it was created and <b>no screen in the app could ever change it again</b>: changing the bag in Travel quietly wrote a private note saying “in Travel, use the camera bag” and left the real default untouched, so Hiking never heard about it. Now ① genuinely means everywhere — change the bag there and every list follows. <b>(2) Adding an item to a second template could erase it.</b> Ticking an item into another list ran it through a copier that carried only about half its fields, and that half-filled copy was then written <b>over the shared item</b> — silently blanking its <b>photos</b>, its whole <b>maintenance record</b>, and its brand, model, serial, price, warranty and condition, <b>in every list at once</b>. Nothing warned you; you would only find out weeks later when a photo was missing. Putting an item into another template now stores a <b>link</b> rather than a copy, so there is no half-filled copy left to overwrite anything with. <b>(3) A deliberate exception, clearly marked.</b> Because the bag often genuinely does depend on the trip — on a hike everything goes in the hiking backpack, on a flight in the checked luggage — <b>② In this list</b> now has its own <b>Container</b> setting, which names the default it is overriding and says outright that this list differs on purpose. <b>(4) A default bag per template.</b> Most templates are near-uniform — everything on a run goes in the duffel — so a template can now set <b>one bag for everything in it</b>, saving you from setting the same bag on eighty-four items. It sits between the item’s own default and the per-list exception. <b>Nothing on any of your lists moved:</b> every item was checked, and each one kept the exact bag it already had.',
