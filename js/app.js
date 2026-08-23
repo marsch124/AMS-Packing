@@ -19,7 +19,7 @@ import {
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
-  linkFromResolved, itemFromEntry, templateDefaults,
+  linkFromResolved, itemFromEntry, templateDefaults, mapSectionAcrossTemplates,
 } from './model.js';
 import * as db from './db.js';
 import * as weather from './weather.js';
@@ -29,7 +29,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v108';
+const APP_VERSION = 'v109';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -3944,7 +3944,10 @@ function itemEditor(list, it, setOpen, draw) {
           if (!w) continue;
           const here = (l.items || []).some((z) => z._itemId === itemId);
           if (w.checked && !here) {
-            l.items.unshift(linkFromResolved(it, itemId)); // a LINK: adds a membership, never rewrites the shared item
+            // A LINK: adds a membership, never rewrites the shared item. The section
+            // travels by NAME — if this template has a section called the same thing
+            // the item lands in it, otherwise it arrives Ungrouped, ready to file.
+            l.items.unshift(linkFromResolved(it, itemId, { section: mapSectionAcrossTemplates(it.section, list, l) }));
             await db.saveList(l);
           } else if (!w.checked && here) {
             l.items = l.items.filter((z) => z._itemId !== itemId); // drop this template's membership
@@ -4355,7 +4358,7 @@ function howtoCard() {
         </ul>
         <p><b>Covers.</b> Each template shows as a <b>cover card</b> in the grid — a coloured tile with an emoji — so you can pick out Golf, Diving or Travel by look alone. Every template gets a distinct colour automatically; to choose your own, open a template and tap the <b>Cover</b> button in its toolbar, then set an <b>emoji</b> and a <b>colour</b> (or leave the colour on <b>Auto</b>). A live preview shows the card before you save. It’s purely visual — it doesn’t change what the template holds.</p>
  <p>Open a template to add or edit its items. Each item carries a Swedish alias shown as a subtitle, so your original wording is never lost. At the top of a template’s item list sit <b>quick-filter chips</b> — <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
-        <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
+        <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. When you <b>add an item to another template</b>, its section comes along <b>by name</b> — if that template has a section called the same thing the item lands in it, otherwise it arrives under <b>Ungrouped</b> for you to file (it never creates a section in a list you’ve arranged yourself). Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
 
         <h3>Which bag an item goes in</h3>
         <p>You own <b>one</b> of each thing, so the app stores it once and every template points at that one item. But the <b>bag</b> it travels in genuinely does depend on the trip — on a hike everything goes in the hiking backpack, on a flight in the checked luggage. So “which bag” is answered in <b>three places</b>, and the most specific one wins:</p>
@@ -4598,6 +4601,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v109', '2026-08-23 · 15:00 UTC', false, 'Sections now travel with an item into another template',
+      'A fix on top of v108, spotted straight away. When you add an item to another template, its <b>section</b> — “Tech &amp; devices”, “Clothing” — now comes with it. A section belongs to <b>one</b> template (your Travel “Tech &amp; devices” and your Hiking “Tech &amp; devices” are two separate things that happen to share a name), so the section travels <b>by name</b>: if the destination has a section called the same thing, the item lands in it; if it doesn’t, the item arrives under <b>Ungrouped</b>, ready for you to file. It will never invent a new section in a list you have arranged by hand. Your Travel and Hiking templates share <b>all nine</b> section names, so in practice items will simply land where you expect. Note this applies to items added <b>from now on</b> — anything you already added to a second template stays where it is, and needs its section set once by hand.',
+      'Adding an item to another template no longer dumps it at the bottom of the list for you to re-file.'),
     v('v108', '2026-08-23 · 12:00 UTC', false, 'One item, everywhere — the shared-item promise finally kept',
       'Your camera is <b>one camera</b>, however many lists it appears in. That has always been true of the database underneath, but two flaws above it broke the promise. <b>(1) “Container” and “When” were lying.</b> They sat under <b>① The item itself</b>, whose whole heading reads “these stay the same everywhere you use it” — but they were the only two fields in that box that <b>didn’t</b>. Worse, an item’s default bag was fixed at the moment it was created and <b>no screen in the app could ever change it again</b>: changing the bag in Travel quietly wrote a private note saying “in Travel, use the camera bag” and left the real default untouched, so Hiking never heard about it. Now ① genuinely means everywhere — change the bag there and every list follows. <b>(2) Adding an item to a second template could erase it.</b> Ticking an item into another list ran it through a copier that carried only about half its fields, and that half-filled copy was then written <b>over the shared item</b> — silently blanking its <b>photos</b>, its whole <b>maintenance record</b>, and its brand, model, serial, price, warranty and condition, <b>in every list at once</b>. Nothing warned you; you would only find out weeks later when a photo was missing. Putting an item into another template now stores a <b>link</b> rather than a copy, so there is no half-filled copy left to overwrite anything with. <b>(3) A deliberate exception, clearly marked.</b> Because the bag often genuinely does depend on the trip — on a hike everything goes in the hiking backpack, on a flight in the checked luggage — <b>② In this list</b> now has its own <b>Container</b> setting, which names the default it is overriding and says outright that this list differs on purpose. <b>(4) A default bag per template.</b> Most templates are near-uniform — everything on a run goes in the duffel — so a template can now set <b>one bag for everything in it</b>, saving you from setting the same bag on eighty-four items. It sits between the item’s own default and the per-list exception. <b>Nothing on any of your lists moved:</b> every item was checked, and each one kept the exact bag it already had.',
       'Editing an item now genuinely changes it everywhere, and adding it to another list can no longer destroy its photos and care history behind your back.'),

@@ -25,7 +25,7 @@ import {
   listEmoji, listColor, TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS,
   isPhotoRef, photoRefs, inlinePhotos, hasInlinePhotos,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
-  INTRINSIC_FIELDS, linkFromResolved, itemFromEntry, containerDefaultsFrom, templateDefaults, planContainerMigration, containerOverrideFor,
+  INTRINSIC_FIELDS, linkFromResolved, itemFromEntry, containerDefaultsFrom, templateDefaults, planContainerMigration, containerOverrideFor, mapSectionAcrossTemplates,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -2098,4 +2098,45 @@ test('planContainerMigration: respects a template default when re-run after a re
   for (const c of plan.memChanges) mems[0].container = c.container;
   const after = resolveMembership(cat, mems[0], templateDefaults(tmpls[0])).container;
   assert.equal(after, before, 're-running the repair must not move a row onto the template default');
+});
+
+test('a link never carries a foreign section id', () => {
+  const src = newItem({ name: 'Insta360 X4', section: 'sec-belonging-to-travel' });
+  const link = linkFromResolved(src, 'item-1');
+  assert.equal(link.section, '', 'a section id from another template means nothing here');
+});
+
+test('mapSectionAcrossTemplates: the section travels by name, not by id', () => {
+  const travel = coerceList({ id: 'travel', name: 'Travel',
+    sections: [{ id: 's-tv-1', name: 'Electronics' }, { id: 's-tv-2', name: 'Toiletries' }] });
+  const hiking = coerceList({ id: 'hiking', name: 'Hiking',
+    sections: [{ id: 's-hk-9', name: 'electronics' }, { id: 's-hk-8', name: 'Lights' }] });
+  // same name, different id -> lands in the destination's own section
+  assert.equal(mapSectionAcrossTemplates('s-tv-1', travel, hiking), 's-hk-9');
+  // no such section over there -> Ungrouped, never invented
+  assert.equal(mapSectionAcrossTemplates('s-tv-2', travel, hiking), '');
+  assert.equal(hiking.sections.length, 2, 'the destination must not gain a section');
+  // unsectioned stays unsectioned; an unknown id is not carried
+  assert.equal(mapSectionAcrossTemplates('', travel, hiking), '');
+  assert.equal(mapSectionAcrossTemplates('nonsense', travel, hiking), '');
+});
+
+test('a mapped section is the one the link actually stores', () => {
+  const travel = coerceList({ id: 'travel', name: 'Travel', sections: [{ id: 's-tv-1', name: 'Electronics' }] });
+  const hiking = coerceList({ id: 'hiking', name: 'Hiking', sections: [{ id: 's-hk-9', name: 'Electronics' }] });
+  const src = newItem({ name: 'Insta360 X4', section: 's-tv-1' });
+  const link = linkFromResolved(src, 'item-1', { section: mapSectionAcrossTemplates(src.section, travel, hiking) });
+  assert.equal(link.section, 's-hk-9');
+  // and it survives the decompose into a membership
+  const cat = newItem({ name: 'Insta360 X4' });
+  const m = membershipFromResolved(cat, 'hiking', link, 0);
+  assert.equal(m.section, 's-hk-9');
+  assert.equal(resolveMembership(cat, m).section, 's-hk-9');
+});
+
+test('groupItemsBySection ignores a section id from another template', () => {
+  const items = [newItem({ name: 'X4', section: 'sec-from-travel' })];
+  const groups = groupItemsBySection(items, [{ id: 's-hk-9', name: 'Electronics' }]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].section, null, 'it falls into Ungrouped rather than vanishing');
 });

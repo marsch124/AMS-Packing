@@ -1709,10 +1709,27 @@ export function applyIntrinsic(cat, it) {
 
 // The contextual (per-template) half of an item — everything that is allowed to
 // differ between two lists that share the same physical object.
+// NOTE `section` is deliberately NOT here. A section is `{id, name}` belonging to
+// ONE template, so copying the id into another template stores an id that means
+// nothing there — the item lands in Ungrouped and carries junk. It travels by NAME
+// instead, via `mapSectionAcrossTemplates`.
 export const CONTEXTUAL_FIELDS = [
   'seasons', 'contexts', 'transports', 'catering', 'weather',
-  'section', 'kit', 'qty', 'note', 'itemType',
+  'kit', 'qty', 'note', 'itemType',
 ];
+
+// Carry an item's section from one template to another BY NAME: if the destination
+// has a section called the same thing, use its id; otherwise leave the item
+// unsectioned so it shows under Ungrouped, where it is visible and easy to file.
+// Deliberately does not invent a section in the destination — that would quietly
+// reorganise a list you had arranged by hand.
+export function mapSectionAcrossTemplates(sectionId, fromList, toList) {
+  if (!sectionId) return '';
+  const from = asArray(fromList && fromList.sections).find((s) => s.id === sectionId);
+  if (!from) return '';
+  const hit = asArray(toList && toList.sections).find((s) => normName(s.name) === normName(from.name));
+  return hit ? hit.id : '';
+}
 
 // Put an EXISTING catalog item into another template.
 //
@@ -1721,11 +1738,14 @@ export const CONTEXTUAL_FIELDS = [
 // passes over them. This is the fix for the bug where joining a second template
 // wrote a half-filled copy over the shared item and erased its photos, care
 // record, purchase details and serial number everywhere at once.
-export function linkFromResolved(src, itemId) {
+// `opts.section` is the section id IN THE DESTINATION template (work it out with
+// `mapSectionAcrossTemplates`); omit it and the item arrives unsectioned.
+export function linkFromResolved(src, itemId, opts = {}) {
   const link = { _itemId: itemId, _link: true, name: src && src.name ? src.name : '' };
   for (const f of CONTEXTUAL_FIELDS) {
     if (src && src[f] !== undefined) link[f] = Array.isArray(src[f]) ? src[f].slice() : src[f];
   }
+  link.section = typeof opts.section === 'string' ? opts.section : '';
   // A new home starts with no exception — it follows the template's default, and
   // failing that the item's own. That is the whole point of a shared default.
   link._ovContainer = '';
