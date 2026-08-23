@@ -3815,6 +3815,24 @@ details.care[open] .care-h::before {
 /* The inline "＋ Add new…" text box under a growing dropdown (colour/size/…). */
 .item-editor .grow-new { margin-top: 6px; }
 
+/* v108 — spelling out which of the three "which bag" answers is in force.
+   `.layer-note` sits under ① to say that a change there reaches every list;
+   `.field-note` marks a per-list exception as deliberate rather than accidental. */
+.item-editor .layer-note {
+  margin: 8px 0 2px;
+  font-size: .82rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+.item-editor .field-note {
+  display: block;
+  margin-top: 5px;
+  font-size: .78rem;
+  line-height: 1.35;
+  font-style: normal;
+  color: color-mix(in srgb, var(--brand) 78%, var(--ink));
+}
+
 .item-editor .item-name {
   margin-bottom: 14px;
 }

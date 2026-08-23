@@ -19,6 +19,7 @@ import {
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
+  linkFromResolved, itemFromEntry, templateDefaults,
 } from './model.js';
 import * as db from './db.js';
 import * as weather from './weather.js';
@@ -28,7 +29,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v107';
+const APP_VERSION = 'v108';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -596,11 +597,11 @@ async function renderItemsGrid() {
       const lid = el.dataset.tmpl;
       const l = lists.find((x) => x.id === lid); if (!l) return;
       if (el.checked) {
-        if (!l.items.some((z) => z._itemId === id)) l.items.unshift(copyItemForTemplate(row.item, row.item.name));
+        if (!l.items.some((z) => z._itemId === id)) l.items.unshift(linkFromResolved(row.item, id));
       } else {
         // Never orphan the item: if this was its only home, park it in Loose first.
         const others = row.mems.filter((m) => m.listId !== lid);
-        if (!others.length) { const loose = await ensureLoose(); if (loose && !loose.items.some((z) => z._itemId === id)) { loose.items.unshift(copyItemForTemplate(row.item, row.item.name)); await db.saveList(loose); } }
+        if (!others.length) { const loose = await ensureLoose(); if (loose && !loose.items.some((z) => z._itemId === id)) { loose.items.unshift(linkFromResolved(row.item, id)); await db.saveList(loose); } }
         l.items = l.items.filter((z) => z._itemId !== id);
       }
       if (await saveGuard(db.saveList(l))) {
@@ -695,30 +696,12 @@ function itemMatchesFilter(it, filter) {
 // This is a transient object: db.saveList decomposes it, merging it into the one
 // catalog item (by name) and recording the per-template context as a membership —
 // nothing is persisted as a duplicate.
-function copyItemForTemplate(src, name) {
-  return newItem({
-    name,
-    swedish: src.swedish || '',
-    qty: src.qty || '',
-    category: src.category,
-    container: src.container,
-    phase: src.phase,
-    itemType: src.itemType,
-    charging: src.charging, chargeType: src.chargeType,
-    shortList: src.shortList,
-    seasons: (src.seasons || []).slice(),
-    contexts: (src.contexts || []).slice(),
-    transports: (src.transports || []).slice(),
-    catering: (src.catering || []).slice(),
-    weather: (src.weather || []).slice(),
-    sub: (src.sub || []).slice(),
-    note: src.note || '',
-    kit: src.kit || '',
-    weight: src.weight || 0,
-    liquid: src.liquid, restricted: src.restricted, perNight: src.perNight, consumable: src.consumable,
-    storage: src.storage || '',
-  });
-}
+// (Removed in v108.) There used to be a `copyItemForTemplate` here that hand-listed
+// the fields to carry into another template. It carried about half of them, and the
+// half-filled copy was then written over the SHARED item — silently erasing photos,
+// the care record, purchase details and serial numbers everywhere at once. Putting
+// an item into another template now uses `linkFromResolved`, which stores a link
+// rather than a copy, so there is no second field list left to drift out of date.
 
 // A human phrase for where an item's maintenance stands ("Overdue by 5 days", "in 12
 // days", "Due today", "No schedule").
@@ -2384,7 +2367,7 @@ function promoteEntryToTemplate(entry, lists) {
       if (p === 'add') {
         const list = lists.find((l) => l.id === $('select[name=promote-list]', body).value);
         if (!list) { finish(null); return; }
-        const it = copyItemForTemplate(entry, entry.name || ''); // reuse the field-copier (no photos/care)
+        const it = itemFromEntry(entry);   // a genuinely new item — carries everything, photos included
         list.items.unshift(it);
         if (!await saveGuard(db.saveList(list))) { finish(null); return; }
         entry.sourceListId = list.id; entry.sourceItemId = it.id; // link so it now resolves directly
@@ -2804,9 +2787,8 @@ async function addKitToTemplate(list, kit) {
     const existing = (list.items || []).find((it) => (it._itemId && it._itemId === cat.id) || normName(it.name) === normName(cat.name));
     if (existing) { existing.kit = kit.name; }
     else {
-      const copy = copyItemForTemplate(cat, cat.name);
+      const copy = linkFromResolved(cat, cat.id);   // a link, never a copy — nothing of the item's can be lost
       copy.kit = kit.name;
-      copy._itemId = cat.id;   // link so saveList reuses the shared catalog item, no duplicate
       list.items.unshift(copy);
       added++;
     }
@@ -3168,6 +3150,7 @@ async function renderList(listId, openItemId) {
   const groupOpts = [{ value: '', label: '— no group —' }, ...GROUPS.map((g) => ({ value: g.id, label: `${g.id} · ${g.label}` }))];
   wrap.appendChild(h(`<div class="toolbar">
     ${noTemplateChrome ? '' : `<label class="inline-field"><span>Group</span>${selectHtml('group', groupOpts, list.group)}</label>`}
+    ${noTemplateChrome ? '' : `<label class="inline-field" title="One bag for everything in this template. Items can still differ one by one."><span>Default bag</span>${selectHtml('tpldefault', [{ value: '', label: '— each item decides —' }].concat(containerOpts(list.defaultContainer).map((c) => ({ value: c, label: c }))), list.defaultContainer)}</label>`}
     <div class="spacer"></div>
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-cover><span class="cover-dot" style="background:${esc(listColor(list))}">${esc(listEmoji(list))}</span><span>Cover</span></button>`}
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
@@ -3245,6 +3228,18 @@ async function renderList(listId, openItemId) {
   wrap.querySelector('[data-cover]')?.addEventListener('click', async () => {
     const changed = await openCoverEditor(list);
     if (changed) render();
+  });
+  // One bag for the whole template. Items that already carry that exact bag as a
+  // per-item exception are now saying the same thing twice, so offer to tidy them
+  // away — otherwise the "differs here on purpose" mark would be meaningless.
+  wrap.querySelector('select[name=tpldefault]')?.addEventListener('change', async (e) => {
+    const want = e.target.value;
+    list.defaultContainer = want;
+    const redundant = want ? (list.items || []).filter((z) => z._ovContainer === want) : [];
+    if (redundant.length && confirm(`“${list.name}” now packs everything into ${want}.\n\n${redundant.length} item${redundant.length === 1 ? '' : 's'} here already had ${want} set individually. Clear those so they simply follow the template?\n\nNothing moves either way — this only tidies up.`)) {
+      for (const z of redundant) z._ovContainer = '';
+    }
+    if (await saveGuard(db.saveList(list))) { ALL_LISTS = await db.getLists(); render(); }
   });
   wrap.querySelector('[data-sections]')?.addEventListener('click', () => {
     manageSections(list).then((changed) => {
@@ -3534,6 +3529,18 @@ function itemEditor(list, it, setOpen, draw) {
   const detailsOpen = isContainer || !!(it.color || it.size || it.manufacturer || it.model || it.owner || it.acquired
     || it.price || it.currency || it.purchaseLink || it.expiry || it.condition || it.retired || it.serial || it.qtyOwned || it.warranty);
 
+  // The three parts of "which bag", separated so the editor can show which one is
+  // actually in force. `_defContainer` etc. are set by resolveMembership; an item
+  // that has never been resolved (a brand-new one) falls back to its own values.
+  const defContainer = it._defContainer !== undefined ? it._defContainer : (it.container || '');
+  const defPhase = it._defPhase !== undefined ? it._defPhase : (it.phase || '');
+  const ovContainer = it._ovContainer !== undefined ? it._ovContainer : '';
+  const tplContainer = it._tplContainer !== undefined ? it._tplContainer : '';
+  // What this item WOULD use here with no exception set — named in the dropdown so
+  // "use the default" is never a mystery.
+  const fallbackContainer = tplContainer || defContainer;
+  const fallbackWhy = tplContainer ? `${tplContainer} — this template's default` : (defContainer || '— none —');
+
   ed.innerHTML = `
     <section class="layer layer-item">
       <label class="field item-name"><input name="name" value="${esc(it.name)}" placeholder="${isContainer ? 'Container name — e.g. Osprey Farpoint 40' : 'Item name'}" aria-label="${isContainer ? 'Container name' : 'Item name'}"></label>
@@ -3549,9 +3556,10 @@ function itemEditor(list, it, setOpen, draw) {
       </div>
       <label class="field"><span>Weight empty <em>grams</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>` : `
       <div class="row2">
-        <label class="field"><span>Container <em>default</em></span>${selectHtml('container', ['', ...containerOpts(it.container)].map((c) => ({ value: c, label: c || '— none (task) —' })), it.container)}</label>
-        <label class="field"><span>When <em>default phase</em></span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), it.phase)}</label>
+        <label class="field"><span>Container <em>everywhere</em></span>${selectHtml('container', ['', ...containerOpts(defContainer)].map((c) => ({ value: c, label: c || '— none (task) —' })), defContainer)}</label>
+        <label class="field"><span>When <em>everywhere</em></span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), defPhase)}</label>
       </div>
+      <p class="layer-note">Change these and every list that uses this item follows. To differ in <b>${esc(list.name)}</b> only, set the exception under <b>② In this list</b>.</p>
       <label class="field"><span>Weight (g) <em>per unit</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
       <div class="checks">
         <label class="check${it.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${it.charging ? 'checked' : ''}>${ic('bolt','sm')}Charging</label>
@@ -3641,6 +3649,10 @@ function itemEditor(list, it, setOpen, draw) {
     ${isContainer ? '' : `<section class="layer layer-membership">
       <div class="layer-h"><span class="layer-num">2</span><span class="layer-t">In this list · ${esc(list.name)}</span><span class="layer-sub">Just for this template — changing these here doesn't touch the item in other lists.</span></div>
       <label class="field"><span>Qty</span><input name="qty" value="${esc(it.qty)}" placeholder="optional"></label>
+      ${list.role === 'loose' ? '' : `<label class="field"><span>Container <em>in this list only</em></span>
+        ${selectHtml('ovContainer', [{ value: '', label: `— use the default (${fallbackWhy}) —` }]
+          .concat(containerOpts(ovContainer).map((c) => ({ value: c, label: c }))), ovContainer)}
+        ${ovContainer ? `<em class="field-note">This list differs on purpose. Choose “use the default” to bring it back in line.</em>` : ''}</label>`}
       ${list.role === 'loose' ? '' : sectionFieldHTML(list, it)}
       <div class="checks">
         <label class="check${it.perNight ? ' on' : ''}"><input type="checkbox" name="perNight" ${it.perNight ? 'checked' : ''}>Per night (scales qty)</label>
@@ -3831,8 +3843,15 @@ function itemEditor(list, it, setOpen, draw) {
       if (!isContainer) {
         it.qty = ($('input[name=qty]', ed).value || '').trim();
         it.section = readSectionFromEditor(ed, list, it);
-        it.container = $('select[name=container]', ed).value;
-        it.phase = $('select[name=phase]', ed).value;
+        // "Which bag" is three separate answers, so read them into three separate
+        // channels and derive the effective value from them. Writing only
+        // `it.container` is what used to freeze the shared default forever.
+        it._defContainer = $('select[name=container]', ed).value;   // ① true everywhere
+        it._defPhase = $('select[name=phase]', ed).value;
+        const ovSel = $('select[name=ovContainer]', ed);            // ② this list only ('' = none)
+        it._ovContainer = ovSel ? ovSel.value : (it._ovContainer || '');
+        it.container = it._ovContainer || it._tplContainer || it._defContainer;
+        it.phase = it._ovPhase || it._defPhase;
         it.perNight = $('input[name=perNight]', ed).checked;
         it.charging = $('input[name=charging]', ed).checked;
         it.chargeType = $('select[name=chargeType]', ed).value;
@@ -3925,7 +3944,7 @@ function itemEditor(list, it, setOpen, draw) {
           if (!w) continue;
           const here = (l.items || []).some((z) => z._itemId === itemId);
           if (w.checked && !here) {
-            l.items.unshift(copyItemForTemplate(it, it.name)); // saveList merges it into the shared item, adding a membership
+            l.items.unshift(linkFromResolved(it, itemId)); // a LINK: adds a membership, never rewrites the shared item
             await db.saveList(l);
           } else if (!w.checked && here) {
             l.items = l.items.filter((z) => z._itemId !== itemId); // drop this template's membership
@@ -4338,6 +4357,15 @@ function howtoCard() {
  <p>Open a template to add or edit its items. Each item carries a Swedish alias shown as a subtitle, so your original wording is never lost. At the top of a template’s item list sit <b>quick-filter chips</b> — <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
         <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
 
+        <h3>Which bag an item goes in</h3>
+        <p>You own <b>one</b> of each thing, so the app stores it once and every template points at that one item. But the <b>bag</b> it travels in genuinely does depend on the trip — on a hike everything goes in the hiking backpack, on a flight in the checked luggage. So “which bag” is answered in <b>three places</b>, and the most specific one wins:</p>
+        <ol>
+          <li><b>The item’s own default</b> — set under <b>① The item itself</b>. This is the honest answer for that object, and it applies <b>everywhere</b>. Change it here and every template that uses the item follows.</li>
+          <li><b>The template’s default bag</b> — the <b>Default bag</b> dropdown in a template’s toolbar. Sets one bag for <b>everything in that template</b>, which saves setting the same bag on dozens of items. Leave it on <b>“each item decides”</b> and it stays out of the way.</li>
+          <li><b>A per-list exception</b> — the <b>Container</b> setting under <b>② In this list</b>. Use it when this one item, in this one template, really does belong somewhere else. The dropdown names the default it would otherwise use, so you always know what you’re overriding, and the editor marks the item as differing <b>on purpose</b>.</li>
+        </ol>
+        <p>The same three-step idea applies to <b>When</b> (the packing phase), minus the template-wide step. If you ever wonder why an item is in a particular bag, open it: ② tells you whether this list is overriding anything, and ① tells you what it would use otherwise.</p>
+
         <h3>Anatomy of an item</h3>
         <p>Every item has three organising dimensions and a set of flags &amp; conditions:</p>
         <ul>
@@ -4346,7 +4374,7 @@ function howtoCard() {
  <li><b>Flags:</b> needs charging (with an optional <b>charge type</b> — USB-C, USB-A, Lightning, special charger… shown on the badge, e.g. USB-C, so you know which cables to bring), short-home-list, liquid/gel (100 ml rule), restricted — think before packing (battery / carry-on rules), <b>per-night</b> (quantity scales with trip length), and a <b>weight</b> in grams.</li>
           <li><b>Conditions</b> — “only include when…”: Season, Context (Indoor/Outdoor/Race — applies to <b>Workout / Exercise (WET)</b> lists only), Transport (Car/Plane/RV), Catering, and <b>Weather</b> (see below). A blank condition means “always applies”.</li>
           <li><b>Sub-items:</b> optional nested things bundled under one line.</li>
- <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. Each item lives <b>once</b> and every template simply points to it — so <b>editing an item (its name, category, weight, flags or care) updates it in every template it belongs to</b>, and it still appears just once in <b>Care</b>. Only the <b>list-specific</b> choices stay separate per template: which <b>bag</b> it goes in, <b>when</b> to pack it, and its <b>conditions</b>. Items that are in <b>no</b> template show a <b>No template</b> flag.</li>
+ <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. Each item lives <b>once</b> and every template simply points to it — so <b>everything under “① The item itself” updates in every template it belongs to</b>: its name, category, weight, flags, photos, care record, purchase details, <b>and its default bag and when</b>. It still appears just once in <b>Care</b>. What stays separate per template is only what you deliberately make separate: its <b>quantity</b>, <b>section</b>, <b>note</b>, <b>conditions</b>, and a <b>per-list bag exception</b> if you set one. Items that are in <b>no</b> template show a <b>No template</b> flag.</li>
         </ul>
 
         <h3>Loose items — things not in a template yet</h3>
@@ -4570,6 +4598,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v108', '2026-08-23 · 12:00 UTC', false, 'One item, everywhere — the shared-item promise finally kept',
+      'Your camera is <b>one camera</b>, however many lists it appears in. That has always been true of the database underneath, but two flaws above it broke the promise. <b>(1) “Container” and “When” were lying.</b> They sat under <b>① The item itself</b>, whose whole heading reads “these stay the same everywhere you use it” — but they were the only two fields in that box that <b>didn’t</b>. Worse, an item’s default bag was fixed at the moment it was created and <b>no screen in the app could ever change it again</b>: changing the bag in Travel quietly wrote a private note saying “in Travel, use the camera bag” and left the real default untouched, so Hiking never heard about it. Now ① genuinely means everywhere — change the bag there and every list follows. <b>(2) Adding an item to a second template could erase it.</b> Ticking an item into another list ran it through a copier that carried only about half its fields, and that half-filled copy was then written <b>over the shared item</b> — silently blanking its <b>photos</b>, its whole <b>maintenance record</b>, and its brand, model, serial, price, warranty and condition, <b>in every list at once</b>. Nothing warned you; you would only find out weeks later when a photo was missing. Putting an item into another template now stores a <b>link</b> rather than a copy, so there is no half-filled copy left to overwrite anything with. <b>(3) A deliberate exception, clearly marked.</b> Because the bag often genuinely does depend on the trip — on a hike everything goes in the hiking backpack, on a flight in the checked luggage — <b>② In this list</b> now has its own <b>Container</b> setting, which names the default it is overriding and says outright that this list differs on purpose. <b>(4) A default bag per template.</b> Most templates are near-uniform — everything on a run goes in the duffel — so a template can now set <b>one bag for everything in it</b>, saving you from setting the same bag on eighty-four items. It sits between the item’s own default and the per-list exception. <b>Nothing on any of your lists moved:</b> every item was checked, and each one kept the exact bag it already had.',
+      'Editing an item now genuinely changes it everywhere, and adding it to another list can no longer destroy its photos and care history behind your back.'),
     v('v107', '2026-08-20 · 12:00 UTC', false, 'Settings tidied — a colour-coded index instead of a long stack',
       'Settings had quietly grown to <b>thirteen cards</b>, and the three you touch least — syncing, backup files and the automatic on-device copies — sat right at the <b>top</b>, pushing Kits, People and Storage places below the fold. Two changes. <b>(1) Everything folds.</b> Each section is now a single line with a <b>summary of what’s inside</b> — “People: Martin, Anna”, “Storage places: 12 places”, “Backed up today — still current” — so you can take in the whole tab at a glance and open only what you need. Whatever you leave open <b>stays open next time</b>, so the sections you use often settle where you want them. The whole tab is now about <b>a page and a half instead of thirty</b>. <b>(2) A sensible running order.</b> Four groups: <b>Your packing setup</b> (Kits, People, Storage places, Trip presets, Shared trips) first because that is what you actually come here to change; then <b>Appearance</b>; then <b>Your data</b> (syncing, backup &amp; restore, automatic backups) — as important as ever, but touched about twice a year; and finally <b>Help &amp; about</b>. The database overview stays pinned at the top where it was. Nothing was removed and nothing moved out of Settings — every button is exactly where it was, one tap deeper. <b>(3) A colour each.</b> Every section has its own <b>signature colour</b> and its own hand-drawn icon — violet Kits, blue People, teal Storage places, amber Trip presets, green Shared trips, and so on down. Closed, it shows as a tinted icon; <b>open, the colour takes over the whole panel</b> — the icon fills in solid, the heading and edge take the colour, and the panel itself carries a faint wash of it — so there is never any doubt which section you are inside, however far you have scrolled. The colours are fixed identities, not status lights: a section is the same colour whatever state it is in, so you learn it by sight.',
       'You can see the whole of Settings at once again, the things you actually change are at the top instead of buried under the things you don’t, and each section is recognisable by colour before you have read a word.'),

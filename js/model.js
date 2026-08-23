@@ -374,6 +374,11 @@ export function coerceList(l) {
   // colour, so an un-customised template still looks distinct.
   l.emoji = (typeof l.emoji === 'string' && l.emoji.trim()) ? l.emoji.trim().slice(0, 4) : '';
   l.color = (typeof l.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(l.color)) ? l.color : '';
+  // One container for everything in this template ('' = none, items decide for
+  // themselves). Most templates are near-uniform in practice — on a run everything
+  // goes in the duffel — so this saves setting the same bag on dozens of items. It
+  // sits BETWEEN the item's own default and the per-list exception.
+  l.defaultContainer = typeof l.defaultContainer === 'string' ? l.defaultContainer : '';
   return l;
 }
 export function coerceEvent(e) {
@@ -1661,66 +1666,161 @@ export function newMembership(partial = {}) {
 // can persist edits: intrinsic fields flow to the shared catalog item (edit once,
 // everywhere updates), everything contextual flows to the membership.
 
-// Push a resolved item's intrinsic edits onto its shared catalog item. Container /
-// phase DEFAULTS are intentionally left alone (they're set once, overridden per
-// membership); only the thing-itself fields propagate.
+// Every field that belongs to the PHYSICAL OBJECT rather than to one template.
+// This list is the single source of truth, used both to push edits onto the shared
+// item (`applyIntrinsic`) and to carry an item between templates (`linkFields`).
+// Keeping one list is deliberate: the two used to be written out by hand
+// separately, they drifted, and a partial copy silently erased photos, the care
+// record and every purchase detail off the shared item. Add new item-level fields
+// HERE and both sides stay correct for free.
+export const INTRINSIC_FIELDS = [
+  'name', 'swedish', 'category', 'charging', 'chargeType', 'liquid', 'restricted',
+  'perNight', 'consumable', 'shortList', 'weight', 'storage', 'sub',
+  'photos', 'thumb', 'maintenance', 'stats',
+  'color', 'size', 'manufacturer', 'model', 'owner', 'acquired', 'price', 'currency',
+  'purchaseLink', 'expiry', 'condition', 'retired', 'retiredReason', 'serial',
+  'qtyOwned', 'warranty', 'capacityL', 'maxKg',
+];
+
+// Container and phase are intrinsic too, but they reach the catalog through their
+// OWN channel (`_defContainer` / `_defPhase`) rather than through the resolved
+// value, because the resolved value may be a per-list exception or a template
+// default. Writing `it.container` onto the item would let "in Hiking, use the
+// hiking backpack" leak out and become the answer everywhere.
+export const DEFAULT_FIELDS = { container: '_defContainer', phase: '_defPhase' };
+
+// Push a resolved item's intrinsic edits onto its shared catalog item.
+//
+// A field that is `undefined` on the incoming object is LEFT ALONE. That single
+// rule is what makes a partial copy harmless: something that only carries the
+// contextual fields can no longer blank out the item's photos or care record.
+// Clearing a field on purpose still works — the editor sends '' , not undefined.
 export function applyIntrinsic(cat, it) {
-  cat.name = it.name;
-  cat.swedish = it.swedish || '';
-  cat.category = it.category;
-  cat.charging = !!it.charging;
-  cat.chargeType = it.chargeType || '';
-  cat.liquid = !!it.liquid;
-  cat.restricted = !!it.restricted;
-  cat.perNight = !!it.perNight;
-  cat.consumable = !!it.consumable;
-  cat.shortList = !!it.shortList;
-  cat.weight = Number.isFinite(it.weight) ? it.weight : 0;
-  cat.storage = it.storage || '';
-  cat.sub = asArray(it.sub).slice();
-  cat.photos = asArray(it.photos).slice();
-  cat.thumb = typeof it.thumb === 'string' ? it.thumb : '';
-  cat.maintenance = it.maintenance || null;
-  // Descriptive / ownership metadata — intrinsic, so it lives on the shared item.
-  cat.color = it.color || '';
-  cat.size = it.size || '';
-  cat.manufacturer = it.manufacturer || '';
-  cat.model = it.model || '';
-  cat.owner = it.owner || '';
-  cat.acquired = it.acquired || '';
-  cat.price = Number.isFinite(it.price) ? it.price : 0;
-  cat.currency = it.currency || '';
-  cat.purchaseLink = it.purchaseLink || '';
-  cat.expiry = it.expiry || '';
-  cat.condition = it.condition || '';
-  cat.retired = !!it.retired;
-  cat.retiredReason = it.retiredReason || '';
-  cat.serial = it.serial || '';
-  cat.qtyOwned = Number.isFinite(it.qtyOwned) ? it.qtyOwned : 0;
-  cat.warranty = it.warranty || '';
-  cat.capacityL = Number.isFinite(it.capacityL) ? it.capacityL : 0;
-  cat.maxKg = Number.isFinite(it.maxKg) ? it.maxKg : 0;
-  if (it.stats) cat.stats = it.stats;
+  for (const f of INTRINSIC_FIELDS) {
+    if (it[f] === undefined) continue;
+    cat[f] = Array.isArray(it[f]) ? it[f].slice() : it[f];
+  }
+  // The item's own DEFAULT container / phase, only when the caller supplied one.
+  for (const [field, channel] of Object.entries(DEFAULT_FIELDS)) {
+    if (it[channel] !== undefined) cat[field] = it[channel];
+  }
   return coerceItem(cat);
+}
+
+// The contextual (per-template) half of an item — everything that is allowed to
+// differ between two lists that share the same physical object.
+export const CONTEXTUAL_FIELDS = [
+  'seasons', 'contexts', 'transports', 'catering', 'weather',
+  'section', 'kit', 'qty', 'note', 'itemType',
+];
+
+// Put an EXISTING catalog item into another template.
+//
+// The result is a link, not a copy: it names the item by id and carries only the
+// per-list choices, leaving every intrinsic field `undefined` so `applyIntrinsic`
+// passes over them. This is the fix for the bug where joining a second template
+// wrote a half-filled copy over the shared item and erased its photos, care
+// record, purchase details and serial number everywhere at once.
+export function linkFromResolved(src, itemId) {
+  const link = { _itemId: itemId, _link: true, name: src && src.name ? src.name : '' };
+  for (const f of CONTEXTUAL_FIELDS) {
+    if (src && src[f] !== undefined) link[f] = Array.isArray(src[f]) ? src[f].slice() : src[f];
+  }
+  // A new home starts with no exception — it follows the template's default, and
+  // failing that the item's own. That is the whole point of a shared default.
+  link._ovContainer = '';
+  link._ovPhase = '';
+  return link;
+}
+
+// Work out the whole container repair as a PLAN, without touching anything.
+//
+// This lives here rather than in db.js on purpose: the ordering is subtle and a
+// plain function can be tested. The trap is that a membership with no override
+// falls back to its item's default, so every effective value must be read BEFORE
+// any default is rewritten — read it afterwards and those rows quietly follow the
+// new default, which is the one thing this repair promises never to do.
+export function planContainerMigration(items, mems, templates = []) {
+  const itemsById = new Map(asArray(items).map((i) => [i.id, i]));
+  // A template's own default bag is part of how a row resolves, so it must be in
+  // hand both when reading the current value and when deciding what to store.
+  const tplById = new Map(asArray(templates).map((t) => [t.id, templateDefaults(t).container]));
+  const tplOf = (m) => tplById.get(m.templateId) || '';
+  // 1. Snapshot what every row shows RIGHT NOW.
+  const effective = new Map();
+  for (const m of asArray(mems)) {
+    const item = itemsById.get(m.itemId);
+    if (!item) continue;
+    effective.set(m.id, m.container || tplOf(m) || item.container || '');
+  }
+  // 2. Only then decide the new defaults.
+  const rows = asArray(mems).filter((m) => effective.has(m.id))
+    .map((m) => ({ itemId: m.itemId, container: effective.get(m.id) }));
+  const defaults = containerDefaultsFrom(rows);
+  // 3. And express the change as edits, still touching nothing.
+  const itemChanges = [];
+  for (const [itemId, def] of defaults) {
+    const item = itemsById.get(itemId);
+    if (item && item.container !== def) itemChanges.push({ id: itemId, container: def });
+  }
+  const memChanges = [];
+  for (const m of asArray(mems)) {
+    if (!effective.has(m.id)) continue;
+    const want = containerOverrideFor(effective.get(m.id), tplOf(m), defaults.get(m.itemId) || '');
+    if (m.container !== want) memChanges.push({ id: m.id, container: want });
+  }
+  return { defaults, effective, itemChanges, memChanges };
+}
+
+// Promote a one-off trip entry into a real catalog item. Unlike a link this DOES
+// create a new item, so it must carry everything the entry has — including any
+// photo taken on the trip, which the old hand-written copier quietly dropped.
+export function itemFromEntry(entry) {
+  const it = catalogItemFromResolved(entry);
+  for (const f of CONTEXTUAL_FIELDS) {
+    if (entry && entry[f] !== undefined) it[f] = Array.isArray(entry[f]) ? entry[f].slice() : entry[f];
+  }
+  return coerceItem(it);
+}
+
+// --- Migrating the old "frozen default" container data ---
+//
+// Before v108 an item's default container was fixed at the moment it was created
+// and no screen could change it, so every real choice ended up as a per-list
+// override. This picks the container each item uses MOST across its lists and
+// makes that its default; the lists that genuinely differ keep an explicit
+// exception. Effective containers are unchanged — nothing moves on any list.
+//
+// Deterministic and idempotent: re-running it on already-migrated data produces
+// exactly the same answer, which matters because two synced devices may both run it.
+export function containerDefaultsFrom(rows) {
+  const tally = new Map();   // itemId -> Map(container -> count), insertion order breaks ties
+  for (const r of asArray(rows)) {
+    if (!r || !r.itemId) continue;
+    if (!tally.has(r.itemId)) tally.set(r.itemId, new Map());
+    const t = tally.get(r.itemId);
+    const c = typeof r.container === 'string' ? r.container : '';
+    t.set(c, (t.get(c) || 0) + 1);
+  }
+  const out = new Map();
+  for (const [itemId, t] of tally) {
+    let best = '', bestN = -1;
+    for (const [c, n] of t) if (n > bestN) { best = c; bestN = n; }   // first-seen wins a tie
+    out.set(itemId, best);
+  }
+  return out;
 }
 
 // A brand-new catalog item from a resolved item (one the app just added). Its own
 // container / phase become the item's DEFAULTS.
 export function catalogItemFromResolved(it) {
-  return newItem({
-    name: it.name, swedish: it.swedish || '', category: it.category,
-    container: it.container, phase: it.phase, itemType: it.itemType,
-    charging: !!it.charging, chargeType: it.chargeType || '',
-    liquid: !!it.liquid, restricted: !!it.restricted, perNight: !!it.perNight, consumable: !!it.consumable, shortList: !!it.shortList,
-    weight: it.weight || 0, storage: it.storage || '', sub: asArray(it.sub).slice(),
-    photos: asArray(it.photos).slice(), thumb: it.thumb || '', maintenance: it.maintenance || null, stats: it.stats,
-    color: it.color || '', size: it.size || '', manufacturer: it.manufacturer || '', model: it.model || '',
-    owner: it.owner || '', acquired: it.acquired || '', price: it.price || 0, currency: it.currency || '',
-    purchaseLink: it.purchaseLink || '', expiry: it.expiry || '', condition: it.condition || '',
-    retired: !!it.retired, retiredReason: it.retiredReason || '',
-    serial: it.serial || '', qtyOwned: it.qtyOwned || 0, warranty: it.warranty || '',
-    capacityL: it.capacityL || 0, maxKg: it.maxKg || 0,
-  });
+  const seed = { container: it.container, phase: it.phase, itemType: it.itemType };
+  for (const f of INTRINSIC_FIELDS) if (it[f] !== undefined) seed[f] = it[f];
+  // A brand-new item has no exception yet, so its own resolved value IS its default.
+  for (const [field, channel] of Object.entries(DEFAULT_FIELDS)) {
+    if (it[channel] !== undefined) seed[field] = it[channel];
+  }
+  return newItem(seed);
 }
 
 // Build/refresh the membership for one resolved item in a template: conditions from
@@ -1735,10 +1835,17 @@ export function membershipFromResolved(cat, templateId, it, order = 0, existing 
   m.transports = asArray(it.transports).slice();
   m.catering = asArray(it.catering).slice();
   m.weather = asArray(it.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w));
-  m.container = it.container !== cat.container ? it.container : '';
+  // The per-list EXCEPTION ('' = follow the template default, then the item's own).
+  // When the caller states it outright (`_ovContainer`, set by every resolve) we
+  // store it verbatim. Only a freshly-built item that has never been resolved falls
+  // back to inferring one — and inference is exactly what used to freeze the item's
+  // default forever, so it is now the rare path, not the normal one.
+  m.container = it._ovContainer !== undefined ? String(it._ovContainer || '')
+    : containerOverrideFor(it.container, it._tplContainer || '', cat.container);
   m.section = it.section || '';   // purely per-template — always stored, no catalog default
   m.kit = it.kit || '';           // kit name — contextual per template, always stored, no catalog default
-  m.phase = it.phase !== cat.phase ? it.phase : '';
+  m.phase = it._ovPhase !== undefined ? String(it._ovPhase || '')
+    : (it.phase !== cat.phase ? it.phase : '');
   m.itemType = it.itemType !== cat.itemType ? it.itemType : '';
   m.qty = it.qty || '';
   m.note = it.note || '';
@@ -1749,9 +1856,21 @@ export function membershipFromResolved(cat, templateId, it, order = 0, existing 
 // plus one membership: the membership's conditions replace the item's, and any
 // override wins over the item's default. The result is byte-compatible with what
 // the rest of the app already consumes (buildTotalEntries, editors, review…).
-export function resolveMembership(item, m) {
+// `tplDefaults` carries the owning template's own defaults (currently just a
+// default container), so a template can say "everything in here goes in the hiking
+// backpack" once instead of on all 84 items.
+//
+// Container resolves in three steps, most specific first:
+//   1. the per-list EXCEPTION on this membership,
+//   2. the TEMPLATE's default container,
+//   3. the ITEM's own default — the thing that is true everywhere else.
+// The parts are handed back alongside the answer (`_ovContainer` / `_tplContainer`
+// / `_defContainer`) so the editor can show which one is actually in force, and so
+// a later save can put each part back where it came from.
+export function resolveMembership(item, m, tplDefaults = null) {
   const base = coerceItem({ ...item });
   const mm = coerceMembership({ ...m });
+  const tplContainer = (tplDefaults && typeof tplDefaults.container === 'string') ? tplDefaults.container : '';
   return coerceItem({
     ...base,
     id: base.id,
@@ -1760,10 +1879,15 @@ export function resolveMembership(item, m) {
     transports: mm.transports.slice(),
     catering: mm.catering.slice(),
     weather: mm.weather.slice(),
-    container: mm.container || base.container,
+    container: mm.container || tplContainer || base.container,
+    _ovContainer: mm.container,      // this list's exception ('' = none)
+    _tplContainer: tplContainer,     // the template's default ('' = none)
+    _defContainer: base.container,   // the item's own default — true everywhere
     section: mm.section || '',   // per-template section id ('' = none); not an item default
     kit: mm.kit || '',           // per-template kit name ('' = none); not an item default
     phase: mm.phase || base.phase,
+    _ovPhase: mm.phase,
+    _defPhase: base.phase,
     itemType: mm.itemType || base.itemType,
     qty: mm.qty || base.qty || '',
     note: mm.note || base.note || '',
@@ -1778,12 +1902,18 @@ export function resolveTemplateItems(template, catalog, memberships) {
     .slice()
     .sort((a, b) => ((a.order || 0) - (b.order || 0))); // preserve item order within the template
   const out = [];
+  const tplDefaults = templateDefaults(template);
   for (const m of mine) {
     const item = itemsById.get(m.itemId);
     if (!item) continue;
-    out.push(resolveMembership(item, m));
+    out.push(resolveMembership(item, m, tplDefaults));
   }
   return out;
+}
+
+// A template's own defaults, in the shape resolveMembership wants.
+export function templateDefaults(list) {
+  return { container: (list && typeof list.defaultContainer === 'string') ? list.defaultContainer : '' };
 }
 
 // A template rebuilt into today's list shape (id/name/group/role/… + resolved
@@ -1873,7 +2003,19 @@ function buildCatalogItem(copies) {
 
 // The membership for one original copy: its conditions, plus overrides only where
 // the copy differs from the canonical item's default (kept sparse on purpose).
-function membershipFromCopy(catItem, templateId, copy) {
+// Is a per-list exception needed to make this row show `effective`?
+//
+// The one place that answers this, so every producer agrees. Container resolves
+// exception → template default → item default, so an exception is only redundant
+// when the fallback chain ALREADY lands on the value we want. Comparing against
+// the item default alone (as this used to) drops the exception on any row whose
+// template carries its own default bag — and the row then silently moves to it.
+export function containerOverrideFor(effective, tplDefault, itemDefault) {
+  const fallback = tplDefault || itemDefault || '';
+  return (effective || '') === fallback ? '' : (effective || '');
+}
+
+function membershipFromCopy(catItem, templateId, copy, tplDefault = '') {
   return newMembership({
     itemId: catItem.id,
     templateId,
@@ -1882,7 +2024,7 @@ function membershipFromCopy(catItem, templateId, copy) {
     transports: asArray(copy.transports).slice(),
     catering: asArray(copy.catering).slice(),
     weather: asArray(copy.weather).slice(),
-    container: copy.container !== catItem.container ? copy.container : '',
+    container: containerOverrideFor(copy.container, tplDefault, catItem.container),
     section: copy.section || '',
     phase: copy.phase !== catItem.phase ? copy.phase : '',
     itemType: copy.itemType !== catItem.itemType ? copy.itemType : '',
@@ -1920,7 +2062,9 @@ export function buildCatalog(lists) {
     for (const it of asArray(l.items)) {
       if (!String(it.name || '').trim()) continue;
       const cat = byName.get(normName(it.name));
-      const m = membershipFromCopy(cat, l.id, it);
+      // The template's own default bag is part of how this row will resolve, so it
+      // has to be taken into account when deciding whether an exception is needed.
+      const m = membershipFromCopy(cat, l.id, it, templateDefaults(l).container);
       m.order = order++;   // preserve the item's position within its template
       memberships.push(m);
     }

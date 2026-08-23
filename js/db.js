@@ -18,6 +18,7 @@ import {
   resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
   id as newId, isPhotoRef, inlinePhotos,
+  templateDefaults, containerDefaultsFrom, planContainerMigration,
 } from './model.js';
 import { seedLists } from './seed.js';
 import { Dexie, dexieCloud } from './vendor/dexie-cloud.mjs';
@@ -363,10 +364,11 @@ function resolveOne(template, itemsById, mems) {
     .filter((m) => m.templateId === template.id)
     .sort((a, b) => (a.order || 0) - (b.order || 0));
   const items = [];
+  const tplDefaults = templateDefaults(template);   // e.g. "everything here goes in the hiking backpack"
   for (const m of mine) {
     const item = itemsById.get(m.itemId);
     if (!item) continue;
-    const r = resolveMembership(item, m);
+    const r = resolveMembership(item, m, tplDefaults);
     r._itemId = item.id;
     r._memId = m.id;
     items.push(r);
@@ -415,7 +417,14 @@ export async function saveList(list) {
     if (it._itemId && itemsById.has(it._itemId)) cat = itemsById.get(it._itemId);
     else if (itemByName.has(normName(it.name))) cat = itemByName.get(normName(it.name));
     if (cat) {
+      // Safe even for a link: `applyIntrinsic` steps over every field the caller
+      // left undefined, so a contextual-only object cannot blank the shared item.
       applyIntrinsic(cat, it);                 // propagate edits to the shared thing
+    } else if (it._link) {
+      // A link whose target has vanished (deleted on another device mid-sync).
+      // Never invent an item from a link — it would have no photos, no care record
+      // and no purchase detail, and would then look canonical. Drop the row instead.
+      continue;
     } else {
       cat = catalogItemFromResolved(it);       // a new item added in this template
       itemsById.set(cat.id, cat);
@@ -647,7 +656,59 @@ export async function ensureSeeded() {
     await reseedBuiltins();
   }
   try { localStorage.setItem(SEED_KEY, String(SEED_VERSION)); } catch { /* ignore */ }
+  await migrateContainerModel();
   return getLists();
+}
+
+// One-time repair of the container model (v108).
+//
+// Until v108 an item's default container was frozen at creation — no screen could
+// change it — so every deliberate choice was stored as a per-list override and the
+// default stayed at whatever the item happened to be born with. Now that the
+// default is editable and propagates, it has to mean something: this gives each
+// item the container it uses MOST across its lists, and keeps a real exception
+// wherever a list genuinely differs.
+//
+// EFFECTIVE CONTAINERS DO NOT CHANGE. Every list shows exactly what it showed
+// before; only the split between "default" and "exception" is rearranged. The
+// calculation is deterministic, so two synced devices reach the same answer, and
+// idempotent, so running it again is a no-op.
+const CONTAINER_MODEL_KEY = 'ams-container-model';
+const CONTAINER_MODEL_VERSION = 2;
+
+export async function migrateContainerModel() {
+  let done = 0;
+  try { done = Number(localStorage.getItem(CONTAINER_MODEL_KEY)) || 0; } catch { /* ignore */ }
+  if (done >= CONTAINER_MODEL_VERSION) return { skipped: true };
+
+  const { items, mems, tmpls } = await loadCatalog();
+  const itemsById = new Map(items.map((i) => [i.id, i]));
+
+  // All the thinking happens in model.js, where it can be tested; this only applies
+  // the result. The ordering inside that plan is load-bearing — see its comment.
+  // Templates go in because a template's own default bag is part of how a row
+  // resolves: without it, this would strip exceptions the default then overrides.
+  const plan = planContainerMigration(items, mems, tmpls);
+  const memById = new Map(mems.map((m) => [m.id, m]));
+  const putItems = [];
+  for (const c of plan.itemChanges) {
+    const item = itemsById.get(c.id);
+    if (item) { item.container = c.container; putItems.push(item); }
+  }
+  const putMems = [];
+  for (const c of plan.memChanges) {
+    const m = memById.get(c.id);
+    if (m) { m.container = c.container; putMems.push(m); }
+  }
+
+  if (putItems.length || putMems.length) {
+    await writeBatch([
+      ...putItems.map((v) => ({ store: ITEMS, value: v })),
+      ...putMems.map((v) => ({ store: MEMBERSHIPS, value: v })),
+    ], []);
+  }
+  try { localStorage.setItem(CONTAINER_MODEL_KEY, String(CONTAINER_MODEL_VERSION)); } catch { /* ignore */ }
+  return { items: putItems.length, memberships: putMems.length };
 }
 
 // --- Backup (Export / Import) ---
@@ -749,6 +810,13 @@ async function applyBackup({ lists = [], events = [], actions = [], kits = [], p
       });
     }
   }
+  // A backup can carry data from BEFORE the container model was repaired, while
+  // this device's "already migrated" marker (localStorage) says it is done — the
+  // marker and the data live in different places and a restore replaces only one
+  // of them. Re-run it over whatever just arrived; it is idempotent, so a restore
+  // of already-repaired data changes nothing.
+  try { localStorage.removeItem(CONTAINER_MODEL_KEY); } catch { /* ignore */ }
+  await migrateContainerModel().catch(() => {});
   return { lists: L.length, events: E.length, actions: A.length, kits: K.length, photos: P.length };
 }
 

@@ -25,6 +25,7 @@ import {
   listEmoji, listColor, TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS,
   isPhotoRef, photoRefs, inlinePhotos, hasInlinePhotos,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
+  INTRINSIC_FIELDS, linkFromResolved, itemFromEntry, containerDefaultsFrom, templateDefaults, planContainerMigration, containerOverrideFor,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -982,14 +983,15 @@ test('buildCatalog: itemType override preserves the Bike "after" reminders', () 
   assert.equal(swimTowel.itemType, 'item');     // same catalog item, shown as a packable item in Swim
 });
 
-test('membershipFromResolved: stores overrides only where the item differs from its default', () => {
+test('membershipFromResolved: stores the per-list exception the editor states', () => {
   const cat = newItem({ name: 'Socks', container: 'Duffel bag', phase: 'week', itemType: 'item' });
   const resolved = resolveMembership(cat, newMembership({ itemId: cat.id, templateId: 't1' }));
-  resolved.container = 'Checked luggage';   // user changes the bag in this template
-  resolved.seasons = ['Summer'];            // and adds a condition
+  resolved._ovContainer = 'Checked luggage';   // user sets an exception for THIS list
+  resolved.container = 'Checked luggage';      // …and the effective value follows
+  resolved.seasons = ['Summer'];               // and adds a condition
   const m = membershipFromResolved(cat, 't1', resolved, 3);
-  assert.equal(m.container, 'Checked luggage'); // differs from default -> stored as override
-  assert.equal(m.phase, '');                    // equals default -> no override
+  assert.equal(m.container, 'Checked luggage'); // an exception was asked for -> stored
+  assert.equal(m.phase, '');                    // no exception -> follows the item default
   assert.deepEqual(m.seasons, ['Summer']);
   assert.equal(m.order, 3);
   // round-trips back to the same resolved values
@@ -997,6 +999,26 @@ test('membershipFromResolved: stores overrides only where the item differs from 
   assert.equal(back.container, 'Checked luggage');
   assert.equal(back.phase, 'week');
   assert.deepEqual(back.seasons, ['Summer']);
+});
+
+test('membershipFromResolved: clearing the exception falls back to the item default', () => {
+  const cat = newItem({ name: 'Socks', container: 'Duffel bag' });
+  const m0 = newMembership({ itemId: cat.id, templateId: 't1', container: 'Checked luggage' });
+  const resolved = resolveMembership(cat, m0);
+  assert.equal(resolved.container, 'Checked luggage');
+  resolved._ovContainer = '';                       // "— use the default —"
+  const m = membershipFromResolved(cat, 't1', resolved, 0, m0);
+  assert.equal(m.container, '');
+  assert.equal(resolveMembership(cat, m).container, 'Duffel bag');
+});
+
+test('a freshly built item (no exception channel) still infers its override', () => {
+  // Paths that hand-build an item never went through resolveMembership, so they
+  // carry no `_ovContainer`. Those must keep working the old way.
+  const cat = newItem({ name: 'Socks', container: 'Duffel bag' });
+  const raw = newItem({ name: 'Socks', container: 'Checked luggage' });
+  const m = membershipFromResolved(cat, 't1', raw, 0);
+  assert.equal(m.container, 'Checked luggage');
 });
 
 test('applyIntrinsic: shared-item edits propagate; container/phase defaults are left alone', () => {
@@ -1846,4 +1868,234 @@ test('oldestCreatedAt: dates a device from its earliest trip, not the newest', (
   const lists = [{ createdAt: '2026-01-05T00:00:00.000Z' }];
   assert.equal(oldestCreatedAt(events, lists), '2025-07-14T00:00:00.000Z');
   assert.equal(oldestCreatedAt([], [{}]), '', 'rows with no stamp contribute nothing');
+});
+
+// --- v108: one physical item, shared properly -------------------------------
+// These lock shut the bug where putting an item into a second template wrote a
+// half-filled copy over the SHARED item and erased its photos, care record and
+// purchase details everywhere at once.
+
+// A fully-described physical object, the way a well-kept item looks.
+function richItem() {
+  return newItem({
+    name: 'Insta360 X4', category: 'electronics', container: 'Day pack', phase: 'day',
+    manufacturer: 'Insta360', model: 'X4', serial: 'IX4-99812',
+    price: 4990, currency: 'SEK', purchaseLink: 'https://example.com',
+    acquired: '2025-03-01', warranty: '2027-03-01', condition: 'good', qtyOwned: 1,
+    weight: 203, storage: 'Chest of drawers',
+    photos: ['photo-abc123'], thumb: 'data:image/jpeg;base64,AAAA',
+    maintenance: { intervalDays: 90, lastDone: '2026-05-01' },
+  });
+}
+
+test('linkFromResolved: joining another template cannot touch the shared item', () => {
+  const cat = richItem();
+  const before = JSON.parse(JSON.stringify(cat));
+  const link = linkFromResolved(cat, cat.id);
+  applyIntrinsic(cat, link);            // exactly what saveList does with the link
+  for (const f of INTRINSIC_FIELDS) {
+    if (f === 'name') continue;         // the link carries the name, unchanged
+    assert.deepEqual(cat[f], before[f], `link erased the shared item's "${f}"`);
+  }
+  assert.equal(cat.container, before.container, 'link erased the container default');
+});
+
+test('linkFromResolved: carries the per-list choices and links by id', () => {
+  const cat = richItem();
+  const src = { ...cat, seasons: ['Summer'], note: 'in the side pocket', qty: '2', kit: 'Camera kit' };
+  const link = linkFromResolved(src, cat.id);
+  assert.equal(link._itemId, cat.id);
+  assert.equal(link._link, true);
+  assert.deepEqual(link.seasons, ['Summer']);
+  assert.equal(link.note, 'in the side pocket');
+  assert.equal(link.qty, '2');
+  assert.equal(link.kit, 'Camera kit');
+  assert.equal(link._ovContainer, '', 'a new home starts with no exception');
+  // and it carries NONE of the intrinsic detail, so there is nothing to overwrite with
+  for (const f of INTRINSIC_FIELDS) {
+    if (f === 'name') continue;
+    assert.equal(link[f], undefined, `a link must not carry "${f}"`);
+  }
+});
+
+test('applyIntrinsic: an absent field is left alone, an empty one still clears', () => {
+  const cat = richItem();
+  applyIntrinsic(cat, { serial: '' });                 // deliberate clear
+  assert.equal(cat.serial, '');
+  assert.equal(cat.manufacturer, 'Insta360');          // untouched, not wiped
+  assert.deepEqual(cat.photos, ['photo-abc123']);
+});
+
+test('editing an item in one template propagates to every other template', () => {
+  const cat = richItem();
+  const mTravel = newMembership({ itemId: cat.id, templateId: 'travel' });
+  const mHiking = newMembership({ itemId: cat.id, templateId: 'hiking' });
+  // Open it in Travel and change things under "① The item itself".
+  const edited = resolveMembership(cat, mTravel);
+  edited.storage = 'Camera shelf';
+  edited.weight = 210;
+  edited._defContainer = 'Carry-on / hand luggage';   // the ① default, not an exception
+  applyIntrinsic(cat, edited);
+  const hiking = resolveMembership(cat, mHiking);
+  assert.equal(hiking.storage, 'Camera shelf');
+  assert.equal(hiking.weight, 210);
+  assert.equal(hiking.container, 'Carry-on / hand luggage', 'the container default must travel too');
+});
+
+test('a per-list exception survives an edit to the shared default', () => {
+  const cat = newItem({ name: 'Sunglasses', container: 'Duffel bag' });
+  const mHiking = newMembership({ itemId: cat.id, templateId: 'hiking', container: 'Hiking backpack' });
+  const edited = resolveMembership(cat, newMembership({ itemId: cat.id, templateId: 'travel' }));
+  edited._defContainer = 'Carry-on / hand luggage';
+  applyIntrinsic(cat, edited);
+  assert.equal(resolveMembership(cat, mHiking).container, 'Hiking backpack', 'the exception still wins');
+});
+
+test('container resolves exception → template default → item default', () => {
+  const cat = newItem({ name: 'Socks', container: 'Duffel bag' });
+  const plain = newMembership({ itemId: cat.id, templateId: 'hiking' });
+  const withEx = newMembership({ itemId: cat.id, templateId: 'hiking', container: 'RV storage box' });
+  const tpl = templateDefaults({ defaultContainer: 'Hiking backpack' });
+  assert.equal(resolveMembership(cat, plain, null).container, 'Duffel bag');       // item default
+  assert.equal(resolveMembership(cat, plain, tpl).container, 'Hiking backpack');   // template beats item
+  assert.equal(resolveMembership(cat, withEx, tpl).container, 'RV storage box');   // exception beats both
+});
+
+test('containerDefaultsFrom: the most-used container wins, ties go to first seen', () => {
+  const d = containerDefaultsFrom([
+    { itemId: 'a', container: 'Duffel bag' },
+    { itemId: 'a', container: 'Duffel bag' },
+    { itemId: 'a', container: 'Carry-on / hand luggage' },
+    { itemId: 'b', container: 'Golf bag' },
+    { itemId: 'b', container: 'Checked luggage' },
+  ]);
+  assert.equal(d.get('a'), 'Duffel bag');
+  assert.equal(d.get('b'), 'Golf bag');       // 1-1 tie -> the one seen first
+});
+
+test('the container migration never moves an item on any list', () => {
+  const cat = newItem({ name: 'Sunglasses', container: 'Day pack' });   // frozen birth default
+  const mems = [
+    newMembership({ itemId: cat.id, templateId: 'golf', container: 'Duffel bag' }),
+    newMembership({ itemId: cat.id, templateId: 'run', container: 'Duffel bag' }),
+    newMembership({ itemId: cat.id, templateId: 'hiking', container: 'Hiking backpack' }),
+    newMembership({ itemId: cat.id, templateId: 'car', container: '' }),   // followed the old default
+  ];
+  const before = mems.map((m) => resolveMembership(cat, m).container);
+  // …the migration, exactly as db.js runs it
+  const rows = mems.map((m) => ({ itemId: m.itemId, container: m.container || cat.container || '' }));
+  const defaults = containerDefaultsFrom(rows);
+  cat.container = defaults.get(cat.id);
+  for (const m of mems) {
+    const eff = m.container || 'Day pack';
+    m.container = eff === defaults.get(m.itemId) ? '' : eff;
+  }
+  assert.equal(cat.container, 'Duffel bag', 'the container it actually uses most becomes the default');
+  const after = mems.map((m) => resolveMembership(cat, m).container);
+  assert.deepEqual(after, before, 'every list must still show exactly what it showed');
+});
+
+test('itemFromEntry: promoting a trip one-off keeps its photo and care record', () => {
+  const entry = newItem({
+    name: 'Beach umbrella', container: 'Checked luggage', seasons: ['Summer'],
+    photos: ['photo-xyz'], thumb: 'data:image/jpeg;base64,BBBB',
+    maintenance: { intervalDays: 365 }, price: 300,
+  });
+  const it = itemFromEntry(entry);
+  assert.deepEqual(it.photos, ['photo-xyz']);
+  assert.equal(it.thumb, 'data:image/jpeg;base64,BBBB');
+  assert.equal(it.maintenance.intervalDays, 365);
+  assert.equal(it.price, 300);
+  assert.deepEqual(it.seasons, ['Summer'], 'and its conditions come along');
+});
+
+test('coerceList: a template can carry its own default container', () => {
+  assert.equal(coerceList({ name: 'Hiking' }).defaultContainer, '');
+  assert.equal(coerceList({ name: 'Hiking', defaultContainer: 'Hiking backpack' }).defaultContainer, 'Hiking backpack');
+  assert.equal(coerceList({ name: 'Hiking', defaultContainer: 42 }).defaultContainer, '');
+});
+
+test('planContainerMigration: reads every row BEFORE rewriting any default', () => {
+  // The trap: "Sunglasses" is born in the Day pack, and the Car list has no
+  // override so it simply follows that default. Once the default becomes
+  // "Duffel bag", anything that recomputed the Car row's old value by reading the
+  // item would get "Duffel bag" — and the row would silently move.
+  const cat = newItem({ name: 'Sunglasses', container: 'Day pack' });
+  const mems = [
+    newMembership({ itemId: cat.id, templateId: 'golf', container: 'Duffel bag' }),
+    newMembership({ itemId: cat.id, templateId: 'run', container: 'Duffel bag' }),
+    newMembership({ itemId: cat.id, templateId: 'car', container: '' }),   // follows the default
+  ];
+  const before = mems.map((m) => resolveMembership(cat, m).container);
+  const plan = planContainerMigration([cat], mems);
+
+  assert.equal(plan.defaults.get(cat.id), 'Duffel bag');
+  // The Car row must be given "Day pack" as an explicit exception, NOT left empty.
+  const carChange = plan.memChanges.find((c) => c.id === mems[2].id);
+  assert.ok(carChange, 'the row that relied on the old default must be pinned');
+  assert.equal(carChange.container, 'Day pack');
+
+  // Apply the plan and confirm nothing moved.
+  for (const c of plan.itemChanges) cat.container = c.container;
+  for (const c of plan.memChanges) mems.find((m) => m.id === c.id).container = c.container;
+  assert.deepEqual(mems.map((m) => resolveMembership(cat, m).container), before);
+});
+
+test('planContainerMigration: is idempotent and leaves settled data alone', () => {
+  const cat = newItem({ name: 'Socks', container: 'Duffel bag' });
+  const mems = [
+    newMembership({ itemId: cat.id, templateId: 'a', container: '' }),
+    newMembership({ itemId: cat.id, templateId: 'b', container: '' }),
+    newMembership({ itemId: cat.id, templateId: 'c', container: 'RV storage box' }),
+  ];
+  const p1 = planContainerMigration([cat], mems);
+  assert.deepEqual(p1.itemChanges, [], 'the default is already the most-used one');
+  assert.deepEqual(p1.memChanges, [], 'and every exception is already correct');
+});
+
+test('planContainerMigration: an item with no memberships is left untouched', () => {
+  const cat = newItem({ name: 'Orphan', container: 'Day pack' });
+  const plan = planContainerMigration([cat], []);
+  assert.deepEqual(plan.itemChanges, []);
+  assert.deepEqual(plan.memChanges, []);
+});
+
+test('containerOverrideFor: an exception is only kept when the fallback misses', () => {
+  // No template default: compare against the item's own.
+  assert.equal(containerOverrideFor('Duffel bag', '', 'Duffel bag'), '');
+  assert.equal(containerOverrideFor('Golf bag', '', 'Duffel bag'), 'Golf bag');
+  // With a template default, THAT is what the row would fall back to.
+  assert.equal(containerOverrideFor('Hiking backpack', 'Hiking backpack', 'Duffel bag'), '');
+  assert.equal(containerOverrideFor('Duffel bag', 'Hiking backpack', 'Duffel bag'), 'Duffel bag',
+    'must stay an exception — the template default would otherwise capture this row');
+});
+
+test('buildCatalog: a template default cannot swallow a row that differs from it', () => {
+  // The restore path runs through buildCatalog. Hiking packs into the backpack by
+  // default, but these wipes live in the duffel — that must survive a round-trip.
+  const lists = [
+    coerceList({ id: 'hiking', name: 'Hiking', defaultContainer: 'Hiking backpack',
+      items: [newItem({ name: 'Hand-sanitizer wipes', container: 'Duffel bag' })] }),
+    coerceList({ id: 'travel', name: 'Travel',
+      items: [newItem({ name: 'Hand-sanitizer wipes', container: 'Carry-on / hand luggage' })] }),
+  ];
+  const cat = buildCatalog(lists);
+  const rebuilt = {};
+  for (const t of cat.templates) {
+    for (const it of resolveTemplateItems(t, cat.items, cat.memberships)) rebuilt[t.name] = it.container;
+  }
+  assert.equal(rebuilt.Hiking, 'Duffel bag', 'the row must not be captured by the template default');
+  assert.equal(rebuilt.Travel, 'Carry-on / hand luggage');
+});
+
+test('planContainerMigration: respects a template default when re-run after a restore', () => {
+  const cat = newItem({ name: 'Wipes', container: 'Duffel bag' });
+  const mems = [newMembership({ itemId: cat.id, templateId: 'hiking', container: 'Duffel bag' })];
+  const tmpls = [{ id: 'hiking', defaultContainer: 'Hiking backpack' }];
+  const before = 'Duffel bag';
+  const plan = planContainerMigration([cat], mems, tmpls);
+  for (const c of plan.itemChanges) cat.container = c.container;
+  for (const c of plan.memChanges) mems[0].container = c.container;
+  const after = resolveMembership(cat, mems[0], templateDefaults(tmpls[0])).container;
+  assert.equal(after, before, 're-running the repair must not move a row onto the template default');
 });
