@@ -27,6 +27,8 @@ import {
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
   INTRINSIC_FIELDS, linkFromResolved, itemFromEntry, containerDefaultsFrom, templateDefaults, planContainerMigration, containerOverrideFor, mapSectionAcrossTemplates, orderActivities, ACTIVITY_ORDER,
   sortRowsBy, groupRowsBy, itemConditionLabel, ITEM_CONDITIONS,
+  DEFAULT_ITEM_CONDITIONS, ITEM_CONDITION_IDS, coerceCondition, newCondition, setItemConditions,
+  itemCondition, conditionTone, conditionReplaces, careSections, MAINTENANCE_UPCOMING_DAYS,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -815,10 +817,15 @@ test('hasCare: only true when the record holds something', () => {
 test('maintenanceStatus: overdue / soon / ok by next-due date', () => {
   const today = '2026-07-30T00:00:00Z';
   const mk = (lastDone, intervalDays) => newItem({ name: 'x', maintenance: { intervalDays, lastDone } });
+  // Due exactly N days from today, whatever the threshold currently is.
+  const dueIn = (days) => mk(addDays('2026-07-30', days - 30), 30);
   assert.equal(maintenanceStatus(mk('2026-01-01', 90), today).state, 'overdue'); // due 2026-04-01
-  assert.equal(maintenanceStatus(mk('2026-07-20', 30), today).state, 'soon');    // due 2026-08-19 (20 days)
+  assert.equal(maintenanceStatus(dueIn(3), today).state, 'soon');
   assert.equal(maintenanceStatus(mk('2026-07-01', 365), today).state, 'ok');     // due next year
   assert.equal(maintenanceStatus(newItem({ name: 'x' }), today), null);          // no record
+  // The "due soon" window is a boundary, so pin both sides of it.
+  assert.equal(maintenanceStatus(dueIn(MAINTENANCE_SOON_DAYS), today).state, 'soon');
+  assert.equal(maintenanceStatus(dueIn(MAINTENANCE_SOON_DAYS + 1), today).state, 'ok');
 });
 
 test('maintenanceStatus: reference-only (no interval) and never-done', () => {
@@ -848,7 +855,7 @@ test('maintenanceSummary: counts due (overdue + soon)', () => {
   const today = '2026-07-30T00:00:00Z';
   const list = newList({ items: [
     newItem({ maintenance: { intervalDays: 90, lastDone: '2026-01-01' } }), // overdue
-    newItem({ maintenance: { intervalDays: 30, lastDone: '2026-07-20' } }), // soon
+    newItem({ maintenance: { intervalDays: 30, lastDone: addDays('2026-07-30', -27) } }), // soon (3 days)
     newItem({ maintenance: { notes: 'x' } }),                                // reference
   ] });
   const s = maintenanceSummary([list], today);
@@ -1062,8 +1069,10 @@ test('coerceItem: defaults and validates the new metadata fields', () => {
   assert.equal(empty.price, 0);
   assert.equal(empty.qtyOwned, 0);
   // Invalid values are rejected; valid ones kept.
-  const bad = coerceItem({ name: 'X', condition: 'sparkly', acquired: 'not-a-date', price: -5, qtyOwned: -2 });
-  assert.equal(bad.condition, '');       // unknown condition id dropped
+  const bad = coerceItem({ name: 'X', condition: '  sparkly  ', acquired: 'not-a-date', price: -5, qtyOwned: -2 });
+  // Conditions are editable and live per-device, so an id this device doesn't know
+  // is KEPT (trimmed), not dropped — dropping it would erase a rating set elsewhere.
+  assert.equal(bad.condition, 'sparkly');
   assert.equal(bad.acquired, '');        // non-YMD date dropped
   assert.equal(bad.price, 0);            // negative price clamped
   assert.equal(bad.qtyOwned, 0);         // negative qty clamped
@@ -2235,5 +2244,109 @@ test('groupRowsBy: every row lands in exactly one bucket', () => {
 test('itemConditionLabel: every condition has a label, unrated has none', () => {
   for (const c of ITEM_CONDITIONS) assert.equal(itemConditionLabel(c.id), c.label);
   assert.equal(itemConditionLabel(''), '');
-  assert.equal(itemConditionLabel('nonsense'), '');
+  // An id this device has no name for shows AS ITSELF rather than vanishing — it
+  // belongs to a condition set on another device, or one since removed.
+  assert.equal(itemConditionLabel('nonsense'), 'nonsense');
+});
+
+// ---- Editable conditions (v113) ----------------------------------------------
+// Every test here restores the factory list afterwards: setItemConditions mutates
+// the shared arrays in place, so leaking a custom list would poison later tests.
+const withConditions = (list, fn) => {
+  try { setItemConditions(list); fn(); }
+  finally { setItemConditions(DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c }))); }
+};
+
+test('coerceCondition: trims, bounds and rejects an unknown tone', () => {
+  const c = coerceCondition({ id: '  worn  ', label: '  Worn  ', tone: 'purple', replace: 1 });
+  assert.equal(c.id, 'worn');
+  assert.equal(c.label, 'Worn');
+  assert.equal(c.tone, '');            // not one of the three tones
+  assert.equal(c.replace, true);       // coerced to a real boolean
+  assert.equal(coerceCondition(null).id, '');
+  assert.equal(coerceCondition({ id: 'x'.repeat(80) }).id.length, 40);
+});
+
+test('newCondition: makes a readable id and never collides', () => {
+  assert.equal(newCondition('Being repaired').id, 'being-repaired');
+  assert.equal(newCondition('Worn', ['worn']).id, 'worn-2');
+  assert.equal(newCondition('Worn', ['worn', 'worn-2']).id, 'worn-3');
+  assert.equal(newCondition('!!!').id.startsWith('cond-'), true);  // nothing usable in the name
+  assert.equal(newCondition('Failing').label, 'Failing');
+});
+
+test('setItemConditions: mutates the shared arrays in place, so importers stay live', () => {
+  const conds = ITEM_CONDITIONS;          // the very array another module would hold
+  const ids = ITEM_CONDITION_IDS;
+  withConditions([{ id: 'fine', label: 'Fine' }, { id: 'failing', label: 'Failing', tone: 'danger', replace: true }], () => {
+    assert.equal(conds, ITEM_CONDITIONS); // same array identity, not a replacement
+    assert.equal(ids, ITEM_CONDITION_IDS);
+    assert.deepEqual(ITEM_CONDITION_IDS, ['fine', 'failing']);
+    assert.equal(ITEM_CONDITIONS.length, 2);
+  });
+  assert.deepEqual(ITEM_CONDITION_IDS, DEFAULT_ITEM_CONDITIONS.map((c) => c.id));
+});
+
+test('setItemConditions: drops unusable rows and never leaves the app with none', () => {
+  withConditions([{ id: '', label: 'No id' }, { id: 'a', label: '' }, { id: 'ok', label: 'Ok' }, { id: 'ok', label: 'Dupe' }], () => {
+    assert.deepEqual(ITEM_CONDITION_IDS, ['ok']);
+  });
+  withConditions([], () => {
+    // An empty list falls back to the factory four rather than leaving nothing.
+    assert.deepEqual(ITEM_CONDITION_IDS, DEFAULT_ITEM_CONDITIONS.map((c) => c.id));
+  });
+});
+
+test('conditionReplaces / conditionTone: behaviour follows the flag, not the id', () => {
+  assert.equal(conditionReplaces('retire'), true);     // the built-in one
+  assert.equal(conditionReplaces('worn'), false);
+  assert.equal(conditionTone('worn'), 'warn');
+  assert.equal(conditionTone('good'), '');
+  withConditions([{ id: 'failing', label: 'Failing', tone: 'danger', replace: true }], () => {
+    assert.equal(conditionReplaces('failing'), true);  // a condition you invented does the job
+    assert.equal(conditionReplaces('retire'), false);  // ...and the old id no longer does
+    assert.equal(itemCondition('retire'), null);
+  });
+});
+
+test('shoppingReason: any "needs replacing" condition feeds the buy list', () => {
+  const today = '2026-08-24T00:00:00Z';
+  assert.equal(shoppingReason(newItem({ name: 'Shoes', condition: 'retire' }), today), 'Needs replacing');
+  assert.equal(shoppingReason(newItem({ name: 'Shoes', condition: 'worn' }), today), '');
+  withConditions([{ id: 'failing', label: 'Failing', tone: 'danger', replace: true }, { id: 'ok', label: 'Ok' }], () => {
+    assert.equal(shoppingReason(newItem({ name: 'Shoes', condition: 'failing' }), today), 'Needs replacing');
+    assert.equal(shoppingReason(newItem({ name: 'Shoes', condition: 'ok' }), today), '');
+  });
+});
+
+test('careSections: overdue and due-soon stay open, far-off and reference fold', () => {
+  const row = (state, days) => ({ status: { state, days } });
+  const rows = [row('overdue', -5), row('soon', 3), row('ok', 20), row('ok', 400), row('reference', null)];
+  const secs = careSections(rows, 60);
+  const by = Object.fromEntries(secs.map((s) => [s.key, s]));
+  assert.deepEqual(secs.map((s) => s.key), ['overdue', 'soon', 'upcoming', 'later', 'reference']);
+  assert.equal(by.upcoming.rows.length, 1);         // the 20-day one
+  assert.equal(by.later.rows.length, 1);            // the 400-day one
+  assert.equal(by.overdue.fold, false);
+  assert.equal(by.soon.fold, false);
+  assert.equal(by.upcoming.fold, false);
+  assert.equal(by.later.fold, true);
+  assert.equal(by.reference.fold, true);
+  // Every row lands in exactly one section, so nothing is hidden by the split.
+  assert.equal(secs.reduce((n, s) => n + s.rows.length, 0), rows.length);
+});
+
+test('careSections: the fold boundary, and a missing day count sinks to Later', () => {
+  const row = (days) => ({ status: { state: 'ok', days } });
+  const at = (days) => careSections([row(days)], MAINTENANCE_UPCOMING_DAYS);
+  assert.equal(at(MAINTENANCE_UPCOMING_DAYS).find((s) => s.key === 'upcoming').rows.length, 1);
+  assert.equal(at(MAINTENANCE_UPCOMING_DAYS + 1).find((s) => s.key === 'later').rows.length, 1);
+  assert.equal(at(null).find((s) => s.key === 'later').rows.length, 1);
+  assert.deepEqual(careSections(null).map((s) => s.rows.length), [0, 0, 0, 0, 0]);
+});
+
+test('careSections: rows keep the order they arrived in (the urgency sort still rules)', () => {
+  const row = (name, days) => ({ name, status: { state: 'ok', days } });
+  const secs = careSections([row('a', 5), row('b', 1), row('c', 9)], 60);
+  assert.deepEqual(secs.find((s) => s.key === 'upcoming').rows.map((r) => r.name), ['a', 'b', 'c']);
 });

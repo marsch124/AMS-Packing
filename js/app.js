@@ -6,6 +6,8 @@ import {
   TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS, listEmoji, listColor,
   isPhotoRef,
   ITEM_CONDITION_IDS, itemConditionLabel, sectionName, sortRowsBy, groupRowsBy,
+  DEFAULT_ITEM_CONDITIONS, CONDITION_TONES, coerceCondition, newCondition, setItemConditions,
+  itemCondition, conditionTone, conditionReplaces, careSections, MAINTENANCE_UPCOMING_DAYS,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
@@ -31,7 +33,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v112';
+const APP_VERSION = 'v113';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -329,12 +331,24 @@ function collectItemValues(field, lists = ALL_LISTS) {
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
 
-// A small "condition" badge for an item row — shown ONLY for the states that need
-// attention (worn / needs-replacing), so healthy gear stays unbadged and quiet.
+// A small "condition" badge for an item row. Which conditions badge — and how
+// loudly — is now yours to set in Settings: a condition with no tone stays silent,
+// so healthy gear is quiet by default. A "needs replacing" condition gets the swap
+// glyph, whatever you called it.
 function conditionBadgeHTML(it) {
-  if (it.condition === 'retire') return `<span class="badge cond retire" title="Condition: Needs replacing">${ic('swap','xs')} Replace</span>`;
-  if (it.condition === 'worn') return '<span class="badge cond worn" title="Condition: Worn">Worn</span>';
-  return '';
+  const c = itemCondition(it.condition);
+  if (!c || !c.tone) return '';
+  const glyph = c.replace ? `${ic('swap','xs')} ` : '';
+  return `<span class="badge cond ${esc(c.tone)}" title="Condition: ${esc(c.label)}">${glyph}${esc(c.label)}</span>`;
+}
+
+// The options for a Condition picker. An item carrying a condition this device has
+// no name for — set on your other device, or on one you since removed — keeps it as
+// its own option, so simply opening and saving the item can never quietly erase it.
+function conditionOpts(cur = '') {
+  const opts = [{ value: '', label: '— not set —' }, ...ITEM_CONDITIONS.map((c) => ({ value: c.id, label: c.label }))];
+  if (cur && !ITEM_CONDITION_IDS.includes(cur)) opts.push({ value: cur, label: `${cur} (not in your list)` });
+  return opts;
 }
 
 // All building-block lists (resolved), kept so the item editor's "In these
@@ -740,7 +754,10 @@ const AI_GROUPS = [
   { key: 'storage',      label: 'Where it’s stored', of: (r) => r.it.storage || '',                                                  empty: 'Storage place not set' },
   { key: 'section',      label: 'Section',           of: (r) => r.section || '',                                                     empty: 'No section' },
   { key: 'manufacturer', label: 'Manufacturer',      of: (r) => r.it.manufacturer || '',                                             empty: 'No maker recorded' },
-  { key: 'condition',    label: 'Condition',         of: (r) => itemConditionLabel(r.it.condition), order: ITEM_CONDITIONS.map((c) => c.label), empty: 'Not rated' },
+  // `order` is a FUNCTION here because the condition list is editable and is
+  // installed after this module is evaluated — a snapshot taken now would pin the
+  // factory four forever and mis-sort anything you added.
+  { key: 'condition',    label: 'Condition',         of: (r) => itemConditionLabel(r.it.condition), order: () => ITEM_CONDITIONS.map((c) => c.label), empty: 'Not rated' },
   { key: 'template',     label: 'Template',          of: (r) => r.list.name || '',                                                   empty: 'No template' },
   { key: 'category',     label: 'Category',          of: (r) => r.it.category || '',     order: CATEGORIES,                          empty: 'No category' },
   { key: 'owner',        label: 'Whose it is',       of: (r) => r.it.owner || '',                                                    empty: 'Nobody named' },
@@ -3863,7 +3880,7 @@ function itemEditor(list, it, setOpen, draw) {
           </div>
           ${growField('owner', 'Owner <em>whose it is</em>', it.owner, '＋ Add an owner…', 'e.g. Martin · Anna · Shared', ownerSeedNames())}
           <div class="row2">
-            <label class="field"><span>Condition</span>${selectHtml('condition', [{ value: '', label: '— not set —' }, ...ITEM_CONDITIONS.map((c) => ({ value: c.id, label: c.label }))], it.condition)}</label>
+            <label class="field"><span>Condition</span>${selectHtml('condition', conditionOpts(it.condition), it.condition)}</label>
             <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
           </div>
           <div class="lifecycle${it.retired ? ' is-retired' : ''}">
@@ -4477,7 +4494,8 @@ function allItemsSection(lists) {
       for (const row of sorted) listEl.appendChild(aiRow(row.it, row.list));
       return;
     }
-    const buckets = groupRowsBy(sorted, gd.of, { order: gd.order || [], emptyLabel: gd.empty || 'Not set' });
+    const gOrder = typeof gd.order === 'function' ? gd.order() : (gd.order || []);
+    const buckets = groupRowsBy(sorted, gd.of, { order: gOrder, emptyLabel: gd.empty || 'Not set' });
     countEl.textContent = `${head} · ${buckets.length} group${buckets.length === 1 ? '' : 's'} by ${gd.label}`;
     for (const b of buckets) {
       const foldKey = `${gd.key}|${b.key}`;
@@ -4572,19 +4590,43 @@ function aiRow(it, list) {
   </a>`);
 }
 
-const CARE_SECTIONS = [
-  { state: 'overdue', label: 'Overdue' },
-  { state: 'soon', label: 'Due soon' },
-  { state: 'ok', label: 'Upcoming' },
-  { state: 'reference', label: 'Reference only (no schedule)' },
-];
+// Which folded Care sections you left open, remembered on this device — so ticking
+// something inside "Later" doesn't slam the fold shut on the redraw.
+const CARE_FOLD_KEY = 'ams-care-folds';
+function loadCareFolds() {
+  try { const a = JSON.parse(localStorage.getItem(CARE_FOLD_KEY) || '[]'); return new Set(Array.isArray(a) ? a : []); }
+  catch { return new Set(); }
+}
+function saveCareFolds(set) {
+  try { localStorage.setItem(CARE_FOLD_KEY, JSON.stringify([...set])); } catch { /* ignore */ }
+}
 
+// The Care list. Overdue and Due soon are what you act on, so they stay open;
+// anything more than a couple of months out, and everything with care notes but no
+// schedule, folds away — that's most of the rows on a full catalogue, and it was
+// all you scrolled past to reach the things that actually needed doing.
 function drawCareList(body, rows, markDone) {
-  for (const { state, label } of CARE_SECTIONS) {
-    const group = rows.filter((r) => r.status.state === state);
-    if (!group.length) continue;
-    body.appendChild(h(`<div class="care-sech ${state}">${careIcon(state)} ${esc(label)} <em>${group.length}</em></div>`));
-    for (const row of group) body.appendChild(careRow(row, markDone));
+  const open = loadCareFolds();
+  for (const sec of careSections(rows, MAINTENANCE_UPCOMING_DAYS)) {
+    if (!sec.rows.length) continue;
+    const head = `<span class="care-sech ${sec.state}">${careIcon(sec.state)} ${esc(sec.label)} <em>${sec.rows.length}</em></span>`;
+    if (!sec.fold) {
+      body.appendChild(h(`<div class="care-sech-wrap">${head}</div>`));
+      for (const row of sec.rows) body.appendChild(careRow(row, markDone));
+      continue;
+    }
+    const det = h(`<details class="care-fold"${open.has(sec.key) ? ' open' : ''}>
+      <summary>${head}<span class="care-fold-chev">${IC.fwd}</span></summary>
+      <div class="care-fold-body"></div>
+    </details>`);
+    const inner = det.querySelector('.care-fold-body');
+    for (const row of sec.rows) inner.appendChild(careRow(row, markDone));
+    det.addEventListener('toggle', () => {           // `toggle` does NOT bubble — bind per <details>
+      const s = loadCareFolds();
+      if (det.open) s.add(sec.key); else s.delete(sec.key);
+      saveCareFolds(s);
+    });
+    body.appendChild(det);
   }
 }
 
@@ -4915,7 +4957,7 @@ function howtoCard() {
         </ul>
         <p>The <b>Care</b> tab then gathers everything with care info across all your lists, two ways:</p>
         <ul>
- <li><b>List</b> — grouped by urgency: <b>Overdue</b>, <b>Due soon</b> (within three weeks), <b>Upcoming</b>, and <b>Reference only</b> (care notes but no schedule). Each row shows the photo, where it's stored and when it's next due; tap it to read the how-to notes, open the how-to link, and see its maintenance history. Hit <b>Done</b> to log a service in one tap.</li>
+ <li><b>List</b> — grouped by urgency: <b>Overdue</b>, <b>Due soon</b> (within ${MAINTENANCE_SOON_DAYS} days), <b>Upcoming</b> (the next ${MAINTENANCE_UPCOMING_DAYS} days), then two <b>folded</b> groups — <b>Later</b> (anything further out) and <b>Reference only</b> (care notes but no schedule). The two folds are what stops a big catalogue burying the handful of things that actually need doing: tap a fold to open it, and it stays as you left it next time. Each row shows the photo, where it's stored and when it's next due; tap it to read the how-to notes, open the how-to link, and see its maintenance history. Hit <b>Done</b> to log a service in one tap.</li>
           <li><b>Calendar</b> — a month view with each scheduled service on its due date, colour-coded by urgency and dotted with a count; tap a day to see (and tick off) what's due. Overdue items are flagged above the grid.</li>
         </ul>
  <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>reminder</b> also shows on the <b>Home</b> screen.</p>
@@ -4963,10 +5005,20 @@ function howtoCard() {
         <h3>Spreadsheet export</h3>
         <p><b>Excel</b> exports a trip as an .xlsx (phase, container, item, qty, packed, note). Settings can export every event at once.</p>
 
+        <h3>Conditions — grading the gear you own</h3>
+ <p>Every item can carry a <b>condition</b>, set in its editor under <b>Details &amp; ownership</b>. The app starts with four — <b>New</b>, <b>Good</b>, <b>Worn</b>, <b>Needs replacing</b> — but the list is <b>yours to change</b>, in <b>Settings → Conditions</b>. Rename them, drag them into the order you want (that order is the order in every dropdown, and the order the Care tab groups by), remove ones you never use, or add your own — “Failing”, “Borrowed, must return”, “Being repaired”.</p>
+        <p>Two things make a condition do work rather than just sit there, and both are yours to set per condition:</p>
+        <ul>
+ <li><b>Badge</b> — whether the rating shows on item rows, and how loudly: <b>no badge</b> (quiet, which is right for New and Good), an <b>amber</b> one, or a <b>red</b> one. Healthy gear stays unbadged so the ones that need attention stand out.</li>
+ <li><b>Needs replacing</b> — tick this and the condition means “this wants replacing”: items on it get the replace prompt and are <b>offered on the shopping list</b>. It starts on <b>Needs replacing</b>, but it isn’t tied to that name — tick it on a condition you invented and that one feeds the shopping list too. Tick it on more than one if that’s what you mean.</li>
+        </ul>
+ <p><b>Renaming is always safe</b> — your items keep their rating, they just call it something new. <b>Removing</b> one asks first: if any items are using it, the app tells you how many and makes you say what they become (another condition, or unrated) before it removes anything. Nothing is ever silently unrated. <b>Reset to the standard four</b> puts the original list back.</p>
+ <p>One thing to know if you use both your Mac and your iPhone: the <b>condition list</b> lives <b>on each device</b> — like your People and your Storage places — while the condition <b>on an item</b> travels with your data. So a condition you invent on the Mac reaches the iPhone as a rating it has no name for, and shows the raw name until you set it up there too (or carry it over with a backup file). The app deliberately <b>never rewrites a rating it doesn’t recognise</b>, so nothing is lost either way.</p>
+
         <h3>Finding your way round Settings</h3>
         <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
         <p>Each section has its <b>own colour and icon</b>, fixed for good, so you come to know them by sight rather than by reading. Closed, the colour sits in the little icon tile; <b>open, it takes over the panel</b> — the tile fills in, and the heading, the edge and a faint wash of the background all follow — so you always know which section you are inside. The colour is an <em>identity</em>, not a warning light: it never changes to tell you something is wrong. When something does need attention, the app says so in words, and on the Home screen.</p>
-        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Storage places</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
+        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Storage places</b>, <b>Conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
@@ -4994,6 +5046,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v113', '2026-08-24 · 15:00 UTC', false, 'Conditions are yours to set, and the Care list stops burying the urgent stuff',
+      '<b>(1) The condition list is now editable.</b> <b>New / Good / Worn / Needs replacing</b> was a fixed list baked into the app. It is now yours, in <b>Settings → Conditions</b> (in <em>Your packing setup</em>, alongside Kits, People and Storage places): <b>rename</b> them, <b>reorder</b> them — that order is the order in every dropdown — <b>remove</b> ones you never use, and <b>add your own</b>, like “Failing” or “Being repaired”. Two behaviours that used to be welded to the single condition called “Needs replacing” are now settings you point wherever you like: <b>Badge</b> decides whether a condition shows on item rows and whether it does so in <b>amber</b> or <b>red</b> (or stays quiet, which is right for New and Good), and <b>needs replacing</b> makes a condition raise the replace prompt and <b>feed the shopping list</b> — so a condition you invented can do that job too, and more than one can. <b>Nothing can be lost by any of this:</b> renaming keeps every item’s rating; removing a condition that items are using makes you say <b>what those items become</b> first, naming how many there are; and an item carrying a rating this device doesn’t recognise is shown as-is and <b>never quietly rewritten</b>. There’s a <b>Reset to the standard four</b> if you want the original list back. One caveat worth knowing: the condition <b>list</b> lives on each device (like People and Storage places) while an item’s <b>rating</b> travels with your data — so set up a new condition on both devices, or carry it across in a backup file. <b>(2) The Care list folds.</b> Opening the Care tab meant scrolling past every service due in the next two years to reach the three that were actually overdue. Now <b>Overdue</b> and <b>Due soon</b> stay open where you can see them, <b>Upcoming</b> shows the next couple of months, and everything further out folds into a single tappable <b>Later</b> line — as does <b>Reference only</b>, the things with care notes but no schedule. Nothing is hidden and no counts changed; a fold tells you how many are inside, and stays open once you open it. <b>Due soon</b> is also tightened from three weeks to <b>two</b>, so amber now means genuinely soon — which also means the Home care reminder speaks up a little later, and about fewer things.',
+      'Your gear gets graded the way you actually think about it rather than the four words the app happened to ship with — and the Care tab opens on what needs doing instead of a wall of things that don’t.'),
     v('v112', '2026-08-24 · 11:00 UTC', false, 'Four small things you asked for',
       '<b>(1) Edit while you pack.</b> In <b>Packing Mode</b> the big slab still marks a thing packed with one tap — that stays — but each row now has a small <b>pen</b> beside it. Tap it and the quick editor opens right there: quantity, which bag, when, the note, who packs it, weight and the flags. Save and you drop <b>straight back into Packing Mode</b>, at the same phase, without losing your place. If you need the deeper settings, the editor’s <b>Edit the full item</b> button takes you to the full item editor — and when you save <b>there</b>, the app brings you back to Packing Mode too. <b>(2) Owner is now a dropdown.</b> In an item’s <b>Details &amp; ownership</b> panel, <b>Owner</b> has stopped being a free-text box you had to spell the same way every time. It now lists every owner you’ve already used, plus everyone on your <b>Settings → People</b> list, with <b>＋ Add an owner…</b> to name a new one — which then appears in the list from then on. Names like <b>Shared</b> work fine and, deliberately, do <b>not</b> turn into People, so your “Packed by” pickers stay a list of actual packers. The same dropdown is now a column in <b>Care → All items · table</b>, so you can set owners down a whole column. <b>(3) WET options moved.</b> On a trip’s <b>Trip setup</b> card, the <b>Indoor / Outdoor / Race</b> options no longer sit in a box of their own near the top; they’re indented directly <b>under the WET activities</b> they qualify, at the bottom of the card — matching where they already sit in the Create Event form. <b>(4) Quick actions on a trip.</b> <b>Long-press</b> a trip card (or <b>right-click</b> it on the Mac), or tap the new <b>⋯</b> in a trip’s own header, and a menu offers: <b>Mark everything packed</b> — one tap to take a list to 100% and keep it on record, for a trip you packed off-app or an old one you just want filed — <b>Clear every tick</b>, <b>Rename</b>, <b>Trip settings</b>, <b>Share</b>, and <b>Delete this trip</b>, which the app had no way to do at all until now.',
       'Fewer dead ends: you can fix an item mid-pack without losing your place, owners stop being typed twice three different ways, and a finished — or unwanted — trip can finally be closed off in one gesture.'),
@@ -5793,6 +5848,7 @@ const SETTINGS_TONES = {
   kits:        '#7c5cd6',  // violet
   people:      '#2f6fe0',  // blue
   places:      '#0a92a6',  // teal (the app's brand)
+  conditions:  '#b45309',  // burnt amber — wear and lifecycle
   presets:     '#c9821a',  // amber
   sharedtrips: '#2f9e63',  // green
   theme:       '#d9459b',  // magenta
@@ -6145,6 +6201,119 @@ async function renderSettings() {
     }
   });
 
+  // ---- Conditions: the wear/lifecycle ratings an item can carry ----
+  const condCard = h(`<div class="card block">
+    <h2>Conditions</h2>
+    <p class="muted">How you grade the gear you own — set on an item under <b>Details &amp; ownership</b>. Rename them, reorder them (the order here is the order in every dropdown), or add your own. <b>Badge</b> decides whether the rating shows on item rows and how loudly; <b>needs replacing</b> makes it feed the <b>shopping list</b> and show the replace prompt, so a condition you invent can do that job too.</p>
+    <div class="cond-list" data-conds></div>
+    <div class="btnrow">
+      <button class="btn" data-cond="add">${IC.plus}<span>Add condition</span></button>
+      <button class="btn ghost" data-cond="reset">${IC.refresh}<span>Reset to the standard four</span></button>
+    </div>
+  </div>`);
+
+  const drawConds = () => {
+    // Keep the fold's own summary line honest without re-rendering all of Settings.
+    const sum = condCard.closest('.sset')?.querySelector('.howto-sum');
+    if (sum) sum.textContent = `${ITEM_CONDITIONS.length} ${ITEM_CONDITIONS.length === 1 ? 'condition' : 'conditions'} · ${ITEM_CONDITIONS.map((c) => c.label).join(', ')}${conditionsCustomised() ? '' : ' (standard)'}`;
+    const box = condCard.querySelector('[data-conds]');
+    const list = ITEM_CONDITIONS;
+    box.innerHTML = list.map((c, i) => `<div class="cond-row" data-cond-id="${esc(c.id)}">
+      <span class="cond-main">
+        <span class="cond-name">
+          <span class="cond-swatch ${esc(c.tone || 'none')}" title="${c.tone ? `Badges ${c.tone === 'warn' ? 'amber' : 'red'} on item rows` : 'No badge — stays quiet on item rows'}">${c.replace ? ic('swap','xs') : ''}</span>
+          ${esc(c.label)}
+        </span>
+        <span class="cond-controls">
+          <label class="cond-tone"><span>Badge</span>
+            <select data-cond-tone="${esc(c.id)}">${CONDITION_TONES.map((t) => `<option value="${esc(t.id)}"${t.id === c.tone ? ' selected' : ''}>${esc(t.label)}</option>`).join('')}</select>
+          </label>
+          <label class="check cond-replace${c.replace ? ' on' : ''}"><input type="checkbox" data-cond-replace="${esc(c.id)}"${c.replace ? ' checked' : ''}>needs replacing</label>
+        </span>
+      </span>
+      <span class="cond-acts">
+        <button type="button" class="iconbtn sm" data-cond-up="${esc(c.id)}" aria-label="Move ${esc(c.label)} up" title="Move up"${i === 0 ? ' disabled' : ''}>${IC.up}</button>
+        <button type="button" class="iconbtn sm" data-cond-down="${esc(c.id)}" aria-label="Move ${esc(c.label)} down" title="Move down"${i === list.length - 1 ? ' disabled' : ''}>${IC.down}</button>
+        <button type="button" class="iconbtn sm" data-cond-edit="${esc(c.id)}" aria-label="Rename ${esc(c.label)}" title="Rename">${IC.edit}</button>
+        <button type="button" class="iconbtn sm" data-cond-del="${esc(c.id)}" aria-label="Remove ${esc(c.label)}" title="Remove">${IC.trash}</button>
+      </span>
+    </div>`).join('');
+  };
+  drawConds();
+
+  condCard.addEventListener('change', (e) => {
+    const tone = e.target.closest('[data-cond-tone]');
+    const rep = e.target.closest('[data-cond-replace]');
+    if (!tone && !rep) return;
+    const list = ITEM_CONDITIONS.map((c) => ({ ...c }));
+    if (tone) {
+      const c = list.find((x) => x.id === tone.dataset.condTone);
+      if (c) c.tone = tone.value;
+    } else {
+      const c = list.find((x) => x.id === rep.dataset.condReplace);
+      if (c) c.replace = rep.checked;
+    }
+    saveConditions(list);
+    drawConds();
+  });
+
+  condCard.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-cond], [data-cond-up], [data-cond-down], [data-cond-edit], [data-cond-del]');
+    if (!btn) return;
+    const list = ITEM_CONDITIONS.map((c) => ({ ...c }));
+    const act = btn.dataset.cond;
+
+    if (act === 'add') {
+      const label = (prompt('Name the condition — e.g. “Failing”, “Borrowed”, “Being repaired”:', '') || '').trim();
+      if (!label) return;
+      if (list.some((c) => c.label.toLowerCase() === label.toLowerCase())) { alert(`“${label}” is already on the list.`); return; }
+      list.push(newCondition(label, list.map((c) => c.id)));
+      saveConditions(list); drawConds(); return;
+    }
+    if (act === 'reset') {
+      if (!confirm('Put the conditions back to New / Good / Worn / Needs replacing?\n\nAnything you added is removed from the list. Items already set to one of them keep it — they just show the raw name until you add it back.')) return;
+      resetConditions(); drawConds(); render(); return;
+    }
+
+    const idOf = (k) => btn.dataset[k];
+    const move = (from, to) => { const [row] = list.splice(from, 1); list.splice(to, 0, row); saveConditions(list); drawConds(); };
+    if (idOf('condUp')) { const i = list.findIndex((c) => c.id === idOf('condUp')); if (i > 0) move(i, i - 1); return; }
+    if (idOf('condDown')) { const i = list.findIndex((c) => c.id === idOf('condDown')); if (i >= 0 && i < list.length - 1) move(i, i + 1); return; }
+
+    if (idOf('condEdit')) {
+      const c = list.find((x) => x.id === idOf('condEdit'));
+      if (!c) return;
+      const label = (prompt('Rename this condition:', c.label) || '').trim();
+      if (!label || label === c.label) return;
+      if (list.some((x) => x.id !== c.id && x.label.toLowerCase() === label.toLowerCase())) { alert(`“${label}” is already on the list.`); return; }
+      c.label = label;                    // the id is untouched, so every item keeps its rating
+      saveConditions(list); drawConds(); render(); return;
+    }
+
+    if (idOf('condDel')) {
+      const c = list.find((x) => x.id === idOf('condDel'));
+      if (!c) return;
+      if (list.length <= 1) { alert('Keep at least one condition — otherwise there is nothing to grade an item with.'); return; }
+      // Never orphan an item: count what uses it, and let the user say where those go.
+      const used = await countItemsWithCondition(c.id);
+      let moveTo = '';
+      if (used) {
+        moveTo = await pickReplacementCondition(c, used, list.filter((x) => x.id !== c.id));
+        if (moveTo === null) return;      // cancelled
+      } else if (!confirm(`Remove the condition “${c.label}”? Nothing is using it.`)) return;
+      const remaining = list.filter((x) => x.id !== c.id);
+      if (used) {
+        const n = await reassignCondition(c.id, moveTo);
+        showToast(moveTo
+          ? `Removed “${c.label}” — ${n} item${n === 1 ? '' : 's'} moved to “${itemConditionLabel(moveTo) || moveTo}”`
+          : `Removed “${c.label}” — ${n} item${n === 1 ? '' : 's'} are now unrated`);
+      }
+      saveConditions(remaining);
+      ALL_LISTS = await db.getLists();
+      drawConds(); render();
+    }
+  });
+
   const theme = h(`<div class="card block">
     <h2>Appearance</h2>
     ${radioRow('theme', [{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }], currentTheme())}
@@ -6269,6 +6438,9 @@ async function renderSettings() {
   wrap.appendChild(foldCard('places', places, places2.length
     ? `${nOf(places2.length, 'place', 'places')} · ${places2.slice(0, 3).join(', ')}${places2.length > 3 ? '…' : ''}`
     : 'None yet', { icon: 'box' }));
+  wrap.appendChild(foldCard('conditions', condCard,
+    `${nOf(ITEM_CONDITIONS.length, 'condition', 'conditions')} · ${ITEM_CONDITIONS.map((c) => c.label).join(', ')}${conditionsCustomised() ? '' : ' (standard)'}`,
+    { icon: 'swap' }));
   wrap.appendChild(foldCard('presets', presetCard,
     presets2.length ? nOf(presets2.length, 'preset', 'presets') : 'None yet — save a trip’s setup to reuse',
     { icon: 'star' }));
@@ -6588,6 +6760,100 @@ function addPreset(name, ev) {
 }
 function deletePreset(pid) { savePresets(loadPresets().filter((p) => p.id !== pid)); }
 
+// Condition list (New / Good / Worn / Needs replacing, and anything you add).
+// Stored on-device like the People roster and the storage places, and carried in
+// backups via collectPrefs. Nothing is stored until you actually change something,
+// so an untouched app runs on the factory four.
+//
+// IMPORTANT: an item's condition is an ID stored on the item, which DOES sync. A
+// condition you invent on one device therefore reaches the other as an id it has no
+// name for — the app shows it as-is and never rewrites it (see coerceItem), so the
+// worst case is an unlabelled condition until you carry the list over in a backup.
+const CONDITIONS_KEY = 'ams-conditions';
+function loadConditions() {
+  try {
+    const raw = localStorage.getItem(CONDITIONS_KEY);
+    if (raw != null) {
+      const a = JSON.parse(raw);
+      if (Array.isArray(a) && a.length) return a.map(coerceCondition).filter((c) => c.id && c.label);
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c }));
+}
+function saveConditions(arr) {
+  const applied = setItemConditions(arr);          // the live list every screen reads
+  try { localStorage.setItem(CONDITIONS_KEY, JSON.stringify(applied)); } catch { /* ignore */ }
+  return applied;
+}
+// Back to the factory four, forgetting anything customised.
+function resetConditions() {
+  try { localStorage.removeItem(CONDITIONS_KEY); } catch { /* ignore */ }
+  return setItemConditions(DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c })));
+}
+// Have the conditions been customised at all? (Drives the Settings summary line.)
+function conditionsCustomised() {
+  try { return localStorage.getItem(CONDITIONS_KEY) != null; } catch { return false; }
+}
+
+// How many catalogue items currently carry this condition? Counted by the stable
+// item id, so an item in five templates counts once.
+async function countItemsWithCondition(condId) {
+  const lists = await db.getLists();
+  const seen = new Set();
+  for (const l of lists) for (const it of (l.items || [])) {
+    if (it.condition === condId) seen.add(it._itemId || it.id);
+  }
+  return seen.size;
+}
+// Move every item on `fromId` to `toId` ('' = leave it unrated). Condition is an
+// intrinsic field, so writing it on any one template propagates to the shared item;
+// we still walk every template so nothing is missed. Returns how many items moved.
+async function reassignCondition(fromId, toId) {
+  const lists = await db.getLists();
+  const moved = new Set();
+  for (const l of lists) {
+    let touched = false;
+    for (const it of (l.items || [])) {
+      if (it.condition !== fromId) continue;
+      it.condition = toId || '';
+      moved.add(it._itemId || it.id);
+      touched = true;
+    }
+    if (touched) await saveGuard(db.saveList(l));
+  }
+  return moved.size;
+}
+// Ask what happens to the items on a condition that's being removed. Resolves with
+// the target condition id, '' for "leave them unrated", or null if cancelled.
+function pickReplacementCondition(cond, used, others) {
+  return new Promise((resolve) => {
+    const opts = [...others.map((c) => `<option value="${esc(c.id)}">${esc(c.label)}</option>`),
+      '<option value="">— leave them unrated —</option>'].join('');
+    const body = h(`<div class="modal">
+      <h2>Remove “${esc(cond.label)}”?</h2>
+      <p class="modal-sub"><b>${used}</b> item${used === 1 ? ' is' : 's are'} set to it. Choose what ${used === 1 ? 'it becomes' : 'they become'} — nothing is deleted, only re-rated.</p>
+      <label class="field"><span>Move ${used === 1 ? 'it' : 'them'} to</span><select name="cond-move">${opts}</select></label>
+      <div class="modal-actions">
+        <button class="btn danger lg" data-c="ok">${IC.trash}<span>Remove and move</span></button>
+        <button class="btn ghost lg" data-c="cancel">Keep it</button>
+      </div>
+    </div>`);
+    const overlay = h('<div class="overlay"></div>');
+    overlay.appendChild(body);
+    document.body.appendChild(overlay);
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; overlay.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') finish(null); };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+    body.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-c]')?.dataset.c;
+      if (!c) return;
+      finish(c === 'ok' ? ($('select[name=cond-move]', body).value || '') : null);
+    });
+  });
+}
+
 // People roster (who packs what). Stored on-device; seeded with Martin & Anna on
 // the very first run, and included in backups via collectPrefs.
 const PEOPLE_KEY = 'ams-people';
@@ -6692,6 +6958,9 @@ function collectPrefs() {
   if (presets.length) prefs.presets = presets;
   const people = loadPeople();
   if (people.length) prefs.people = people;
+  // Only carried once they've actually been customised, so restoring an old backup
+  // onto a fresh app can't pin it to a stale copy of the standard four.
+  if (conditionsCustomised()) prefs.conditions = ITEM_CONDITIONS.map((c) => ({ ...c }));
   return prefs;
 }
 // Apply prefs from an imported backup. Storage places are UNIONed with what's
@@ -6715,6 +6984,12 @@ function applyPrefs(prefs) {
     const have = new Map(loadPeople().map((p) => [normName(p.name), p]));
     for (const p of prefs.people.map(coercePerson)) if (p.name && !have.has(normName(p.name))) have.set(normName(p.name), p);
     savePeople([...have.values()]);
+  }
+  // Conditions come across whole rather than merged: they are an ordered list, and
+  // the order is the point. A backup that predates editable conditions has none, so
+  // whatever this device already uses is left alone.
+  if (Array.isArray(prefs.conditions) && prefs.conditions.length) {
+    saveConditions(prefs.conditions);
   }
 }
 
@@ -6877,6 +7152,9 @@ function watchForUpdate(reg) {
   // apply saved theme (also handled inline in index.html to avoid a flash)
   const t = currentTheme();
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  // Install the saved condition list BEFORE anything reads or coerces an item, so
+  // every screen and every save works from the same list all the way through.
+  setItemConditions(loadConditions());
   await db.ensureSeeded();
   ensurePersistentStorage(); // ask the browser to protect our data (non-blocking)
   // Move any still-inline item photos into the photos store (one-time, resumable).

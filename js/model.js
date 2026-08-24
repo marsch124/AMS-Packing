@@ -187,18 +187,87 @@ export function chargeTypeLabel(id) { return chargeType(id).label; }
 export function chargeTypeShort(id) { return chargeType(id).short; }
 
 // Item "condition" — a simple wear/lifecycle rating (optional item metadata).
-export const ITEM_CONDITIONS = [
-  { id: 'new',    label: 'New' },
-  { id: 'good',   label: 'Good' },
-  { id: 'worn',   label: 'Worn' },
-  { id: 'retire', label: 'Needs replacing' },
+//
+// The four below are what the app ships with, but the list is EDITABLE: you can
+// rename, reorder, add and remove conditions in Settings. Two behaviours that used
+// to be hardwired to the id 'retire' are now properties of whichever condition you
+// point them at, so a condition you invent can do the same job:
+//
+//   tone     '' | 'warn' | 'danger'  — whether (and how loudly) the item row badges it
+//   replace  true                    — this means "needs replacing": it raises the
+//                                      badge as a replace prompt and feeds the
+//                                      shopping list's suggestions
+//
+// `DEFAULT_ITEM_CONDITIONS` is the factory setting, kept so Settings can offer a
+// reset and so a device with nothing stored still behaves exactly as before.
+export const DEFAULT_ITEM_CONDITIONS = Object.freeze([
+  Object.freeze({ id: 'new',    label: 'New',             tone: '',       replace: false }),
+  Object.freeze({ id: 'good',   label: 'Good',            tone: '',       replace: false }),
+  Object.freeze({ id: 'worn',   label: 'Worn',            tone: 'warn',   replace: false }),
+  Object.freeze({ id: 'retire', label: 'Needs replacing', tone: 'danger', replace: true }),
+]);
+export const CONDITION_TONES = [
+  { id: '',       label: 'No badge' },
+  { id: 'warn',   label: 'Amber badge' },
+  { id: 'danger', label: 'Red badge' },
 ];
+const CONDITION_TONE_IDS = CONDITION_TONES.map((t) => t.id);
+
+// The live list, and its ids. BOTH are mutated IN PLACE by setItemConditions —
+// never reassigned — because every other module imported these bindings and holds
+// the same array. Replacing them would leave those importers reading a stale copy.
+export const ITEM_CONDITIONS = DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c }));
 export const ITEM_CONDITION_IDS = ITEM_CONDITIONS.map((c) => c.id);
-// The display label for a condition id ('' → '' — an unrated item says nothing).
-export function itemConditionLabel(idv) {
-  const c = ITEM_CONDITIONS.find((x) => x.id === idv);
-  return c ? c.label : '';
+
+export function coerceCondition(c) {
+  const o = (c && typeof c === 'object') ? c : {};
+  return {
+    id: String(o.id || '').trim().slice(0, 40),
+    label: String(o.label || '').trim().slice(0, 60),
+    tone: CONDITION_TONE_IDS.includes(o.tone) ? o.tone : '',
+    replace: !!o.replace,
+  };
 }
+// A new condition earns its id from its name (so it reads sensibly in a backup),
+// falling back to a timestamp when the name is all punctuation. `taken` are ids
+// already in use, which the new one must not collide with.
+export function newCondition(label, taken = []) {
+  const base = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+  let candidate = base || `cond-${Date.now().toString(36)}`;
+  let n = 2;
+  while (taken.includes(candidate)) candidate = `${base || 'cond'}-${n++}`;
+  return { id: candidate, label: String(label || '').trim().slice(0, 60), tone: '', replace: false };
+}
+// Install a condition list. Anything unusable (no id, no label, a duplicate id) is
+// dropped; an empty result falls back to the factory four rather than leaving the
+// app with no conditions at all.
+export function setItemConditions(list) {
+  const seen = new Set();
+  const clean = asArray(list).map(coerceCondition).filter((c) => {
+    if (!c.id || !c.label || seen.has(c.id)) return false;
+    seen.add(c.id);
+    return true;
+  });
+  const next = clean.length ? clean : DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c }));
+  ITEM_CONDITIONS.length = 0;
+  ITEM_CONDITIONS.push(...next);
+  ITEM_CONDITION_IDS.length = 0;
+  ITEM_CONDITION_IDS.push(...next.map((c) => c.id));
+  return ITEM_CONDITIONS;
+}
+export function itemCondition(idv) { return ITEM_CONDITIONS.find((x) => x.id === idv) || null; }
+// The display label for a condition id ('' → '' — an unrated item says nothing).
+// An id this device doesn't know (set on another device, or on a condition since
+// removed) is shown as itself rather than vanishing.
+export function itemConditionLabel(idv) {
+  const c = itemCondition(idv);
+  if (c) return c.label;
+  return idv ? String(idv) : '';
+}
+export function conditionTone(idv) { const c = itemCondition(idv); return c ? c.tone : ''; }
+// Does this condition mean "needs replacing"? Drives the replace badge and the
+// shopping list. Was hardwired to the id 'retire' until conditions became editable.
+export function conditionReplaces(idv) { const c = itemCondition(idv); return !!(c && c.replace); }
 // Why an item is "Not in use" (retired from the kit). Distinct from `condition`,
 // which grades a thing you still own & pack; a retired item is no longer packed
 // at all, but its record is kept. Optional — a plain "not in use" needs no reason.
@@ -325,7 +394,10 @@ export function coerceItem(it) {
   it.currency = typeof it.currency === 'string' ? it.currency : '';
   it.purchaseLink = typeof it.purchaseLink === 'string' ? it.purchaseLink : '';
   it.expiry = isYMD(it.expiry) ? it.expiry : '';                   // expiry / replace-by date
-  it.condition = ITEM_CONDITION_IDS.includes(it.condition) ? it.condition : '';
+  // Any non-empty condition id is KEPT, even one this device doesn't recognise.
+  // Conditions are editable and live per-device, so a whitelist here would silently
+  // erase a condition set on the other device the first time this one saved the item.
+  it.condition = typeof it.condition === 'string' ? it.condition.trim().slice(0, 40) : '';
   it.retired = !!it.retired;                                        // "Not in use": kept on record but never packed
   it.retiredReason = RETIRE_REASON_IDS.includes(it.retiredReason) ? it.retiredReason : ''; // only meaningful when retired
   it.serial = typeof it.serial === 'string' ? it.serial : '';
@@ -559,7 +631,10 @@ export const EXPIRY_SOON_DAYS = 30;
 // -soon date, which beats a plain consumable that just needs restocking.
 export function shoppingReason(item, todayISO) {
   if (!item || typeof item !== 'object') return '';
-  if (item.condition === 'retire') return 'Needs replacing';
+  // Any condition flagged "needs replacing" qualifies — not just the built-in one.
+  // The reason string stays fixed so its rank, its chip colour and the buy-list
+  // wording don't change with whatever you named the condition.
+  if (conditionReplaces(item.condition)) return 'Needs replacing';
   if (item.expiry) {
     const d = daysUntil(item.expiry, todayISO);
     if (d != null && d < 0) return 'Expired';
@@ -1319,7 +1394,10 @@ export const MAINTENANCE_INTERVALS = [
   { days: 730, label: 'Every 2 years' },
 ];
 // A due date within this many days counts as "due soon" (amber, not yet overdue).
-export const MAINTENANCE_SOON_DAYS = 21;
+export const MAINTENANCE_SOON_DAYS = 14;
+// Everything scheduled further out than this is real, but not worth scrolling past
+// every time you open the Care tab — the list folds it away under "Later".
+export const MAINTENANCE_UPCOMING_DAYS = 60;
 
 // YYYY-MM-DD arithmetic, done in UTC so it never drifts by a day across timezones.
 export function addDays(ymd, days) {
@@ -1381,6 +1459,30 @@ export function maintenanceList(lists, todayISO) {
     return (a.item.name || '').localeCompare(b.item.name || '');
   });
   return out;
+}
+
+// Split an ordered maintenance list into the sections the Care tab draws.
+//
+// The point is scrolling: "Overdue" and "Due soon" are what you act on, so they
+// stay open; a service eight months out is real but is not today's business, so it
+// folds. `fold: true` marks a section the screen collapses by default.
+//
+// `upcomingDays` is where the fold starts, measured from today — anything due
+// further out than that drops from "Upcoming" into "Later". Rows keep the order
+// they arrived in, so maintenanceList's urgency sort still governs inside a section.
+export function careSections(rows, upcomingDays = MAINTENANCE_UPCOMING_DAYS) {
+  const all = asArray(rows);
+  const byState = (s) => all.filter((r) => r && r.status && r.status.state === s);
+  const scheduledOk = byState('ok');
+  const near = scheduledOk.filter((r) => r.status.days != null && r.status.days <= upcomingDays);
+  const later = scheduledOk.filter((r) => !(r.status.days != null && r.status.days <= upcomingDays));
+  return [
+    { key: 'overdue',   state: 'overdue',   label: 'Overdue',                     fold: false, rows: byState('overdue') },
+    { key: 'soon',      state: 'soon',      label: 'Due soon',                    fold: false, rows: byState('soon') },
+    { key: 'upcoming',  state: 'ok',        label: 'Upcoming',                    fold: false, rows: near },
+    { key: 'later',     state: 'ok',        label: 'Later',                       fold: true,  rows: later },
+    { key: 'reference', state: 'reference', label: 'Reference only (no schedule)', fold: true, rows: byState('reference') },
+  ];
 }
 
 // Headline counts for the Care tab and the Home reminder.

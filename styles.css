@@ -1723,9 +1723,19 @@ a.rd-stat.rd-link::after {
 }
 
 /* Item condition — only shown when it needs attention (worn / needs-replacing). */
+/* Condition badges. The tone is set per condition in Settings, so these are named
+   after the tone ("amber" / "red"), not after any one condition. The old
+   .worn/.retire names are kept so an older cached screen still styles correctly. */
+.badge.cond.warn,
 .badge.cond.worn {
   color: #b8860b;
   background: color-mix(in srgb, #e0a800 20%, transparent);
+}
+/* Red really is red now that the Settings dropdown calls it that — it used to be
+   the amber warn colour, only a shade off the "Worn" badge beside it. */
+.badge.cond.danger {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 .badge.cond.retire {
   color: var(--warn);
@@ -3381,6 +3391,53 @@ details.care[open] .care-h::before {
 
 .care-sech.reference {
   color: var(--muted);
+}
+
+/* A folded Care section ("Later", "Reference only") — the same heading, made into
+   a tappable summary with a rotating chevron. */
+.care-fold {
+  margin: 0;
+}
+
+.care-fold > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+  border-radius: 10px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.care-fold > summary::-webkit-details-marker { display: none; }
+
+.care-fold > summary:hover .care-sech,
+.care-fold > summary:focus-visible .care-sech { color: var(--brand-ink); }
+
+.care-fold > summary:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.care-fold > summary .care-sech { flex: 1 1 auto; }
+
+.care-fold-chev {
+  display: inline-flex;
+  align-self: center;
+  color: var(--muted);
+  transition: transform .16s ease;
+}
+
+.care-fold[open] > summary .care-fold-chev { transform: rotate(90deg); }
+
+.care-fold-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .care-fold-chev { transition: none; }
 }
 
 /* one care item row */
@@ -5052,6 +5109,67 @@ table.grid {
 .person-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .person-acts { flex: none; display: flex; gap: 2px; }
 .person-row [data-person-del]:hover { color: var(--danger); }
+
+/* Conditions manager (Settings → Your packing setup). Each row is the condition's
+   name plus the two things that decide how it behaves, then its own controls. */
+.cond-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; }
+
+.cond-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 8px 8px 8px 10px; border: 1px solid var(--line); border-radius: 10px;
+}
+
+.cond-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+
+.cond-name {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-weight: 600;
+}
+
+/* The swatch shows, at a glance, the two things the controls below spell out:
+   the badge colour (or none), and whether this condition means "needs replacing". */
+.cond-swatch {
+  flex: none;
+  width: 22px; height: 22px; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line);
+  background: var(--line-2);
+  color: var(--muted);
+}
+
+.cond-swatch.warn {
+  background: color-mix(in srgb, #e0a800 22%, transparent);
+  border-color: color-mix(in srgb, #e0a800 45%, transparent);
+  color: #b8860b;
+}
+
+.cond-swatch.danger {
+  background: color-mix(in srgb, var(--danger) 18%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
+.cond-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+.cond-tone { display: inline-flex; align-items: center; gap: 6px; }
+
+.cond-tone > span {
+  font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); font-weight: 700;
+}
+
+.cond-tone select { padding: 4px 8px; font-size: .85rem; }
+
+.check.cond-replace { font-size: .85rem; }
+
+.cond-acts { flex: none; display: flex; gap: 2px; }
+.cond-row [data-cond-del]:hover { color: var(--danger); }
+.cond-acts .iconbtn[disabled] { opacity: .3; pointer-events: none; }
+
+@media (max-width: 30rem) {
+  .cond-row { flex-wrap: wrap; }
+  .cond-acts { width: 100%; justify-content: flex-end; }
+}
 
 /* Person filter chips (packing list + Packing Mode) — reuse the .fchip look. */
 .pchip {
