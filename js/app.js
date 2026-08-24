@@ -33,7 +33,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v113';
+const APP_VERSION = 'v114';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4296,6 +4296,15 @@ async function renderMaintenance() {
   const summary = maintenanceSummary(lists);
 
   // ---- Top: what needs looking after (list / calendar) --------------------
+  // The list used to begin with no heading at all: after three navigation cards it
+  // simply started at "OVERDUE", so there was nothing on screen telling you what you
+  // were looking at — or what to search for. It gets the same heading treatment as
+  // the "All items" browser below, so the two read as siblings. Outside the
+  // rows-length check on purpose, so the empty state is labelled too.
+  // (Two elements, so two appends — `h()` returns only the first element it finds.)
+  wrap.appendChild(h(`<div class="ai-head care-head"><h2>${ic('wrench')}<span>Maintenance list</span></h2></div>`));
+  wrap.appendChild(h('<p class="ai-hint">Everything you’ve given a care schedule or care notes, from every template, with whatever needs doing first at the top.</p>'));
+
   if (rows.length) {
     // Headline: overdue / due-soon counts.
     const sc = [];
@@ -4955,7 +4964,7 @@ function howtoCard() {
           <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b> (a dropdown too — it lists every owner you've used so far plus everyone on your <b>Settings → People</b> list, with <b>＋ Add an owner…</b> for a new name, which then joins the list; a name you add here is <em>not</em> turned into a Person, so “Shared” or “The kids” can own things without appearing in every “Packed by” picker), <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
  <li><b>Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>Not in use</b> tag, and the new <b>Not in use</b> filter chip rounds them all up. (This is different from <b>Condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
         </ul>
-        <p>The <b>Care</b> tab then gathers everything with care info across all your lists, two ways:</p>
+        <p>The <b>Care</b> tab then gathers everything with care info across all your lists, under the heading <b>Maintenance list</b> (below the Containers / All items / Shopping links at the top, and above the <b>All items</b> browser at the bottom). It shows two ways:</p>
         <ul>
  <li><b>List</b> — grouped by urgency: <b>Overdue</b>, <b>Due soon</b> (within ${MAINTENANCE_SOON_DAYS} days), <b>Upcoming</b> (the next ${MAINTENANCE_UPCOMING_DAYS} days), then two <b>folded</b> groups — <b>Later</b> (anything further out) and <b>Reference only</b> (care notes but no schedule). The two folds are what stops a big catalogue burying the handful of things that actually need doing: tap a fold to open it, and it stays as you left it next time. Each row shows the photo, where it's stored and when it's next due; tap it to read the how-to notes, open the how-to link, and see its maintenance history. Hit <b>Done</b> to log a service in one tap.</li>
           <li><b>Calendar</b> — a month view with each scheduled service on its due date, colour-coded by urgency and dotted with a count; tap a day to see (and tick off) what's due. Overdue items are flagged above the grid.</li>
@@ -5046,6 +5055,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v114', '2026-08-24 · 17:00 UTC', false, 'The Care tab says what its list is',
+      'A small fix, from trying to follow instructions that named a thing the screen never did. The <b>Care</b> tab opens with three navigation cards — Containers, All items · table, Shopping list — and then the maintenance list simply <b>started</b>, with no heading: the first words you met were “OVERDUE”. There was nothing telling you what you were looking at, and nothing to search the page for. It now carries a proper <b>Maintenance list</b> heading with a one-line explanation, matching the <b>All items</b> heading further down so the two read as the two halves of the tab that they are. The heading shows even when nothing is scheduled yet, so the empty state is labelled too. Nothing moved and nothing else changed.',
+      'You can tell at a glance — and by searching the page — which part of the Care tab you are in.'),
     v('v113', '2026-08-24 · 15:00 UTC', false, 'Conditions are yours to set, and the Care list stops burying the urgent stuff',
       '<b>(1) The condition list is now editable.</b> <b>New / Good / Worn / Needs replacing</b> was a fixed list baked into the app. It is now yours, in <b>Settings → Conditions</b> (in <em>Your packing setup</em>, alongside Kits, People and Storage places): <b>rename</b> them, <b>reorder</b> them — that order is the order in every dropdown — <b>remove</b> ones you never use, and <b>add your own</b>, like “Failing” or “Being repaired”. Two behaviours that used to be welded to the single condition called “Needs replacing” are now settings you point wherever you like: <b>Badge</b> decides whether a condition shows on item rows and whether it does so in <b>amber</b> or <b>red</b> (or stays quiet, which is right for New and Good), and <b>needs replacing</b> makes a condition raise the replace prompt and <b>feed the shopping list</b> — so a condition you invented can do that job too, and more than one can. <b>Nothing can be lost by any of this:</b> renaming keeps every item’s rating; removing a condition that items are using makes you say <b>what those items become</b> first, naming how many there are; and an item carrying a rating this device doesn’t recognise is shown as-is and <b>never quietly rewritten</b>. There’s a <b>Reset to the standard four</b> if you want the original list back. One caveat worth knowing: the condition <b>list</b> lives on each device (like People and Storage places) while an item’s <b>rating</b> travels with your data — so set up a new condition on both devices, or carry it across in a backup file. <b>(2) The Care list folds.</b> Opening the Care tab meant scrolling past every service due in the next two years to reach the three that were actually overdue. Now <b>Overdue</b> and <b>Due soon</b> stay open where you can see them, <b>Upcoming</b> shows the next couple of months, and everything further out folds into a single tappable <b>Later</b> line — as does <b>Reference only</b>, the things with care notes but no schedule. Nothing is hidden and no counts changed; a fold tells you how many are inside, and stays open once you open it. <b>Due soon</b> is also tightened from three weeks to <b>two</b>, so amber now means genuinely soon — which also means the Home care reminder speaks up a little later, and about fewer things.',
       'Your gear gets graded the way you actually think about it rather than the four words the app happened to ship with — and the Care tab opens on what needs doing instead of a wall of things that don’t.'),

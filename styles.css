@@ -3751,6 +3751,16 @@ details.care[open] .care-h::before {
   color: var(--muted);
 }
 
+/* The Maintenance list heading sits between the navigation cards above it and the
+   care rows below, so it needs a clear gap above and a tight one below its hint. */
+.ai-head.care-head {
+  margin-top: 22px;
+}
+
+.ai-head.care-head + .ai-hint {
+  margin: 4px 0 12px;
+}
+
 .ai-hint {
   color: var(--muted);
   font-size: .86rem;
