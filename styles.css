@@ -12,12 +12,26 @@
   --chip: #e6f0f1;
   /* fallback where color-mix is unsupported */
   --chip: color-mix(in srgb, var(--brand) 14%, var(--card));
-  --chip-ink: #0e6473;
-  /* fallback */
-  comm --chip-ink: color-mix(in srgb, var(--brand) 62%, var(--ink));
+  --chip-ink: color-mix(in srgb, var(--brand) 62%, var(--ink));
   --danger: #c2412f;
   --ok: #2e9e6b;
   --warn: #c9821a;
+
+  /* ---- Readable text versions of the status & accent colours ----------------
+     A mid-tone accent that looks right as a fill is usually too weak as TEXT:
+     measured on the page it sits on, the amber "due soon" came out at 2.9:1 and
+     several chips under 2.5:1, where 4.5:1 is the threshold for readable text.
+     Each of these mixes the colour toward --ink, which is dark in the light theme
+     and light in the dark one — so one declaration self-corrects for both, and the
+     colour still reads as red / amber / green / brand. Use these ANY time a colour
+     is the text; keep the raw --danger/--warn/--ok for fills, borders and dots. */
+  --danger-txt: color-mix(in srgb, var(--danger) 72%, var(--ink));
+  --warn-txt: color-mix(in srgb, var(--warn) 55%, var(--ink));
+  --ok-txt: color-mix(in srgb, var(--ok) 68%, var(--ink));
+  --brand-txt: color-mix(in srgb, var(--brand) 60%, var(--ink));
+  /* The smallest text the app is allowed to use. Nothing below this is readable
+     on a phone at arm's length — see the version history for v116. */
+  --tiny: .78rem;
   --shadow: 0 1px 2px rgba(16, 35, 42, .06), 0 4px 16px rgba(16, 35, 42, .05);
   --radius: 14px;
   --tabh: 62px;
@@ -30,6 +44,10 @@
   --muted: #94a6ac;
   --line: #26343a;
   --line-2: #1d282c;
+  /* Chips were unreadable in dark — these two were only ever defined for
+     the light theme, leaving dark-teal ink on a dark chip. */
+  --chip: color-mix(in srgb, var(--brand) 26%, var(--card));
+  --chip-ink: color-mix(in srgb, var(--brand) 30%, var(--ink));
   --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 16px rgba(0, 0, 0, .25);
 }
 
@@ -41,6 +59,8 @@
     --muted: #94a6ac;
     --line: #26343a;
     --line-2: #1d282c;
+    --chip: color-mix(in srgb, var(--brand) 26%, var(--card));
+    --chip-ink: color-mix(in srgb, var(--brand) 30%, var(--ink));
     --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 16px rgba(0, 0, 0, .25);
   }
 }
@@ -192,8 +212,10 @@ em {
 .topbar h1 {
   flex: 1;
   /* The page heading takes its section's accent, so each tab's title fits its
-     colour — "AMS Packing List" blue on Home, Events green, Care amber, etc. */
-  color: var(--brand);
+     colour — "AMS Packing List" blue on Home, Events green, Care amber, etc.
+     --brand-txt rather than --brand: the raw accent measured under 3:1 as text
+     on several sections (Care's amber was 2.96:1). */
+  color: var(--brand-txt);
   letter-spacing: -.01em;
 }
 
@@ -292,8 +314,8 @@ em {
 }
 
 .btn.primary {
-  background: var(--brand);
-  border-color: var(--brand);
+  background: color-mix(in srgb, var(--brand-2) 90%, #000);
+  border-color: color-mix(in srgb, var(--brand-2) 90%, #000);
   color: var(--brand-ink);
 }
 
@@ -348,7 +370,7 @@ em {
   border: 1px solid transparent;
   background: transparent;
   /* Pick up the section's accent so chrome icons are colour-coded by place. */
-  color: var(--brand);
+  color: var(--brand-txt);
   cursor: pointer;
   flex: none;
 }
@@ -523,6 +545,7 @@ em {
 }
 .ev-title-wrap { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ev-name {
+  color: var(--ink);
   font-weight: 700;
   font-size: 1.08rem;
   letter-spacing: -.01em;
@@ -716,7 +739,7 @@ em {
   font-size: .9rem;
   margin: 2px 0 0;
 }
-.warn-txt { color: var(--warn); }
+.warn-txt { color: var(--warn-txt); }
 /* A quieter aside under a card's status lines (e.g. why the backup nags). */
 .muted.small { font-size: .82rem; line-height: 1.45; margin-top: 8px; }
 
@@ -849,9 +872,9 @@ legend {
 }
 
 .seg.on {
-  background: var(--brand);
-  border-color: var(--brand);
-  color: var(--brand-ink);
+  background: color-mix(in srgb, var(--brand-2) 86%, #000);
+  border-color: color-mix(in srgb, var(--brand-2) 86%, #000);
+  color: #fff;
 }
 
 /* activity groups (GA / WET / OE) in the builder */
@@ -900,7 +923,7 @@ legend {
 .linkbtn {
   background: none;
   border: none;
-  color: var(--brand);
+  color: var(--brand-txt);
   font-weight: 600;
   font-size: .8rem;
   cursor: pointer;
@@ -967,7 +990,7 @@ legend {
 }
 
 .check.on {
-  color: var(--brand-2);
+  color: var(--brand-txt);
   border-color: var(--brand);
   background: color-mix(in srgb, var(--brand) 10%, var(--card));
 }
@@ -982,7 +1005,7 @@ legend {
   display: block;
   text-align: center;
   margin: 22px 0 6px;
-  font-size: .72rem;
+  font-size: .78rem;
   letter-spacing: .02em;
   color: var(--muted);
   opacity: .5;
@@ -1301,8 +1324,8 @@ legend {
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
-.rd-ring-num small { font-size: .7rem; font-weight: 700; color: var(--muted); margin-left: 1px; }
-.rd-ring-cap { font-size: .74rem; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.rd-ring-num small { font-size: .78rem; font-weight: 700; color: var(--muted); margin-left: 1px; }
+.rd-ring-cap { font-size: .78rem; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
 /* Three stacked stat rows beside the ring — full width, so labels never clip. */
 .rd-side {
   flex: 1 1 auto;
@@ -1335,7 +1358,7 @@ legend {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.rd-val small { font-size: .68rem; font-weight: 700; color: var(--muted); margin-left: 2px; }
+.rd-val small { font-size: .78rem; font-weight: 700; color: var(--muted); margin-left: 2px; }
 .rd-lbl {
   flex: 1 1 auto;
   font-size: .82rem;
@@ -1453,7 +1476,7 @@ a.rd-stat.rd-link::after {
 }
 
 .setup-lbl {
-  font-size: .66rem;
+  font-size: .78rem;
   text-transform: uppercase;
   letter-spacing: .05em;
   color: var(--muted);
@@ -1477,7 +1500,7 @@ a.rd-stat.rd-link::after {
 }
 
 .setup-grp-lbl {
-  font-size: .68rem;
+  font-size: .78rem;
   font-weight: 700;
   letter-spacing: .04em;
   color: var(--muted);
@@ -1497,7 +1520,7 @@ a.rd-stat.rd-link::after {
 .setup-sub-t {
   display: block;
   margin-bottom: 5px;
-  font-size: .68rem;
+  font-size: .78rem;
   font-weight: 700;
   letter-spacing: .04em;
   color: var(--muted);
@@ -1548,7 +1571,7 @@ a.rd-stat.rd-link::after {
 
 .group-caret {
   flex: none;
-  color: var(--brand);
+  color: var(--brand-txt);
   font-size: .8rem;
   line-height: 1;
   transition: transform .15s ease;
@@ -1674,7 +1697,7 @@ a.rd-stat.rd-link::after {
 .e-subitems {
   display: block;
   color: var(--muted);
-  font-size: .76rem;
+  font-size: .78rem;
   margin-top: 1px;
   padding-left: 10px;
   border-left: 2px solid var(--line);
@@ -1687,7 +1710,7 @@ a.rd-stat.rd-link::after {
 
 .badge {
   display: inline-block;
-  font-size: .68rem;
+  font-size: .78rem;
   font-weight: 700;
   padding: 0 5px;
   border-radius: 6px;
@@ -1695,12 +1718,12 @@ a.rd-stat.rd-link::after {
 }
 
 .badge.charge {
-  color: #b8860b;
-  background: color-mix(in srgb, #e0a800 22%, transparent);
+  color: var(--warn-txt);
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
 }
 
 .badge.rem {
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 55%, var(--ink));
   background: var(--line);
   text-transform: uppercase;
   letter-spacing: .03em;
@@ -1728,13 +1751,13 @@ a.rd-stat.rd-link::after {
    .worn/.retire names are kept so an older cached screen still styles correctly. */
 .badge.cond.warn,
 .badge.cond.worn {
-  color: #b8860b;
-  background: color-mix(in srgb, #e0a800 20%, transparent);
+  color: var(--warn-txt);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
 }
 /* Red really is red now that the Settings dropdown calls it that — it used to be
    the amber warn colour, only a shade off the "Worn" badge beside it. */
 .badge.cond.danger {
-  color: var(--danger);
+  color: var(--danger-txt);
   background: color-mix(in srgb, var(--danger) 15%, transparent);
 }
 .badge.cond.retire {
@@ -1771,7 +1794,7 @@ a.rd-stat.rd-link::after {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: var(--warn);
+  color: var(--warn-txt);
 }
 
 .card.lst.loose-card .lst-name .ic {
@@ -2354,7 +2377,7 @@ a.rd-stat.rd-link::after {
 
 .rev-item .rev-tag {
   flex: none;
-  font-size: .76rem;
+  font-size: .78rem;
   font-weight: 700;
   padding: 3px 10px;
   border-radius: 999px;
@@ -2397,7 +2420,7 @@ a.rd-stat.rd-link::after {
   position: absolute;
   right: 4px;
   bottom: calc(env(safe-area-inset-bottom) + 1px);
-  font-size: .52rem;
+  font-size: .78rem;
   font-weight: 600;
   letter-spacing: .02em;
   color: var(--muted);
@@ -2414,7 +2437,7 @@ a.rd-stat.rd-link::after {
   gap: 3px;
   height: var(--tabh);
   color: var(--muted);
-  font-size: .7rem;
+  font-size: .78rem;
   font-weight: 600;
 }
 
@@ -2437,20 +2460,26 @@ a.rd-stat.rd-link::after {
 /* Each tab wears its own section's colour, even when it isn't the active tab —
    so the whole bar reads as a colourful set rather than one lit tab among greys.
    A soft tinted pill sits behind every icon; the active tab fills it solid. */
-.tabbar a[href="#/"] { color: var(--sec-home); }
-.tabbar a[href="#/events"] { color: var(--sec-events); }
-.tabbar a[href="#/lists"] { color: var(--sec-templates); }
-.tabbar a[href="#/maintenance"] { color: var(--sec-care); }
-.tabbar a[href="#/actions"] { color: var(--sec-actions); }
-.tabbar a[href="#/settings"] { color: var(--sec-settings); }
+/* Each tab keeps its own colour, mixed toward the page ink so the LABEL under the
+   icon stays readable — the raw section colours measured as low as 3.2:1 as text.
+   The icon pill below still derives from currentColor, so the identity is intact. */
+.tabbar a[href="#/"] { color: color-mix(in srgb, var(--sec-home) 45%, var(--ink)); }
+.tabbar a[href="#/events"] { color: color-mix(in srgb, var(--sec-events) 45%, var(--ink)); }
+.tabbar a[href="#/lists"] { color: color-mix(in srgb, var(--sec-templates) 45%, var(--ink)); }
+.tabbar a[href="#/maintenance"] { color: color-mix(in srgb, var(--sec-care) 45%, var(--ink)); }
+.tabbar a[href="#/actions"] { color: color-mix(in srgb, var(--sec-actions) 45%, var(--ink)); }
+.tabbar a[href="#/settings"] { color: color-mix(in srgb, var(--sec-settings) 45%, var(--ink)); }
 
 .tabbar a .ico {
   background: color-mix(in srgb, currentColor 14%, transparent);
 }
 
 /* Active tab: filled brand pill behind the icon + a bold, saturated label. */
+/* The active tab's label was the raw section accent, which measured 3.2:1 — the one
+   tab label you most want to read was the least readable. --brand-txt keeps the
+   colour but makes it legible; the filled icon pill below still uses raw --brand. */
 .tabbar a.active {
-  color: var(--brand);
+  color: var(--brand-txt);
   font-weight: 800;
 }
 
@@ -2517,7 +2546,7 @@ a.rd-stat.rd-link::after {
 .ev-menu .modal-actions .btn em {
   display: block;
   font-style: normal;
-  font-size: .76rem;
+  font-size: .78rem;
   font-weight: 500;
   color: inherit;      /* the app's <em> is muted grey — unreadable on a filled button */
   opacity: .78;
@@ -2728,7 +2757,7 @@ a.rd-stat.rd-link::after {
   font-weight: 800;
   letter-spacing: .07em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--tone) 92%, var(--muted));
+  color: color-mix(in srgb, var(--tone) 58%, var(--ink));
 }
 .set-group::after {
   content: '';
@@ -2784,7 +2813,7 @@ a.rd-stat.rd-link::after {
    right instead. Written to out-specify `.howto[open] .howto-h::before`. */
 .howto.sset .howto-h::before,
 .howto.sset[open] .howto-h::before { content: none; }
-.sset[open] .howto-h { color: color-mix(in srgb, var(--tone) 72%, var(--ink)); }
+.sset[open] .howto-h { color: color-mix(in srgb, var(--tone) 55%, var(--ink)); }
 .sset .howto-sum {
   margin-left: 0;
   display: block;
@@ -2805,7 +2834,7 @@ a.rd-stat.rd-link::after {
   margin-top: 10px;
   padding-top: 6px;
 }
-.sset[open] > .howto-body h3 { color: color-mix(in srgb, var(--tone) 75%, var(--ink)); }
+.sset[open] > .howto-body h3 { color: color-mix(in srgb, var(--tone) 58%, var(--ink)); }
 .sset[open] .btn:not(.primary):not(.danger-txt) {
   border-color: color-mix(in srgb, var(--tone) 32%, var(--line));
 }
@@ -2950,7 +2979,7 @@ a.rd-stat.rd-link::after {
 }
 
 .wx-dow {
-  font-size: .72rem;
+  font-size: .78rem;
   color: var(--muted);
 }
 
@@ -2989,7 +3018,7 @@ a.rd-stat.rd-link::after {
 }
 
 .wx-lo {
-  font-size: .72rem;
+  font-size: .78rem;
   color: var(--muted);
 }
 
@@ -3217,7 +3246,7 @@ details.care[open] .care-h::before {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  font-size: .64rem;
+  font-size: .78rem;
   font-weight: 600;
 }
 
@@ -3250,13 +3279,13 @@ details.care[open] .care-h::before {
   position: absolute;
   bottom: 2px;
   right: 2px;
-  min-width: 15px;
-  height: 15px;
+  min-width: 17px;
+  height: 17px;
   padding: 0 3px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: .62rem;
+  font-size: .68rem;
   font-weight: 800;
   line-height: 1;
   color: #fff;
@@ -3304,7 +3333,7 @@ details.care[open] .care-h::before {
 .care-hhead,
 .cal-daylist .care-sech {
   color: var(--muted);
-  font-size: .74rem;
+  font-size: .78rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .03em;
@@ -3349,17 +3378,17 @@ details.care[open] .care-h::before {
 
 .care-stat.overdue {
   background: color-mix(in srgb, var(--danger) 14%, transparent);
-  color: var(--danger);
+  color: var(--danger-txt);
 }
 
 .care-stat.soon {
   background: color-mix(in srgb, var(--warn) 16%, transparent);
-  color: var(--warn);
+  color: var(--warn-txt);
 }
 
 .care-stat.ok {
   background: color-mix(in srgb, var(--ok) 15%, transparent);
-  color: var(--ok);
+  color: var(--ok-txt);
 }
 
 .care-wrap {
@@ -3367,15 +3396,20 @@ details.care[open] .care-h::before {
   gap: 6px;
 }
 
+/* The group headings inside the Maintenance list. They were 13px, and the coloured
+   states were failing contrast — "Due soon" measured 2.9:1 on white and "Overdue"
+   3.6:1 on the dark ground, both under the 4.5:1 readable threshold. Bigger now, and
+   each state is mixed toward --ink, which darkens it in the light theme and lightens
+   it in the dark one, so the colour still reads as red/amber but is legible in both. */
 .care-sech {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin: 16px 4px 4px;
+  margin: 18px 4px 6px;
   font-weight: 800;
-  font-size: .82rem;
+  font-size: .95rem;
   text-transform: uppercase;
-  letter-spacing: .03em;
+  letter-spacing: .04em;
 }
 
 .care-sech em {
@@ -3385,11 +3419,11 @@ details.care[open] .care-h::before {
 }
 
 .care-sech.overdue {
-  color: var(--danger);
+  color: var(--danger-txt);
 }
 
 .care-sech.soon {
-  color: var(--warn);
+  color: var(--warn-txt);
 }
 
 .care-sech.reference {
@@ -3522,15 +3556,15 @@ details.care[open] .care-h::before {
 }
 
 .care-due.overdue {
-  color: var(--danger);
+  color: var(--danger-txt);
 }
 
 .care-due.soon {
-  color: var(--warn);
+  color: var(--warn-txt);
 }
 
 .care-due.ok {
-  color: var(--ok);
+  color: var(--ok-txt);
 }
 
 .care-due.reference {
@@ -3628,7 +3662,7 @@ details.care[open] .care-h::before {
 
 .cal-dow {
   text-align: center;
-  font-size: .7rem;
+  font-size: .78rem;
   font-weight: 700;
   color: var(--muted);
   text-transform: uppercase;
@@ -3696,7 +3730,7 @@ details.care[open] .care-h::before {
 }
 
 .cal-dot {
-  font-size: .66rem;
+  font-size: .78rem;
   font-weight: 800;
   min-width: 16px;
   height: 16px;
@@ -3884,7 +3918,7 @@ details.care[open] .care-h::before {
   min-width: 4.6rem;
   padding-top: 6px;
   color: var(--muted);
-  font-size: .72rem;
+  font-size: .78rem;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: .04em;
@@ -4443,7 +4477,7 @@ details.care[open] .care-h::before {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: .72rem;
+  font-size: .78rem;
   font-weight: 600;
   padding: 1px 8px;
   border-radius: 999px;
@@ -4455,8 +4489,8 @@ details.care[open] .care-h::before {
   height: 12px;
 }
 .act-chip.high {
-  color: #dc3d43;
-  background: color-mix(in srgb, #dc3d43 14%, transparent);
+  color: color-mix(in srgb, var(--danger) 62%, var(--ink));
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 .act-done {
   margin-top: 2px;
@@ -4475,7 +4509,7 @@ details.care[open] .care-h::before {
   display: inline-block;
   min-width: 18px;
   text-align: center;
-  font-size: .72rem;
+  font-size: .78rem;
   padding: 1px 6px;
   border-radius: 999px;
   background: var(--line);
@@ -4585,8 +4619,8 @@ details.care[open] .care-h::before {
 }
 .ov-stat { font-size: .86rem; color: var(--muted); }
 .ov-stat b { color: var(--ink); font-size: 1rem; }
-.ov-stat.warn { color: var(--warn); }
-.ov-stat.warn b { color: var(--warn); }
+.ov-stat.warn { color: var(--warn-txt); }
+.ov-stat.warn b { color: var(--warn-txt); }
 .ov-stats .btn { margin-left: auto; }
 
 /* Duplicate finder */
@@ -4596,7 +4630,7 @@ details.care[open] .care-h::before {
 .ov-dupes-h { font-weight: 800; font-size: .98rem; }
 .ov-dupes-sub { color: var(--muted); font-size: .8rem; }
 .ov-dupes-note { color: var(--muted); font-size: .82rem; line-height: 1.45; margin: 8px 0 12px; }
-.ov-dupmark { color: var(--warn); font-weight: 800; }
+.ov-dupmark { color: var(--warn-txt); font-weight: 800; }
 .ov-dupgroup { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-top: 8px; }
 .ov-duphead {
   background: color-mix(in srgb, var(--warn) 12%, var(--card));
@@ -4629,7 +4663,7 @@ details.care[open] .care-h::before {
   gap: 10px; align-items: center; padding: 10px 14px;
 }
 .ov-head {
-  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
   color: var(--muted); border-bottom: 1px solid var(--line); position: sticky; top: 0;
   background: color-mix(in srgb, var(--brand) 5%, var(--card)); z-index: 1;
 }
@@ -4644,21 +4678,21 @@ details.care[open] .care-h::before {
 .ov-item { display: grid; gap: 2px; }
 .ov-name { font-weight: 600; font-size: .92rem; line-height: 1.25; }
 .ov-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.ov-cat { font-size: .72rem; color: var(--chip-ink); background: var(--chip); border-radius: 999px; padding: 1px 8px; }
-.ov-swed { font-size: .76rem; color: var(--muted); font-style: italic; }
+.ov-cat { font-size: .78rem; color: var(--chip-ink); background: var(--chip); border-radius: 999px; padding: 1px 8px; }
+.ov-swed { font-size: .78rem; color: var(--muted); font-style: italic; }
 .ov-tpls { display: flex; flex-wrap: wrap; gap: 5px; }
 .ov-tpl {
-  font-size: .76rem; font-weight: 600; text-decoration: none; color: var(--chip-ink);
+  font-size: .78rem; font-weight: 600; text-decoration: none; color: var(--chip-ink);
   background: var(--chip); border-radius: 999px; padding: 2px 9px; white-space: nowrap;
 }
-.ov-tpl.none { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, var(--card)); }
+.ov-tpl.none { color: var(--warn-txt); background: color-mix(in srgb, var(--warn) 14%, var(--card)); }
 .ov-tpl.bag { color: var(--muted); background: var(--line-2); }
 .ov-flags { display: flex; flex-wrap: wrap; gap: 5px; font-size: .9rem; }
 .ov-fl { display: inline-flex; align-items: center; gap: 2px; }
-.ov-fl em { font-style: normal; font-size: .66rem; font-weight: 700; color: var(--muted); }
+.ov-fl em { font-style: normal; font-size: .78rem; font-weight: 700; color: var(--muted); }
 .ov-weight { font-variant-numeric: tabular-nums; font-size: .84rem; color: var(--ink); }
 .ov-stored { font-size: .82rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-.ov-dash { color: var(--line); }
+.ov-dash { color: var(--muted); opacity: .7; }
 
 /* --- All-items table / grid (#/items) --- */
 .screen-grid .pad { margin-top: 0; }
@@ -4691,7 +4725,7 @@ table.grid {
   border-bottom: 2px solid var(--brand);
   font-size: .95rem;
   letter-spacing: .01em;
-  color: var(--brand);
+  color: var(--brand-txt);
 }
 .grid thead .grp em {
   font-style: normal;
@@ -4704,7 +4738,7 @@ table.grid {
   background: var(--card);
   font-weight: 700;
   color: var(--muted);
-  font-size: .72rem;
+  font-size: .78rem;
   position: sticky;
   top: 0;
 }
@@ -4748,7 +4782,7 @@ table.grid {
 .grid input[data-f="storage"] { width: 120px; }
 .grid .g-sel { max-width: 132px; }
 .grid .g-check input { width: 18px; height: 18px; accent-color: var(--brand); }
-.grid .g-multi { color: var(--muted); font-size: .72rem; }
+.grid .g-multi { color: var(--muted); font-size: .78rem; }
 .grid .g-saved { background: color-mix(in srgb, var(--brand) 22%, transparent); transition: background .3s; }
 .grid .g-empty { padding: 20px; color: var(--muted); }
 /* Toolbar above the table: search + sort field + direction + Columns button. */
@@ -5107,12 +5141,12 @@ table.grid {
 /* Why an item is on the buy-list — a small coloured reason chip. */
 .shop-reason {
   display: inline-block; padding: 1px 8px; border-radius: 999px;
-  font-size: .72rem; font-weight: 600; white-space: nowrap;
+  font-size: .78rem; font-weight: 600; white-space: nowrap;
 }
 .shop-reason.replace,
-.shop-reason.expired { color: var(--danger); background: color-mix(in srgb, var(--danger) 15%, transparent); }
-.shop-reason.soon    { color: #b8860b; background: color-mix(in srgb, #e0a800 20%, transparent); }
-.shop-reason.restock { color: var(--brand-2); background: color-mix(in srgb, var(--brand) 16%, transparent); }
+.shop-reason.expired { color: var(--danger-txt); background: color-mix(in srgb, var(--danger) 15%, transparent); }
+.shop-reason.soon    { color: var(--warn-txt); background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.shop-reason.restock { color: var(--brand-txt); background: color-mix(in srgb, var(--brand) 16%, transparent); }
 
 /* Suggestions block on the shopping screen. */
 .shop-suggest { margin-top: 18px; }
@@ -5190,7 +5224,7 @@ table.grid {
 .cond-tone { display: inline-flex; align-items: center; gap: 6px; }
 
 .cond-tone > span {
-  font-size: .74rem; text-transform: uppercase; letter-spacing: .04em;
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .04em;
   color: var(--muted); font-weight: 700;
 }
 
@@ -5215,7 +5249,7 @@ table.grid {
   font-size: .85rem; font-weight: 600; line-height: 1;
 }
 .pchip em { font-style: normal; opacity: .6; font-variant-numeric: tabular-nums; }
-.pchip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.pchip.on { background: color-mix(in srgb, var(--brand-2) 86%, #000); border-color: color-mix(in srgb, var(--brand-2) 86%, #000); color: #fff; }
 .pchip.on em { opacity: .85; }
 .pchip.on .person-dot { box-shadow: 0 0 0 1.5px var(--brand-ink); }
 .pack-personbar { margin: 8px 0 4px; justify-content: center; }
@@ -5316,9 +5350,22 @@ table.grid {
 @media (prefers-reduced-motion: reduce) { .care-photo-wait { animation: none; } }
 
 /* Sub-headings inside the How-it-works guide (used by the sync section). */
+/* The guide names each section's colour. The colour itself is shown as a dot, so
+   the words stay in readable ink instead of being set in a mid-tone hex that only
+   worked on a white background. */
+.sec-swatch {
+  display: inline-block;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: var(--c);
+  margin-right: 7px;
+  vertical-align: -1px;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent);
+}
+
 .howto h4 {
   margin: 16px 0 6px;
   font-size: .96rem;
   font-weight: 700;
-  color: var(--brand);
+  color: var(--brand-txt);
 }
