@@ -33,7 +33,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v114';
+const APP_VERSION = 'v115';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4305,21 +4305,27 @@ async function renderMaintenance() {
   wrap.appendChild(h(`<div class="ai-head care-head"><h2>${ic('wrench')}<span>Maintenance list</span></h2></div>`));
   wrap.appendChild(h('<p class="ai-hint">Everything you’ve given a care schedule or care notes, from every template, with whatever needs doing first at the top.</p>'));
 
+  // One frame around the whole list — its counts, its List/Calendar toggle and every
+  // row — so it reads as a single bounded section rather than trailing off into the
+  // "All items" browser underneath it.
+  const panel = h('<div class="care-panel"></div>');
+  wrap.appendChild(panel);
+
   if (rows.length) {
     // Headline: overdue / due-soon counts.
     const sc = [];
     if (summary.overdue) sc.push(`<span class="care-stat overdue">${ic('dot','xs')}${summary.overdue} overdue</span>`);
     if (summary.soon) sc.push(`<span class="care-stat soon">${ic('dot','xs')}${summary.soon} due soon</span>`);
     if (!summary.due) sc.push(`<span class="care-stat ok">${ic('dot','xs')}All up to date</span>`);
-    wrap.appendChild(h(`<div class="care-stats">${sc.join('')}</div>`));
+    panel.appendChild(h(`<div class="care-stats">${sc.join('')}</div>`));
 
     // List / Calendar toggle.
     const seg = (val, label) => `<label class="seg${careView === val ? ' on' : ''}"><input type="radio" name="careview" value="${val}"${careView === val ? ' checked' : ''}>${label}</label>`;
     const toolbar = h(`<div class="toolbar"><div class="segmented small">${seg('list', 'List')}${seg('calendar', 'Calendar')}</div></div>`);
-    wrap.appendChild(toolbar);
+    panel.appendChild(toolbar);
 
     const body = h('<div class="care-wrap"></div>');
-    wrap.appendChild(body);
+    panel.appendChild(body);
 
     // Mark an item maintained today, from any view.
     const markDone = async (listId, itemId) => {
@@ -4348,7 +4354,7 @@ async function renderMaintenance() {
       if (done) { e.preventDefault(); await markDone(done.dataset.list, done.dataset.done); return; }
     });
   } else {
-    wrap.appendChild(h(`<div class="care-none">
+    panel.appendChild(h(`<div class="care-none">
       <p class="empty-s">Nothing is scheduled for upkeep yet. Find an item below, open it, and fill in its <b>Storage &amp; maintenance</b> panel — a service interval or care notes will bring it here with reminders.</p>
     </div>`));
   }
@@ -5055,6 +5061,12 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v115', '2026-08-24 · 19:00 UTC', false, 'The Maintenance list now has edges',
+      'Following on from the heading in v114: the maintenance list is now drawn inside a <b>single frame</b> — its overdue/due-soon counts, its <b>List / Calendar</b> switch and every row, all within one bordered panel. Before, the list simply <b>ran out</b> somewhere above the <b>All items</b> browser with nothing marking where one ended and the other began. Now the section has a visible top and bottom, so you can see at a glance how much of the screen belongs to it. The frame is deliberately left <b>unfilled</b> rather than made into a solid card, because the rows inside are already cards and a card inside a card reads flat. The “nothing scheduled yet” message sits inside the same frame, so the section looks the same whether or not you have anything in it.',
+      'The Care tab reads as two clearly separated halves — what needs looking after, and everything you own — instead of one continuous scroll.'),
+    v('v115b', '2026-08-24 · 19:10 UTC', false, 'Settings’ group labels are findable',
+      'Shipped alongside the frame above, for the same reason. The four labels that divide Settings — <b>Your packing setup</b>, <b>Appearance</b>, <b>Your data</b>, <b>Help &amp; about</b> — were set at about <b>11 pixels</b> in a washed-out tint, and were being <b>missed entirely</b> when scanning the page for one of them. They are now a size and a contrast you can actually find, without becoming headlines. Nothing moved; they are just legible.',
+      'You can find your way around Settings by its own signposts.'),
     v('v114', '2026-08-24 · 17:00 UTC', false, 'The Care tab says what its list is',
       'A small fix, from trying to follow instructions that named a thing the screen never did. The <b>Care</b> tab opens with three navigation cards — Containers, All items · table, Shopping list — and then the maintenance list simply <b>started</b>, with no heading: the first words you met were “OVERDUE”. There was nothing telling you what you were looking at, and nothing to search the page for. It now carries a proper <b>Maintenance list</b> heading with a one-line explanation, matching the <b>All items</b> heading further down so the two read as the two halves of the tab that they are. The heading shows even when nothing is scheduled yet, so the empty state is labelled too. Nothing moved and nothing else changed.',
       'You can tell at a glance — and by searching the page — which part of the Care tab you are in.'),

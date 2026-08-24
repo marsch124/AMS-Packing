@@ -2716,16 +2716,19 @@ a.rd-stat.rd-link::after {
 /* Settings group heading — a quiet label separating the runs of folds, so the
    tab reads as an index rather than one long stack of cards. It borrows the
    colour of the section below it and hangs a short rule off the text. */
+/* The four group labels down Settings. They were .72rem (~11px) in a muted mix and
+   were being missed entirely — bumped to a size and contrast you can actually find
+   while scanning, without turning them into headlines. */
 .set-group {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin: 22px 4px 9px;
-  font-size: .72rem;
-  font-weight: 700;
-  letter-spacing: .09em;
+  margin: 26px 4px 10px;
+  font-size: .84rem;
+  font-weight: 800;
+  letter-spacing: .07em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--tone) 78%, var(--muted));
+  color: color-mix(in srgb, var(--tone) 92%, var(--muted));
 }
 .set-group::after {
   content: '';
@@ -3758,8 +3761,31 @@ details.care[open] .care-h::before {
 }
 
 .ai-head.care-head + .ai-hint {
-  margin: 4px 0 12px;
+  margin: 4px 0 10px;
 }
+
+/* One frame around the entire maintenance list, so the section has a visible end
+   and doesn't run into the All-items browser below. Deliberately NOT filled with
+   --card: the rows inside are already cards, and card-on-card reads flat. */
+.care-panel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 12px 14px;
+  background: color-mix(in srgb, var(--line-2) 45%, transparent);
+}
+
+/* The empty state is already a framed card of its own — inside the panel it would
+   be a box in a box, so it drops its own frame and just supplies the words. */
+.care-panel .care-none {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+}
+
+/* The first thing inside the frame shouldn't carry its own top margin. */
+.care-panel > :first-child { margin-top: 0; }
 
 .ai-hint {
   color: var(--muted);
