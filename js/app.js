@@ -31,7 +31,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v111';
+const APP_VERSION = 'v112';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -394,6 +394,7 @@ const GRID_ITEM_COLS = [
   { key: 'size', label: 'Size' },
   { key: 'manufacturer', label: 'Maker' },
   { key: 'model', label: 'Model' },
+  { key: 'owner', label: 'Owner' },
 ];
 // The sort choices offered in the table's toolbar. `val` extracts the comparable
 // value from a row; `num` marks numeric fields (compared arithmetically).
@@ -519,6 +520,11 @@ async function renderItemsGrid() {
       if (single) return `<td><select class="g-sel" data-f="container" data-listid="${esc(single.listId)}">${containerOpts(single.container).map((c) => `<option value="${esc(c)}"${c === single.container ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select></td>`;
       return `<td><span class="g-multi">${esc(it.container || '')}</span></td>`;
     }
+    if (key === 'owner') {
+      // Same roster as the item editor's Owner picker, so the two agree — every
+      // owner already in use, plus your People, plus a way to name a new one.
+      return `<td><select class="g-sel g-owner" data-f="owner">${ownerOptsHTML(it.owner)}</select></td>`;
+    }
     return `<td><input class="g-txt" data-f="${key}" value="${esc(it[key] || '')}" autocomplete="off"></td>`; // color / size / maker / model
   };
 
@@ -621,6 +627,15 @@ async function renderItemsGrid() {
     const f = el.dataset.f; if (!f) return;
     const { l, it } = findItem(el.dataset.listid || row.mems[0].listId, id);
     if (!it) return;
+    if (f === 'owner' && el.value === '__new__') {
+      const name = (prompt('Whose is it? Type a new owner’s name:', '') || '').trim();
+      if (!name) { el.value = it.owner || ''; return; }   // cancelled — put the picker back
+      it.owner = name;
+      await saveGuard(db.saveList(l));
+      lists = await db.getLists(); ALL_LISTS = lists;
+      rebuild();                                          // so the new name joins every other row's picker
+      return;
+    }
     if (['liquid', 'charging', 'restricted'].includes(f)) it[f] = el.checked;
     else if (f === 'weight') it.weight = Math.max(0, parseInt(el.value, 10) || 0);
     else if (f === 'qty' || f === 'container' || f === 'section') it[f] = f === 'qty' ? (el.value || '').trim() : el.value;
@@ -838,6 +853,7 @@ const IC = {
   trash: svgIcon('<path d="M5 7h14M9 7V5h6v2M7 7l1 13h8l1-13"/>'),
   edit: svgIcon('<path d="M4 20h4L18 10l-4-4L4 16Z"/><path d="M13 7l4 4"/>'),
   back: svgIcon('<path d="M15 6l-6 6 6 6"/>', 2.1),
+  more: svgSolid('<circle cx="5.4" cy="12" r="1.85"/><circle cx="12" cy="12" r="1.85"/><circle cx="18.6" cy="12" r="1.85"/>'),
   sheet: svgIcon('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 4v16"/>'),
   refresh: svgIcon('<path d="M4 12a8 8 0 0 1 13.7-5.7L20 8"/><path d="M20 4v4h-4"/><path d="M20 12a8 8 0 0 1-13.7 5.7L4 16"/><path d="M4 20v-4h4"/>'),
   fwd: svgIcon('<path d="M9 6l6 6-6 6"/>', 2.1),
@@ -1125,7 +1141,7 @@ async function renderHome() {
     if (events.length > HOME_EVENT_PREVIEW) header.appendChild(h(`<a class="see-all" href="#/events">See all ${events.length} ${IC.fwd}</a>`));
     wrap.appendChild(header);
     const list = h('<div class="cards"></div>');
-    for (const e of events.slice(0, HOME_EVENT_PREVIEW)) list.appendChild(h(eventCardHTML(e)));
+    for (const e of events.slice(0, HOME_EVENT_PREVIEW)) list.appendChild(eventCard(e));
     wrap.appendChild(list);
   }
 
@@ -1175,6 +1191,105 @@ function eventCardHTML(e) {
   </a>`;
 }
 
+// ---- Quick actions on a trip (long-press / right-click / the ⋯ in its header) ----
+// Two things had no home before: marking a whole trip packed in one go (for a list
+// you actually packed off-app, or an old trip you just want to file at 100%), and
+// deleting a trip at all. Both live here, in one menu reached the same way from the
+// Events tab and from the trip itself.
+function openEventMenu(ev, after = () => render()) {
+  const p = progress(ev.entries);
+  const allPacked = p.total > 0 && p.done >= p.total;
+  const left = p.total - p.done;
+  const body = h(`<div class="modal ev-menu">
+    <h2>${esc(ev.name || 'Untitled event')}</h2>
+    <p class="modal-sub">${p.total ? `${p.done} of ${p.total} packed · ${p.pct}%` : 'Nothing on this packing list yet'}</p>
+    <div class="modal-actions">
+      <a class="btn ghost lg" href="#/event/${ev.id}" data-m="go">${IC.fwd}<span>Open this trip</span></a>
+      ${p.total && !allPacked ? `<button class="btn primary lg" data-m="packall">${IC.check}<span>Mark everything packed<em>${left} still unticked</em></span></button>` : ''}
+      ${p.total && p.done ? `<button class="btn ghost lg" data-m="unpackall">${IC.swap}<span>Clear every tick</span></button>` : ''}
+      <button class="btn ghost lg" data-m="rename">${IC.edit}<span>Rename</span></button>
+      <a class="btn ghost lg" href="#/event/${ev.id}/edit" data-m="go">${IC.gear}<span>Trip settings</span></a>
+      <button class="btn ghost lg" data-m="share">${IC.share}<span>Share</span></button>
+      <button class="btn danger ghost lg" data-m="del">${IC.trash}<span>Delete this trip</span></button>
+    </div>
+    <button class="btn ghost" data-m="cancel">Cancel</button>
+  </div>`);
+  const overlay = h('<div class="overlay"></div>');
+  overlay.appendChild(body);
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  // Tick (or clear) the whole list at once. Kept as plain writes on the entries so
+  // it behaves exactly like ticking them by hand — the readiness ring, the trip
+  // card and Packing Mode all read the same flags.
+  const setAll = async (checked) => {
+    for (const e of ev.entries) e.checked = checked;
+    if (!await saveGuard(db.saveEvent(ev))) return;
+    close();
+    showToast(checked ? `“${ev.name}” — all ${p.total} item${p.total === 1 ? '' : 's'} marked packed` : `“${ev.name}” — every tick cleared`);
+    after();
+  };
+
+  body.addEventListener('click', async (e) => {
+    const m = e.target.closest('[data-m]')?.dataset.m;
+    if (!m) return;
+    if (m === 'go') { close(); return; }              // the <a> navigates by itself
+    if (m === 'cancel') { close(); return; }
+    if (m === 'packall') { await setAll(true); return; }
+    if (m === 'unpackall') {
+      if (!confirm(`Clear every tick on “${ev.name}”? The list itself is untouched — you'd just be starting the packing again.`)) return;
+      await setAll(false);
+      return;
+    }
+    if (m === 'rename') {
+      const name = (prompt('Rename trip:', ev.name) || '').trim();
+      if (!name || name === ev.name) return;
+      ev.name = name;
+      if (await saveGuard(db.saveEvent(ev))) { close(); after(); }
+      return;
+    }
+    if (m === 'share') { close(); shareTrip(ev); return; }
+    if (m === 'del') {
+      if (!confirm(`Delete “${ev.name}” and its packing list?\n\nThis can't be undone here, and the trip also disappears from your other synced devices. Your templates, items and to-dos are untouched.`)) return;
+      if (!await saveGuard(db.deleteEvent(ev.id))) return;
+      close();
+      showToast(`Deleted “${ev.name}”`);
+      if ((location.hash || '').startsWith(`#/event/${ev.id}`)) location.assign('#/events'); else after();
+    }
+  });
+}
+
+// Long-press (touch) or right-click (mouse/trackpad) a trip card for that menu.
+// The long-press swallows the click that follows it, so the card doesn't also open.
+function attachEventMenu(el, ev, after) {
+  let timer = null;
+  let longFired = false;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); openEventMenu(ev, after); });
+  el.addEventListener('touchstart', () => {
+    longFired = false;
+    timer = setTimeout(() => {
+      longFired = true;
+      try { if (navigator.vibrate) navigator.vibrate(14); } catch { /* ignore */ }
+      openEventMenu(ev, after);
+    }, 480);
+  }, { passive: true });
+  el.addEventListener('touchmove', cancel, { passive: true });
+  el.addEventListener('touchend', cancel);
+  el.addEventListener('touchcancel', cancel);
+  el.addEventListener('click', (e) => { if (longFired) { e.preventDefault(); longFired = false; } });
+}
+
+// An event card wired up with its quick-actions menu.
+function eventCard(e, after) {
+  const el = h(eventCardHTML(e));
+  attachEventMenu(el, e, after);
+  return el;
+}
+
 // ============================================================
 // Events tab — every saved event list, nearest upcoming first
 // ============================================================
@@ -1186,6 +1301,7 @@ async function renderEvents() {
     wrap.appendChild(h('<div class="empty"><p class="empty-t">No events yet</p><p class="empty-s">Head to Home to build your first trip’s combined Packing List.</p></div>'));
     return wrap;
   }
+  wrap.appendChild(h(`<p class="muted pad ev-hint">${ic('more','sm')}<b>Long-press</b> a trip (or right-click on a Mac) for quick actions — mark everything packed, rename, share, delete.</p>`));
   // Group headers make the nearest-first ordering legible at a glance.
   const groupOf = (e) => { const d = daysUntil(e.startDate); return d == null ? 'undated' : d >= 0 ? 'upcoming' : 'past'; };
   const labels = { upcoming: 'Upcoming', undated: 'No date set', past: 'Past trips' };
@@ -1199,7 +1315,7 @@ async function renderEvents() {
       list = h('<div class="cards"></div>');
       wrap.appendChild(list);
     }
-    list.appendChild(h(eventCardHTML(e)));
+    list.appendChild(eventCard(e));
   }
   return wrap;
 }
@@ -1696,6 +1812,10 @@ function groupByActivity(entries, gid) {
 }
 function setTotalView(v) { try { localStorage.setItem(VIEW_KEY, v); } catch {} }
 let expandedEntry = null; // id of the entry whose inline editor is open
+// When you reach the full item editor from somewhere that expects you back — today
+// only Packing Mode — this holds the route to return to once you've saved (or backed
+// out). It's consumed on use, so a later visit to the same item stays put as usual.
+let itemEditorReturn = null;
 let flagFilter = new Set(); // active "sort out" filters on the Total List: 'liquid' and/or 'charge'
 let flagFilterFor = null;   // the event id the filter belongs to (cleared when you switch trips)
 let weightSort = false;     // "Heaviest first" ordering toggle on the Total List
@@ -1722,6 +1842,7 @@ async function renderEvent(eventId) {
     <h1 class="grow">${esc(ev.name)}</h1>
     <button class="iconbtn" type="button" data-rename aria-label="Rename event">${IC.edit}</button>
     <a class="iconbtn" href="#/event/${ev.id}/edit" aria-label="Event settings">${IC.gear}</a>
+    <button class="iconbtn" type="button" data-evmenu aria-label="More actions for this trip" title="Mark everything packed, share, delete…">${IC.more}</button>
   </div>`);
   topbar.querySelector('[data-rename]').addEventListener('click', async () => {
     const name = (prompt('Rename event:', ev.name) || '').trim();
@@ -1729,6 +1850,7 @@ async function renderEvent(eventId) {
     ev.name = name;
     if (await saveGuard(db.saveEvent(ev))) render();
   });
+  topbar.querySelector('[data-evmenu]').addEventListener('click', () => openEventMenu(ev));
   wrap.appendChild(topbar);
 
   const openTodos = (await db.getActions()).filter((a) => !a.done && a.kind !== 'shopping').length;
@@ -1914,13 +2036,16 @@ function tripSetupCard(ev) {
   if (ev.season) tile(wIcon(SEASON_WIC[ev.season] || 'sun'), 'Time of year', esc(ev.season));
   if (!quick && ev.catering) tile(ic(CATERING_ICON[ev.catering] || 'cutlery', 'md'), 'Catering', esc(cateringLabel(ev.catering)));
 
-  // Multi-value settings (WET contexts, ticked activities) become tag rows below.
+  // Multi-value settings (ticked activities, WET contexts) become tag rows below.
   const blocks = [];
+  // The WET options (Indoor / Outdoor / Race) only ever qualify the WET activities,
+  // so they sit indented directly under that group — exactly as they do in the event
+  // form (v110) — rather than floating in a box of their own further up.
   const contexts = ev.contexts || [];
-  if (contexts.length) {
-    const tags = contexts.map((c) => `<span class="setup-tag">${ic(CONTEXT_ICON[c] || 'box', 'sm')}${esc(c)}</span>`).join('');
-    blocks.push(`<div class="setup-block"><span class="setup-lbl">WET options</span><div class="setup-tags">${tags}</div></div>`);
-  }
+  const contextTags = contexts.length
+    ? `<div class="setup-tags">${contexts.map((c) => `<span class="setup-tag">${ic(CONTEXT_ICON[c] || 'box', 'sm')}${esc(c)}</span>`).join('')}</div>`
+    : '';
+  let contextsPlaced = false;
   const weatherOn = ev.weatherOn || [];
   if (weatherOn.length) {
     const tags = weatherOn.map((w) => {
@@ -1939,6 +2064,10 @@ function tripSetupCard(ev) {
       if (!arr.length) continue;
       inner += `<div class="setup-grp-lbl">${esc(g.id)} · ${esc(g.label)}</div>`
         + `<div class="setup-tags">${arr.map((l) => `<span class="setup-tag">${ic(GROUP_ICON[g.id] || 'box', 'sm')}${esc(l.name)}</span>`).join('')}</div>`;
+      if (g.id === 'WET' && contextTags) {
+        inner += `<div class="setup-sub"><span class="setup-sub-t">WET options</span>${contextTags}</div>`;
+        contextsPlaced = true;
+      }
     }
     const ung = chosen.filter((l) => !GROUP_IDS.includes(l.group));
     if (ung.length) {
@@ -1946,6 +2075,11 @@ function tripSetupCard(ev) {
         + `<div class="setup-tags">${ung.map((l) => `<span class="setup-tag">${ic('box','sm')}${esc(l.name)}</span>`).join('')}</div>`;
     }
     blocks.push(`<div class="setup-block"><span class="setup-lbl">${quick ? 'Activities packed for' : 'Extra activities'}</span>${inner}</div>`);
+  }
+  // No WET activities on this trip to nest them under — show them on their own,
+  // still last, so a chosen option can never go missing from the recap.
+  if (contextTags && !contextsPlaced) {
+    blocks.push(`<div class="setup-block"><span class="setup-lbl">WET options</span>${contextTags}</div>`);
   }
 
   return h(`<details class="setup" open>
@@ -2461,7 +2595,16 @@ function packerSelectHtml(current) {
   return selectHtml('packer', opts, current || '');
 }
 
-function entryEditor(ev, entry, body) {
+// The quick, trip-level editor for one packed thing. `hooks` lets a second screen
+// (Packing Mode) reuse it: the packing list's own close / re-render / navigate
+// behaviour is the default, and Packing Mode supplies its own so Save drops you
+// back exactly where you were instead of rebuilding the whole trip screen.
+function entryEditor(ev, entry, body, hooks = null) {
+  const H = hooks || {
+    close: () => { expandedEntry = null; renderTotalBody(body, ev); },
+    done: () => { expandedEntry = null; render(); },
+    leave: (href) => { expandedEntry = null; location.assign(href); },
+  };
   const ed = h('<div class="editor"></div>');
   const src = sourceItemForEntry(entry); // the template item behind this entry, if any
   // Existing section names on this trip, offered as suggestions so an item can be
@@ -2527,12 +2670,11 @@ function entryEditor(ev, entry, body) {
   ed.addEventListener('click', async (e) => {
     const x = e.target.closest('[data-x]')?.dataset.x;
     if (!x) return;
-    if (x === 'cancel') { expandedEntry = null; renderTotalBody(body, ev); return; }
+    if (x === 'cancel') { H.close(); return; }
     if (x === 'del') {
       if (!confirm(`Remove “${entry.name}” from this list?`)) return;
       ev.entries = ev.entries.filter((it) => it.id !== entry.id);
-      expandedEntry = null;
-      if (await saveGuard(db.saveEvent(ev))) render();
+      if (await saveGuard(db.saveEvent(ev))) H.done();
       return;
     }
     if (x === 'full') {
@@ -2544,14 +2686,12 @@ function entryEditor(ev, entry, body) {
         target = await promoteEntryToTemplate(entry, lists);
         if (!target) return; // cancelled — leave the quick editor open
       }
-      expandedEntry = null;
-      if (await saveGuard(db.saveEvent(ev))) location.assign(`#/list/${target.listId}/item/${target.itemId}`);
+      if (await saveGuard(db.saveEvent(ev))) H.leave(`#/list/${target.listId}/item/${target.itemId}`);
       return;
     }
     if (x === 'save') {
       applyForm();
-      expandedEntry = null;
-      if (await saveGuard(db.saveEvent(ev))) render();
+      if (await saveGuard(db.saveEvent(ev))) H.done();
     }
   });
   return ed;
@@ -2894,16 +3034,17 @@ function addKitToTrip(ev, kit, members) {
 // ============================================================
 // Packing Mode — a focused, one-phase-at-a-time flow to pack from.
 // ============================================================
-let packState = { eventId: null, idx: 0, showPacked: false };
+let packState = { eventId: null, idx: 0, showPacked: false, editId: null };
 
 async function renderPackMode(eventId) {
   const ev = await db.getEvent(eventId);
   if (!ev || !ev.entries.length) { location.assign(`#/event/${eventId}`); return h('<section></section>'); }
+  ALL_LISTS = await db.getLists(); // the quick editor needs bag names + the item behind an entry
   if (packState.eventId !== eventId) {
     // Open at the first phase that still has unpacked items.
     const steps = packSteps(ev.entries);
     const firstUnpacked = steps.findIndex((s) => s.remaining > 0);
-    packState = { eventId, idx: firstUnpacked < 0 ? 0 : firstUnpacked, showPacked: false };
+    packState = { eventId, idx: firstUnpacked < 0 ? 0 : firstUnpacked, showPacked: false, editId: null };
     personFilter = ''; // start Packing Mode showing everyone
   }
 
@@ -2968,7 +3109,9 @@ async function renderPackMode(eventId) {
     const listEl = h('<div class="pack-list"></div>');
     let shown = 0;
     for (const cg of groupByContainer(step.entries)) {
-      const items = cg.entries.filter((e) => packState.showPacked || !e.checked);
+      // A row you're editing stays put even once you tick it, so the editor can't
+      // vanish out from under you.
+      const items = cg.entries.filter((e) => packState.showPacked || !e.checked || packState.editId === e.id);
       if (!items.length) continue;
       if (cg.container) listEl.appendChild(h(`<div class="sub">${groupIcon(cg.container) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(cg.container)}</span>` : ''}${esc(cg.container)}</div>`));
       for (const entry of items) { listEl.appendChild(packRow(ev, entry, draw)); shown++; }
@@ -2999,22 +3142,45 @@ async function renderPackMode(eventId) {
   return wrap;
 }
 
+// One thing to pack. The whole slab still toggles packed — that's the point of
+// Packing Mode — so editing gets its own small pen beside it, opening the same
+// quick editor the packing list uses, right here in place.
 function packRow(ev, entry, redraw) {
   const meta = [entry.swedish, entry.storage ? entry.storage : '', entry.container, entry.note].filter(Boolean).map(esc).join(' · ');
-  const row = h(`<button class="pack-item${entry.checked ? ' done' : ''}" type="button">
-    <span class="pack-box">${entry.checked ? IC.check : ''}</span>
-    <span class="pack-body">
-      <span class="pack-name">${esc(entry.name)}${entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''}${entry.charging ? ` <span class="badge charge" title="${esc('Needs charging' + (chargeTypeShort(entry.chargeType) ? ` — ${chargeTypeLabel(entry.chargeType)}` : ''))}">${ic('bolt','xs')}${chargeTypeShort(entry.chargeType) ? `${esc(chargeTypeShort(entry.chargeType))}` : ''}</span>` : ''}</span>
-      ${meta ? `<span class="pack-meta">${meta}</span>` : ''}
-    </span>
-  </button>`);
-  row.addEventListener('click', async () => {
+  const editing = packState.editId === entry.id;
+  const row = h(`<div class="pack-row${editing ? ' editing' : ''}">
+    <button class="pack-item${entry.checked ? ' done' : ''}" type="button">
+      <span class="pack-box">${entry.checked ? IC.check : ''}</span>
+      <span class="pack-body">
+        <span class="pack-name">${esc(entry.name)}${entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''}${entry.charging ? ` <span class="badge charge" title="${esc('Needs charging' + (chargeTypeShort(entry.chargeType) ? ` — ${chargeTypeLabel(entry.chargeType)}` : ''))}">${ic('bolt','xs')}${chargeTypeShort(entry.chargeType) ? `${esc(chargeTypeShort(entry.chargeType))}` : ''}</span>` : ''}</span>
+        ${meta ? `<span class="pack-meta">${meta}</span>` : ''}
+      </span>
+    </button>
+    <button class="iconbtn pack-edit" type="button" data-edit aria-label="Edit ${esc(entry.name)}" title="Edit this item">${IC.edit}</button>
+  </div>`);
+  row.querySelector('.pack-item').addEventListener('click', async () => {
     entry.checked = !entry.checked;
     if (entry.checked) { try { if (navigator.vibrate) navigator.vibrate(12); } catch { /* ignore */ } }
     await saveGuard(db.saveEvent(ev));
     redraw();
   });
-  return row;
+  row.querySelector('[data-edit]').addEventListener('click', () => {
+    packState.editId = editing ? null : entry.id;
+    redraw();
+  });
+
+  if (!editing) return row;
+  // The quick editor, with Packing Mode's own close / save / hand-off behaviour so
+  // it never rebuilds the trip screen underneath — and so the deeper "full item"
+  // editor knows to bring you back here when you're done.
+  const ed = entryEditor(ev, entry, null, {
+    close: () => { packState.editId = null; redraw(); },
+    done: () => { packState.editId = null; redraw(); },
+    leave: (href) => { packState.editId = null; itemEditorReturn = `#/event/${ev.id}/pack`; location.assign(href); },
+  });
+  const holder = h('<div class="pack-editwrap"></div>');
+  holder.appendChild(row); holder.appendChild(ed);
+  return holder;
 }
 
 function finishScreen(ev, overall) {
@@ -3585,8 +3751,12 @@ function itemEditor(list, it, setOpen, draw) {
   // its options are the values already used across items, plus a "＋ Add new…" choice
   // that reveals an inline text box. New values need no saving — they reappear next
   // time because collectItemValues re-reads them from the items.
-  const growField = (name, labelHtml, cur, addLabel, placeholder) => {
+  const growField = (name, labelHtml, cur, addLabel, placeholder, seed = []) => {
     const vals = collectItemValues(name);
+    // Extra names worth offering even before anything has been given to them
+    // (Owner seeds itself from Settings → People, so Martin & Anna are there on day one).
+    for (const s of seed) if (s && !vals.some((v) => v.toLowerCase() === s.toLowerCase())) vals.push(s);
+    vals.sort((a, b) => a.localeCompare(b));
     if (cur && !vals.some((v) => v.toLowerCase() === cur.toLowerCase())) vals.unshift(cur);
     const opts = [{ value: '', label: '— not set —' }]
       .concat(vals.map((v) => ({ value: v, label: v })))
@@ -3691,7 +3861,7 @@ function itemEditor(list, it, setOpen, draw) {
             ${growField('manufacturer', 'Manufacturer', it.manufacturer, '＋ Add a manufacturer…', 'e.g. Patagonia · Apple')}
             <label class="field"><span>Model <em>product name</em></span><input name="model" value="${esc(it.model)}" placeholder="e.g. Atmos AG 65" autocomplete="off"></label>
           </div>
-          <label class="field"><span>Owner <em>whose it is</em></span><input name="owner" value="${esc(it.owner)}" placeholder="e.g. Martin · Anna · Shared" autocomplete="off"></label>
+          ${growField('owner', 'Owner <em>whose it is</em>', it.owner, '＋ Add an owner…', 'e.g. Martin · Anna · Shared', ownerSeedNames())}
           <div class="row2">
             <label class="field"><span>Condition</span>${selectHtml('condition', [{ value: '', label: '— not set —' }, ...ITEM_CONDITIONS.map((c) => ({ value: c.id, label: c.label }))], it.condition)}</label>
             <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
@@ -3850,7 +4020,7 @@ function itemEditor(list, it, setOpen, draw) {
       $('.care-newstorage', ed)?.classList.toggle('hidden', !isNew);
       if (isNew) $('input[name=storage-new]', ed)?.focus();
     }
-    if (['color-sel', 'size-sel', 'manufacturer-sel'].includes(e.target.name)) {
+    if (['color-sel', 'size-sel', 'manufacturer-sel', 'owner-sel'].includes(e.target.name)) {
       const key = e.target.name.replace('-sel', '');
       const isNew = e.target.value === '__new__';
       $(`.grow-new[data-grow-new="${key}"]`, ed)?.classList.toggle('hidden', !isNew);
@@ -3896,7 +4066,7 @@ function itemEditor(list, it, setOpen, draw) {
     }
     const x = e.target.closest('[data-x]')?.dataset.x;
     if (!x) return;
-    if (x === 'cancel') { setOpen(null); draw(); return; }
+    if (x === 'cancel') { setOpen(null); if (takeItemEditorReturn()) return; draw(); return; }
     if (x === 'del') {
       const msg = isContainer
         ? `Delete the container “${it.name || 'this container'}”? Items already set to this container keep the name.`
@@ -3904,7 +4074,7 @@ function itemEditor(list, it, setOpen, draw) {
       if (!confirm(msg)) return;
       list.items = list.items.filter((z) => z.id !== it.id);
       setOpen(null);
-      if (await saveGuard(db.saveList(list))) draw();
+      if (await saveGuard(db.saveList(list))) { if (takeItemEditorReturn()) return; draw(); }
       return;
     }
     if (x === 'save') {
@@ -3975,7 +4145,7 @@ function itemEditor(list, it, setOpen, draw) {
       it.size = growVal('size');
       it.manufacturer = growVal('manufacturer');
       it.model = ($('input[name=model]', ed).value || '').trim();
-      it.owner = ($('input[name=owner]', ed).value || '').trim();
+      it.owner = growVal('owner');
       it.condition = $('select[name=condition]', ed).value;
       it.retired = $('input[name=retired]', ed).checked;
       it.retiredReason = it.retired ? $('select[name=retiredReason]', ed).value : '';
@@ -4038,10 +4208,24 @@ function itemEditor(list, it, setOpen, draw) {
           }
         }
       })());
-      if (ok) { ALL_LISTS = await db.getLists(); await refreshActions(); draw(); }
+      if (ok) {
+        ALL_LISTS = await db.getLists(); await refreshActions();
+        if (takeItemEditorReturn()) return;   // came from Packing Mode — go straight back
+        draw();
+      }
     }
   });
   return ed;
+}
+
+// If something sent us here expecting us back (Packing Mode), navigate there and
+// say so. Consumed on use, so it can never strand a later, ordinary visit.
+function takeItemEditorReturn() {
+  if (!itemEditorReturn) return false;
+  const to = itemEditorReturn;
+  itemEditorReturn = null;
+  location.assign(to);
+  return true;
 }
 
 // ============================================================
@@ -4584,7 +4768,7 @@ function howtoCard() {
  <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
 
         <h3>All items · table (the spreadsheet)</h3>
-        <p>For fast bulk edits, the <b>Care</b> tab → <b>All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
+        <p>For fast bulk edits, the <b>Care</b> tab → <b>All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour, <b>owner</b>…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. <b>Owner</b> is the same dropdown as in the item editor, so you can go down the column assigning things without typing a name twice. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
         <p>A toolbar above the grid bends the table to how you work: <b>Sort</b> the whole thing by <b>Name</b>, <b>Weight</b>, <b>Storage</b>, <b>Container</b> or <b>how many lists</b> an item is in, with a <b>▲/▼</b> button to flip the direction; and a <b>Columns</b> button opens a panel to <b>reorder the “item itself” columns</b> into the order you like. Both your <b>sort choice</b> and your <b>column order</b> are remembered on this device, so the table opens just how you left it.</p>
 
         <h3>Places visited (the world map)</h3>
@@ -4598,7 +4782,7 @@ function howtoCard() {
         <p>Six tabs along the bottom:</p>
         <ul>
           <li><b>Home</b> — the builder for starting a new trip, plus a compact preview of your few most recent events.</li>
- <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here. The <b>Map</b> button up top opens the <b>Places visited</b> world map (see below).</li>
+ <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here. The <b>Map</b> button up top opens the <b>Places visited</b> world map (see below). <b>Long-press</b> (or <b>right-click</b>) a trip card for its quick-actions menu — see <b>Quick actions on a trip</b> below.</li>
           <li><b>Templates</b> — your reusable templates (the building blocks).</li>
           <li><b>Care</b> — everything that needs looking after, as an urgency-ordered list or a month calendar (see <b>Care, storage &amp; maintenance</b> below).</li>
           <li><b>Actions</b> — your to-do list (the red tab): everything you need to <em>do</em>, not just pack, whether it belongs to a specific item or stands on its own (see <b>Actions — your to-do list</b> below).</li>
@@ -4696,7 +4880,16 @@ function howtoCard() {
           <li><b>Weight</b> — the total packed weight; it turns <b>red</b> and tells you how many bags are <b>over limit</b> if any bag is too heavy. (Add weights to items to make this exact — see <b>Bags &amp; weight</b>.)</li>
           <li><b>Open to-dos</b> — how many <b>Actions</b> are still open; tap it to jump to the Actions tab.</li>
         </ul>
- <p>The big <b>Start / Continue packing</b> button sits right underneath, opening <b>Packing Mode</b> at the first phase that still has unpacked things. Below the dashboard is a <b>Trip setup</b> panel that recaps every choice you made when creating the trip (type, dates, destination, transport, season, catering, laundry, forced weather and the activities you ticked) — a read-only reminder of what this list was built from.</p>
+ <p>The big <b>Start / Continue packing</b> button sits right underneath, opening <b>Packing Mode</b> at the first phase that still has unpacked things. Below the dashboard is a <b>Trip setup</b> panel that recaps every choice you made when creating the trip (type, dates, destination, transport, season, catering, laundry, forced weather and the activities you ticked) — a read-only reminder of what this list was built from. The <b>WET options</b> (Indoor / Outdoor / Race) sit indented under the WET activities they qualify, at the foot of that panel, exactly as they do on the Create Event form.</p>
+
+        <h3>Quick actions on a trip</h3>
+ <p>Some things you only want to do to a <em>whole</em> trip. <b>Long-press</b> a trip card on the <b>Events</b> tab (or <b>right-click</b> it on the Mac), or tap the <b>⋯</b> button in a trip's own header, and a short menu appears:</p>
+        <ul>
+ <li><b>Mark everything packed</b> — takes the list straight to <b>100%</b> in one tap. Use it for a trip you actually packed away from the app, or an old trip you simply want on record as done rather than sitting there half-ticked forever. The list itself is untouched, so it stays fully readable afterwards.</li>
+          <li><b>Clear every tick</b> — the opposite, for starting the packing again (it asks first).</li>
+          <li><b>Rename</b>, <b>Trip settings</b> and <b>Share</b> — the same actions as in the trip's header, gathered in one place.</li>
+ <li><b>Delete this trip</b> — removes the trip and its packing list. It asks first, it cannot be undone here, and if you're signed in to sync the trip disappears from your other devices too. Your <b>templates, items and to-dos are untouched</b> — only this trip's list goes.</li>
+        </ul>
 
         <h3>Reading &amp; organising the list</h3>
         <ul>
@@ -4717,7 +4910,7 @@ function howtoCard() {
  <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b> or remove places — under <b>Storage places</b> in <b>Settings</b>.</li>
  <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one. Pictures are kept in their own place and the item just points at them, so your lists and backups stay quick; if you ever want to reclaim space, <b>Settings → Your data → Tidy up photos</b> frees any picture nothing uses any more.</li>
           <li><b>Maintenance</b> — how and how often to look after it: a <b>maintenance cadence</b> (monthly … every 2 years, or a custom number of days), when it was <b>last done</b>, free-text <b>how-to notes</b> (steps, products, settings), and a <b>how-to link</b>. Tap <b>Log done today</b> to record a service — it resets the schedule and adds a dated entry to the item's maintenance history.</li>
-          <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b>, <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
+          <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b> (a dropdown too — it lists every owner you've used so far plus everyone on your <b>Settings → People</b> list, with <b>＋ Add an owner…</b> for a new name, which then joins the list; a name you add here is <em>not</em> turned into a Person, so “Shared” or “The kids” can own things without appearing in every “Packed by” picker), <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
  <li><b>Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>Not in use</b> tag, and the new <b>Not in use</b> filter chip rounds them all up. (This is different from <b>Condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
         </ul>
         <p>The <b>Care</b> tab then gathers everything with care info across all your lists, two ways:</p>
@@ -4746,6 +4939,7 @@ function howtoCard() {
 
         <h3>Packing Mode</h3>
  <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List.</p>
+ <p><b>Fixing something mid-pack.</b> Tapping the row itself always means “packed” — that's the whole point of this screen — so editing has its own small <b>pen</b> at the right-hand end of each row. Tap it and the quick editor opens in place: quantity, which bag, when, section, kit, who packs it, weight, the flags and a note. <b>Save</b> and you're back in Packing Mode at the same phase, right where you were. Need more than that? The editor's <b>Edit the full item</b> button opens the item's full editor (conditions, templates, storage &amp; care, photos) — and saving <em>there</em> also brings you straight back here, so a detour never costs you your place. A row you're editing stays on screen even if you tick it.</p>
 
         <h3>Who packs what</h3>
         <p>Packing with someone? First set up your <b>People</b> in <b>Settings → People</b> — each with a name and a colour (Martin &amp; Anna are there to start; add, rename or recolour anyone). Then on a trip, open an item and choose <b>Packed by</b>. Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row appears at the top of the packing list so you can show <b>Everyone</b>, just one person, or the still-<b>Unassigned</b> items (each with a count). The same filter sits atop <b>Packing Mode</b>, so each of you can pack only your own things. It’s per-trip, and it <b>travels inside a shared trip</b> — send the trip to someone and the items you gave them arrive marked as theirs (a name that isn’t on their People list still shows, just with an auto-picked colour). Renaming a person carries the new name onto every trip they’re already on.</p>
@@ -4800,6 +4994,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v112', '2026-08-24 · 11:00 UTC', false, 'Four small things you asked for',
+      '<b>(1) Edit while you pack.</b> In <b>Packing Mode</b> the big slab still marks a thing packed with one tap — that stays — but each row now has a small <b>pen</b> beside it. Tap it and the quick editor opens right there: quantity, which bag, when, the note, who packs it, weight and the flags. Save and you drop <b>straight back into Packing Mode</b>, at the same phase, without losing your place. If you need the deeper settings, the editor’s <b>Edit the full item</b> button takes you to the full item editor — and when you save <b>there</b>, the app brings you back to Packing Mode too. <b>(2) Owner is now a dropdown.</b> In an item’s <b>Details &amp; ownership</b> panel, <b>Owner</b> has stopped being a free-text box you had to spell the same way every time. It now lists every owner you’ve already used, plus everyone on your <b>Settings → People</b> list, with <b>＋ Add an owner…</b> to name a new one — which then appears in the list from then on. Names like <b>Shared</b> work fine and, deliberately, do <b>not</b> turn into People, so your “Packed by” pickers stay a list of actual packers. The same dropdown is now a column in <b>Care → All items · table</b>, so you can set owners down a whole column. <b>(3) WET options moved.</b> On a trip’s <b>Trip setup</b> card, the <b>Indoor / Outdoor / Race</b> options no longer sit in a box of their own near the top; they’re indented directly <b>under the WET activities</b> they qualify, at the bottom of the card — matching where they already sit in the Create Event form. <b>(4) Quick actions on a trip.</b> <b>Long-press</b> a trip card (or <b>right-click</b> it on the Mac), or tap the new <b>⋯</b> in a trip’s own header, and a menu offers: <b>Mark everything packed</b> — one tap to take a list to 100% and keep it on record, for a trip you packed off-app or an old one you just want filed — <b>Clear every tick</b>, <b>Rename</b>, <b>Trip settings</b>, <b>Share</b>, and <b>Delete this trip</b>, which the app had no way to do at all until now.',
+      'Fewer dead ends: you can fix an item mid-pack without losing your place, owners stop being typed twice three different ways, and a finished — or unwanted — trip can finally be closed off in one gesture.'),
     v('v111', '2026-08-23 · 18:30 UTC', false, 'All items — filter, sort and group your whole catalogue',
       'The <b>All items</b> index on the <b>Care</b> tab now bends to what you’re looking for. <b>Two new filter groups</b> join the category chips: <b>Condition</b> (New / Good / Worn / Needs replacing / Not rated) and <b>Section</b> (Clothing, Tech &amp; devices…). Chips <b>within</b> a row still mean “either of these”; the <b>rows combine</b>, so <b>Liquids</b> + <b>Worn</b> means liquids <i>that are</i> worn — and every count tells you how many you’d actually get. <b>Show all</b> clears the lot. A new <b>Sort</b> control orders the whole index by <b>Alphabetically, Container, Where it’s stored, Weight, Manufacturer, Acquired, Warranty until</b> or <b>Section</b>, with <b>▲/▼</b> to flip the direction; anything with that field <b>blank always sinks to the bottom</b>, in both directions, so a sort never buries what you can see under what you haven’t filled in. And a new <b>Group</b> control breaks the list into readable, <b>collapsible</b> sections — by <b>Container, Where it’s stored, Section, Manufacturer, Condition, Template, Category, Whose it is, Care status</b> or <b>First letter</b> — each with its own count, the sort still applying inside each group, and the “not set” bucket always last. Your sort and grouping are <b>remembered on this device</b>; the filter chips still start clear each visit.',
       'Five hundred rows stop being a wall of names: round up everything worn, everything from the garage, or everything by one maker in two taps.'),
@@ -6409,6 +6606,27 @@ function savePeople(arr) {
   try { localStorage.setItem(PEOPLE_KEY, JSON.stringify(asPeople(arr))); } catch { /* ignore */ }
   return arr;
 }
+// Names to offer in the Owner dropdown besides the owners already in use: everyone
+// on the People roster. Deliberately one-way — typing a new owner does NOT create a
+// person, so "Shared" or "The kids" can own things without turning up in every
+// "Packed by" picker and person filter.
+function ownerSeedNames() { return loadPeople().map((p) => p.name).filter(Boolean); }
+// Every owner the app can offer: those already given something, plus your People.
+// `cur` is always included, so a name nobody else uses can never be dropped silently.
+function ownerNames(cur = '') {
+  const seen = new Map();
+  for (const v of [...collectItemValues('owner'), ...ownerSeedNames(), (cur || '').trim()]) {
+    const k = v.toLowerCase();
+    if (v && !seen.has(k)) seen.set(k, v);
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+}
+// The Owner picker's <option>s, for the All-items table (the item editor builds its
+// own through growField, from the same names).
+function ownerOptsHTML(cur = '') {
+  const opts = [{ value: '', label: '—' }, ...ownerNames(cur).map((n) => ({ value: n, label: n })), { value: '__new__', label: '＋ Add an owner…' }];
+  return opts.map((o) => `<option value="${esc(o.value)}"${o.value === (cur || '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+}
 const asPeople = (arr) => (Array.isArray(arr) ? arr.map(coercePerson).filter((p) => p.name) : []);
 // The display colour for a packer name, honouring the roster (hash fallback for
 // names not on it — e.g. from a shared trip).
@@ -6521,6 +6739,10 @@ function sheetName(name) {
 async function renderRoute() {
   const hash = location.hash || '#/';
   const m = (re) => (hash.match(re) || [])[1];
+  // A pending "come back here" only survives while you're actually in the item
+  // editor it was set for. Leave by any other door (the back arrow, a tab) and it
+  // is dropped, so a later Save somewhere else can't teleport you.
+  if (itemEditorReturn && !/^#\/list\/[^/]+\/item\/[^/]+$/.test(hash)) itemEditorReturn = null;
   if (hash === '#/' || hash === '') return renderHome();
   if (hash === '#/new') { location.replace('#/'); return renderHome(); }
   if (hash === '#/events') return renderEvents();

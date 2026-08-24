@@ -1486,6 +1486,23 @@ a.rd-stat.rd-link::after {
 
 .setup-grp-lbl:first-of-type { margin-top: 0; }
 
+/* The WET options, indented under the WET activities they qualify — the same
+   shape as the .grp-sub block in the event form, so the two screens agree. */
+.setup-sub {
+  margin: 8px 0 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-2);
+}
+
+.setup-sub-t {
+  display: block;
+  margin-bottom: 5px;
+  font-size: .68rem;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--muted);
+}
+
 .setup-tags {
   display: flex;
   flex-wrap: wrap;
@@ -2144,6 +2161,47 @@ a.rd-stat.rd-link::after {
   margin: 10px 4px 0;
 }
 
+/* A packing-mode row: the big tap-to-pack slab, plus a small pen for editing. */
+.pack-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pack-row .pack-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.pack-edit {
+  flex: none;
+  color: var(--muted);
+}
+
+.pack-row.editing .pack-edit {
+  color: var(--brand-ink);
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+}
+
+/* A grid item defaults to min-width:auto, so the editor's two-up fields would push
+   the whole column wider than the screen and shove the pen off the right edge. */
+.pack-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pack-editwrap {
+  display: block;
+  min-width: 0;
+}
+
+.pack-row {
+  min-width: 0;
+}
+
+.pack-editwrap .editor {
+  margin: 6px 0 2px;
+}
+
 .pack-item {
   display: flex;
   align-items: center;
@@ -2437,6 +2495,38 @@ a.rd-stat.rd-link::after {
 .modal-actions {
   display: grid;
   gap: 8px;
+}
+
+/* The quick-actions menu on a trip (long-press / right-click / the ⋯ in its header) */
+.ev-menu .modal-actions .btn {
+  justify-content: flex-start;
+  text-align: left;
+  gap: 10px;
+}
+
+.ev-menu .modal-actions .btn em {
+  display: block;
+  font-style: normal;
+  font-size: .76rem;
+  font-weight: 500;
+  color: inherit;      /* the app's <em> is muted grey — unreadable on a filled button */
+  opacity: .78;
+}
+
+.ev-hint {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 0 10px;
+  font-size: .84rem;
+}
+
+/* A long-press on a trip card opens our menu, so suppress iOS's own link callout
+   and the text selection that a slow press would otherwise start. */
+.card.ev.ticket {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .modal-actions .btn {
