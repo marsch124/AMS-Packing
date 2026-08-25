@@ -24,6 +24,7 @@ import {
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
   linkFromResolved, itemFromEntry, templateDefaults, mapSectionAcrossTemplates,
+  looksLikeEmail, ownerNameFromEmail,
 } from './model.js';
 import * as db from './db.js';
 import * as weather from './weather.js';
@@ -5103,7 +5104,7 @@ function versionHistoryCard() {
   </div>`;
   const items = [
     v('v117', '2026-08-25 · 00:30 UTC', false, 'Owners are a proper list — and your e-mail address is off every item',
-      '<b>(1) The e-mail address is gone.</b> Nearly every item in the catalogue was showing <b>martin.schabbauer@icloud.com</b> as its owner — on the item rows, in the Care list, in the All-items table and in the “Whose it is” grouping. It was never typed: <b>the syncing system reserves a hidden field called “owner”</b> for its own bookkeeping and stamps the signed-in account into it on every save, and the app happened to use the very same name for <b>whose thing it is</b>. The two collided, and the address won — on <b>422 of 431 items</b>. The app’s own answer now lives under a <b>different name entirely</b>, so the two can never collide again, and a one-time repair on first launch turns that stamped address into <b>Martin</b> while leaving every name you actually typed (<b>Anna</b>, <b>Shared</b>) exactly as it was. Your sign-in address still shows in <b>Settings → Sync your devices</b>, where it belongs — that is genuinely which account this device is on. <b>(2) Owner is a list you manage.</b> <b>Settings → Owners</b> is a new section beside People: <b>add</b> an owner, <b>rename</b> one — every item that is theirs follows, in one go — and <b>remove</b> one, which first asks <b>who its things go to</b> (or nobody), so nothing is ever orphaned. Each name shows how many items are theirs. The same list is the dropdown <b>everywhere Owner appears</b> — the item editor and the <b>All items · table</b> — and both offer <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b> right in the dropdown, so you never have to go to Settings to fix a name. Owners stay deliberately <b>separate from People</b>: People is who <em>packs</em>, so “Shared” can own things without turning up in every “Packed by” picker.',
+      '<b>(1) The e-mail address is gone.</b> Nearly every item in the catalogue was showing <b>martin.schabbauer@icloud.com</b> as its owner — on the item rows, in the Care list, in the All-items table and in the “Whose it is” grouping. It was never typed: <b>the syncing system reserves a hidden field called “owner”</b> for its own bookkeeping and stamps the signed-in account into it on every save, and the app happened to use the very same name for <b>whose thing it is</b>. The two collided, and the address won — on <b>422 of 431 items</b>. The app’s own answer now lives under a <b>different name entirely</b>, so the two can never collide again, and a one-time repair on first launch turns that stamped address into <b>Martin</b> while leaving every name you actually typed (<b>Anna</b>, <b>Shared</b>) exactly as it was. <b>Settings → Sync your devices</b> now says <b>Syncing as Martin</b> too — the address is how you sign in, but the app says who you are. <b>(2) Owner is a list you manage.</b> <b>Settings → Owners</b> is a new section beside People: <b>add</b> an owner, <b>rename</b> one — every item that is theirs follows, in one go — and <b>remove</b> one, which first asks <b>who its things go to</b> (or nobody), so nothing is ever orphaned. Each name shows how many items are theirs. The same list is the dropdown <b>everywhere Owner appears</b> — the item editor and the <b>All items · table</b> — and both offer <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b> right in the dropdown, so you never have to go to Settings to fix a name. Owners stay deliberately <b>separate from People</b>: People is who <em>packs</em>, so “Shared” can own things without turning up in every “Packed by” picker.',
       'Whose things are whose is now something you set from a short list you control — instead of a free-text box holding an e-mail address you never typed.'),
     v('v116b', '2026-08-24 · 22:00 UTC', false, 'Every word in the app measured for readability',
       'Rather than keep fixing faint text one complaint at a time, <b>every piece of text on every screen was measured</b> — its size, and its contrast against the exact colour behind it — in <b>both</b> the light and dark themes. Nearly <b>60,000 elements</b> were checked against the standard readability threshold (4.5:1 for ordinary text). <b>Fifty-one</b> things failed. They are all fixed. The worst were not small print: the <b>trip name</b> on an event card, the <b>page title</b> at the top of every tab, the <b>label under the active tab</b>, the <b>“1 due soon” counts</b> on Care, the <b>due dates</b> on every care row, the chips on <b>Shopping</b> and <b>Actions</b>, and — in dark mode — <b>every grey chip in the app</b>, which had been left with a colour only ever defined for the light theme and was sitting at <b>2:1</b>. Nothing changed shape, moved, or was recoloured beyond recognition: red still reads red and amber still reads amber. Two general rules now hold everywhere. <b>Nothing is smaller than 12.5 pixels</b> — thirty-odd labels were below that, some as small as 8. And a colour used as <b>text</b> is now mixed toward the page’s own ink, which <b>darkens it on white and lightens it on black</b>, so one setting stays readable in both themes instead of working in one and failing in the other. The guide’s list of section colours now shows each colour as a <b>dot</b> beside ordinary text, rather than setting the words themselves in a tint that only worked on white.',
@@ -5828,13 +5829,27 @@ async function renderSearch() {
 // ============================================================
 // Settings
 // ============================================================
+// The signed-in account, said as a NAME rather than an address:
+// "martin.schabbauer@icloud.com" → "Martin". An address is how you sign in; a
+// name is what you want to read when the app tells you who this device is
+// syncing as. A name already on your People roster wins, so the spelling matches
+// the one you use everywhere else. Anything that isn't an address is left alone.
+function accountName(user) {
+  const raw = String(user || '').trim();
+  if (!raw || !looksLikeEmail(raw)) return raw;
+  const guess = ownerNameFromEmail(raw);
+  const known = [...loadPeople().map((p) => p.name), ...loadOwners()]
+    .find((n) => normName(n) === normName(guess));
+  return known || guess;
+}
+
 // The "Sync your devices" card. Shows where this device stands, and offers the
 // one action that matters (sign in / sign out). Dexie Cloud supplies its own
 // e-mail-code dialog, so there is no password to invent or remember here.
 async function syncCard() {
   const st = await db.syncStatus().catch(() => ({ enabled: true, signedIn: false, user: '', state: 'error' }));
   const body = st.signedIn
-    ? `<p class="data-status">${ic('check', 'sm')}<b>Syncing as ${esc(st.user)}</b></p>
+    ? `<p class="data-status">${ic('check', 'sm')}<b>Syncing as ${esc(accountName(st.user))}</b></p>
        <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on. Changes made offline are sent as soon as you're back online.</p>
        <p class="muted sync-note">Photos and the automatic backups deliberately stay on the device that made them.</p>`
     : `<p class="data-status">${ic('warn', 'sm')}<b>Not syncing on this device</b></p>
@@ -6546,7 +6561,7 @@ async function renderSettings() {
   wrap.appendChild(settingsGroup('Your data', 'sync'));
   if (syncEl) {
     const syncSum = syncSt && syncSt.signedIn
-      ? `Syncing as ${syncSt.user}`
+      ? `Syncing as ${accountName(syncSt.user)}`
       : 'Not syncing on this device';
     wrap.appendChild(foldCard('sync', syncEl, syncSum, { icon: 'refresh' }));
   }
