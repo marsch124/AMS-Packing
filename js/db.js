@@ -659,13 +659,29 @@ export async function deleteSharedRows(ids) {
 // kind which are gone. For reorders, resets and restores — the operations that
 // really are about the list rather than about one entry. An empty list therefore
 // means "back to the factory version", stored as nothing at all.
-export async function replaceSharedKind(kind, list) {
+export async function replaceSharedKind(kind, list, { remove = [], clear = false } = {}) {
   if (!SHARED_KINDS.includes(kind)) return getSharedRows();
   const rows = sharedRowsFrom(kind, list);
   const db = await open();
-  const existing = (await getAllRaw(SHARED).catch(() => [])) || [];
+  // 🚨 A WHOLE-LIST SAVE NEVER DELETES BY OMISSION.
+  //
+  // It used to: anything of this kind that wasn't in the list went. That reads as
+  // reasonable and is quietly lethal, because "the list" is only ever this device's
+  // VIEW of it — and a view can be short for reasons that have nothing to do with
+  // intent. v120 shipped with the iPhone holding one condition out of six (its copy
+  // of the table had not finished arriving); one edit there would have deleted the
+  // other five for both devices. Same shape as the v118 timeline loss: code treating
+  // "I can't see it" as "it isn't there".
+  //
+  // So removal is now something a caller SAYS, by id — a rename naming the old row,
+  // a delete naming the row deleted, a reset asking to clear the kind outright.
+  let gone = (Array.isArray(remove) ? remove : []).filter((x) => typeof x === 'string' && x);
+  if (clear) {
+    const existing = (await getAllRaw(SHARED).catch(() => [])) || [];
+    gone = existing.filter((r) => r && r.kind === kind && r.id).map((r) => r.id);
+  }
   const keep = new Set(rows.map((r) => r.id));
-  const gone = existing.filter((r) => r && r.kind === kind && r.id && !keep.has(r.id)).map((r) => r.id);
+  gone = gone.filter((id) => !keep.has(id));
   await db.transaction('rw', [SHARED], async () => {
     if (gone.length) await db.table(SHARED).bulkDelete(gone);
     if (rows.length) await db.table(SHARED).bulkPut(rows);
@@ -720,6 +736,50 @@ export function legacySharedList(kind) {
     const a = JSON.parse(raw);
     return Array.isArray(a) ? a : null;
   } catch { return null; }
+}
+
+// Make this device download the whole `shared` table once, from scratch.
+//
+// 🚨 THE v120 FAULT THIS REPAIRS. The sync addon keeps a list of the tables it has
+// already done a first, full download of. When a release adds a table, a device
+// that was ALREADY syncing does that first download the next time it connects —
+// and if the table happens to be empty at that moment, it faithfully downloads
+// nothing and then records the table as done. From then on it only ever receives
+// CHANGES. So Martin's iPhone, which reached the new table before his Mac had
+// written anything into it, ended up holding exactly the two rows he added during
+// the field check and none of the twenty-five that already existed.
+//
+// (The same shape cost him the timeline in v118: "in sync" describes the database,
+// never a table that was created seconds ago.)
+//
+// The repair is to forget that the table was ever synced and let the addon do the
+// first download again — this time against an account that has the rows. The push
+// happens FIRST, so a row that exists only on this device is safely uploaded before
+// the table is re-read from the account.
+const SHARED_RESYNC_KEY = 'ams-shared-resync';    // v1 — one full re-download per device
+export async function repairSharedSync() {
+  if (!syncEnabled()) return { repaired: false };
+  try { if (localStorage.getItem(SHARED_RESYNC_KEY) === '1') return { repaired: false, already: true }; } catch { /* ignore */ }
+  if (!(await isSignedIn())) return { repaired: false, signedOut: true };   // nothing to pull; try again once signed in
+  try {
+    const db = await open();
+    // Let this device finish saying what it has before we ask it to listen.
+    await awaitFirstSync(15000);
+    await db.cloud.sync({ purpose: 'push', wait: true }).catch(() => {});
+    const st = await db.table('$syncState').get('syncState').catch(() => null);
+    const before = (await getSharedRows()).length;
+    if (st && Array.isArray(st.syncedTables) && st.syncedTables.includes(SHARED)) {
+      await db.table('$syncState').update('syncState', {
+        syncedTables: st.syncedTables.filter((t) => t !== SHARED),
+      });
+      await db.cloud.sync({ purpose: 'pull', wait: true }).catch(() => {});
+    }
+    try { localStorage.setItem(SHARED_RESYNC_KEY, '1'); } catch { /* ignore */ }
+    const after = (await getSharedRows()).length;
+    return { repaired: true, before, after };
+  } catch (err) {
+    return { repaired: false, error: String((err && err.message) || err) };
+  }
 }
 
 // Move this device's own lists into the account, once.

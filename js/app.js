@@ -37,7 +37,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v120';
+const APP_VERSION = 'v121';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -174,9 +174,16 @@ const sharedStored = (kind) => SHARED_STORED.has(kind);
 // not wait still shows the right thing.
 //
 // Replace ONE WHOLE LIST — for reorders, resets and restores.
-async function writeSharedKind(kind, list) {
-  SHARED_ROWS = [...SHARED_ROWS.filter((r) => r.kind !== kind), ...sharedRowsFrom(kind, list)];
-  return adoptSharedRows(await db.replaceSharedKind(kind, list));
+// `opts.remove` names the row ids this save is deliberately getting rid of (a
+// rename's old row, a deleted entry); `opts.clear` empties the kind outright, for a
+// reset. Anything not named survives — see the note in db.js for what omission used
+// to cost.
+async function writeSharedKind(kind, list, opts = {}) {
+  const gone = new Set(opts.clear ? SHARED_ROWS.filter((r) => r.kind === kind).map((r) => r.id) : (opts.remove || []));
+  const byId = new Map(SHARED_ROWS.filter((r) => !gone.has(r.id)).map((r) => [r.id, r]));
+  for (const r of sharedRowsFrom(kind, list)) byId.set(r.id, r);
+  SHARED_ROWS = [...byId.values()];
+  return adoptSharedRows(await db.replaceSharedKind(kind, list, opts));
 }
 // Add or update SINGLE ENTRIES, touching nothing else. This is what an "add" and
 // a "rename" use, so a screen holding a stale list can't delete an entry made on
@@ -365,12 +372,12 @@ function loadStorageLocs() {
   return names.length ? names : DEFAULT_STORAGE_LOCATIONS.slice();
 }
 // The whole list at once — for a rename or a removal, where the point IS the list.
-async function saveStorageLocs(arr) {
+async function saveStorageLocs(arr, opts = {}) {
   // De-duplicate case-insensitively, keeping first spelling, then sort.
   const seen = new Map();
   for (const s of arr) { const t = (s || '').trim(); const k = t.toLowerCase(); if (t && !seen.has(k)) seen.set(k, t); }
   const clean = [...seen.values()].sort((a, b) => a.localeCompare(b));
-  await writeSharedKind('places', clean);
+  await writeSharedKind('places', clean, opts);
   return clean;
 }
 // Add a place to the saved set if it isn't already there (case-insensitive).
@@ -381,8 +388,16 @@ async function rememberStorageLoc(name) {
   if (!t) return;
   const locs = loadStorageLocs();
   if (locs.some((s) => s.toLowerCase() === t.toLowerCase())) return;
-  if (!sharedStored('places')) await saveStorageLocs([...locs, t]);
-  else await putShared(namesToRows('places', [t]));
+  // Never let this stop the item being saved. It is a side-effect of the save —
+  // "the place you typed joins the list" — and the place is written on the item
+  // either way. Letting a failure here throw would abort the whole save and lose
+  // everything else the editor was holding.
+  try {
+    if (!sharedStored('places')) await saveStorageLocs([...locs, t]);
+    else await putShared(namesToRows('places', [t]));
+  } catch (err) {
+    logDiag('storage-place', err);
+  }
 }
 // Rename a saved place and carry the new spelling onto every item using the old
 // one, so nothing is orphaned. Returns how many items were updated.
@@ -390,7 +405,8 @@ async function renameStorageLoc(oldName, newName) {
   const from = (oldName || '').trim();
   const to = (newName || '').trim();
   if (!from || !to || from.toLowerCase() === to.toLowerCase()) return 0;
-  await saveStorageLocs(loadStorageLocs().map((s) => (s.toLowerCase() === from.toLowerCase() ? to : s)).concat(to));
+  await saveStorageLocs(loadStorageLocs().map((s) => (s.toLowerCase() === from.toLowerCase() ? to : s)).concat(to),
+    { remove: [sharedRowId('places', from)] });
   const lists = await db.getLists();
   let count = 0;
   for (const l of lists) {
@@ -406,7 +422,8 @@ async function removeStorageLoc(name) {
   const t = (name || '').trim();
   if (!t) return;
   if (!sharedStored('places')) {
-    await saveStorageLocs(loadStorageLocs().filter((s) => s.toLowerCase() !== t.toLowerCase()));
+    await saveStorageLocs(loadStorageLocs().filter((s) => s.toLowerCase() !== t.toLowerCase()),
+      { remove: [sharedRowId('places', t)] });
     return;
   }
   await deleteShared([sharedRowId('places', t)]);
@@ -5236,6 +5253,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v121', '2026-08-25 · 16:30 UTC', false, 'Fixes v120: the iPhone was only getting the newest entry',
+      '<b>What went wrong.</b> After v120 your iPhone showed <b>one</b> storage place and <b>one</b> condition — in each case the one you had just added on the Mac — while the Mac still showed everything. Nothing was lost: your account held the full set the whole time (I checked: 6 conditions, 16 places, 3 owners, 2 people), and so did the Mac. Only the iPhone’s own copy was short. <b>Why.</b> The syncing system keeps a note of which tables it has already done a first, complete download of. v120 added a new table for these lists, and a device that was <em>already</em> syncing does that first download the next time it connects — but your iPhone got there before the Mac had put anything in it. So it downloaded nothing, ticked the table off as done, and from then on only ever received <b>changes</b>. The two entries you made during the field check were changes; the twenty-five that already existed were not. (The same trap cost you the When list in v118: “in sync” describes the database as a whole, never a table that was made seconds ago.) <b>The fix</b> is in two parts. First, each device now <b>forgets that this table was ever synced and downloads it again from scratch, once</b> — sending anything it holds up first, so nothing can be lost either way. Second, and more important: <b>a save can no longer delete an entry just because it wasn’t on the list it was holding.</b> Removal is now something the app has to name explicitly — this rename, this deletion, this reset. That matters because the short list on your iPhone was one edit away from becoming the real one: had you changed anything there, the missing five conditions would have been deleted for both devices. Now they could not have been.',
+      'Both devices end up with the full set — and a device that has an incomplete picture can no longer impose it on the other one.'),
     v('v120', '2026-08-25 · 14:00 UTC', false, 'The lists you make now belong to you, not to one device',
       'Five lists in Settings were only ever kept on the device you made them on: <b>Conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>. They now live in your account and reach every device you are signed in on — make a change on the Mac and the iPhone has it, and the other way round. <b>What that fixes, list by list.</b> A <b>condition</b> you invented was genuinely broken across devices: an item carries the condition\'s internal name and that always travelled, but only the list holds the readable one — so “Failing”, set on the Mac, arrived on the iPhone as unreadable text. A <b>trip preset</b> could not repair itself at all: nothing else in your data refers to one, so a preset saved on the Mac simply did not exist on the iPhone, with nothing to hint that it was missing. <b>People</b> travelled by name but not by <b>colour</b>, so Anna could be blue on one device and green on the other. <b>Owners</b> and <b>storage places</b> already healed themselves — both are written on the item as plain words — but “Bedroom wardrobe” describes one house, not one device. <b>What deliberately does NOT sync:</b> how a device looks and behaves. The <b>theme</b>, the view you last used, which Settings sections you left open, and each device\'s own backup dates all stay put — you may well want dark on the phone and light on the Mac. <b>Your existing lists are not disturbed.</b> The first time each device runs this version it offers up the lists you had made there, and they are <b>merged</b>: an entry that already exists in your account is left exactly as it is, and anything only one device had is added. So expect the combined set on both devices the first time round — <b>have a look through the five lists afterwards and remove anything you don\'t want</b>, because from then on a removal reaches both devices too. Two safeguards learned from the v118 mishap are built in: <b>nothing standard is ever written into your data</b> (the four standard conditions, Martin &amp; Anna, and the standard storage places live in the app, so a device can never plant them over yours), and a device <b>waits until it has actually seen your account\'s copy</b> before offering anything up. Adding or removing one entry now writes just that entry, so a screen you left open cannot delete something added on the other device.',
       'Set a condition, a preset, a person, an owner or a storage place once — on whichever device you happen to be holding — and both devices have it.'),
@@ -6445,9 +6465,9 @@ async function renderSettings() {
       if (people.some((x) => x.id !== p.id && x.name.toLowerCase() === name.toLowerCase())) { alert(`“${name}” is already on the list.`); return; }
       const old = p.name;
       p.name = name;
-      // The roster is keyed by the NAME, so a rename really is a whole-list write:
-      // the old row goes and the new one takes its place, carrying the colour.
-      await savePeople(people);
+      // The roster is keyed by the NAME, so a rename creates a new row — say so, or
+      // the person would end up on the list twice under both spellings.
+      await savePeople(people, { remove: [sharedRowId('people', old)] });
       // Carry the new name onto every trip entry assigned to the old name.
       const moved = await renamePackerEverywhere(old, name);
       drawPeople();
@@ -6458,7 +6478,7 @@ async function renderSettings() {
       if (!p) return;
       if (!confirm(`Remove “${p.name}” from the People list?\n\nItems already assigned to them on a trip keep the name; this just takes them off the roster.`)) return;
       if (sharedStored('people')) await deleteShared([p.id]);
-      else await savePeople(people.filter((x) => x.id !== p.id));
+      else await savePeople(people.filter((x) => x.id !== p.id), { remove: [p.id] });
       drawPeople();
     }
   });
@@ -6718,7 +6738,7 @@ async function renderSettings() {
           ? `Removed “${c.label}” — ${n} item${n === 1 ? '' : 's'} moved to “${itemConditionLabel(moveTo) || moveTo}”`
           : `Removed “${c.label}” — ${n} item${n === 1 ? '' : 's'} are now unrated`);
       }
-      await saveConditions(remaining);
+      await saveConditions(remaining, { remove: [sharedRowId('conditions', c.id)] });
       ALL_LISTS = await db.getLists();
       drawConds(); render();
     }
@@ -7160,7 +7180,7 @@ function setTheme(v) {
 // with nothing to hint that it was missing. (What is inside one — the activities —
 // are template ids, which have always synced.)
 function loadPresets() { return presetsFromRows(SHARED_ROWS); }
-async function savePresets(arr) { await writeSharedKind('presets', arr); return arr; }
+async function savePresets(arr, opts = {}) { await writeSharedKind('presets', arr, opts); return arr; }
 // Save the current event's setup as a named preset (replacing any same-name one).
 // One row: the name IS the key, so re-saving under a name you have used lands on
 // the same row and replaces it, exactly as it always did.
@@ -7174,7 +7194,7 @@ async function addPreset(name, ev) {
   return preset;
 }
 async function deletePreset(pid) {
-  if (!sharedStored('presets')) { await savePresets(loadPresets().filter((p) => p.id !== pid)); return; }
+  if (!sharedStored('presets')) { await savePresets(loadPresets().filter((p) => p.id !== pid), { remove: [pid] }); return; }
   await deleteShared([pid]);
 }
 
@@ -7194,15 +7214,15 @@ function loadConditions() {
   const list = conditionsFromRows(SHARED_ROWS);
   return list.length ? list : DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c }));
 }
-async function saveConditions(arr) {
+async function saveConditions(arr, opts = {}) {
   const applied = setItemConditions(arr);          // the live list every screen reads, immediately
-  await writeSharedKind('conditions', applied);
+  await writeSharedKind('conditions', applied, opts);
   return applied;
 }
 // Back to the factory four, forgetting anything customised. Storing NO rows is
 // what "the standard four" means, so the reset is a removal, not a re-seed.
 async function resetConditions() {
-  await writeSharedKind('conditions', []);
+  await writeSharedKind('conditions', [], { clear: true });   // storing nothing IS the factory four
   return setItemConditions(DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c })));
 }
 // Have the conditions been customised at all? (Drives the Settings summary line.)
@@ -7284,8 +7304,8 @@ function loadPeople() {
   if (list.length) return list;
   return DEFAULT_PEOPLE.map((p) => coercePerson({ id: sharedRowId('people', p.name), name: p.name, color: p.color }));
 }
-async function savePeople(arr) {
-  await writeSharedKind('people', asPeople(arr));
+async function savePeople(arr, opts = {}) {
+  await writeSharedKind('people', asPeople(arr), opts);
   return arr;
 }
 // Has the roster been edited, or is it still the two the app ships with?
@@ -7326,9 +7346,9 @@ function loadOwners() {
   return tidyOwnerNames([...loadPeople().map((p) => p.name), ...collectItemValues('ownedBy')]);
 }
 // The whole list at once — for a rename or a removal, where the point IS the list.
-async function saveOwners(names) {
+async function saveOwners(names, opts = {}) {
   const clean = tidyOwnerNames(names);
-  await writeSharedKind('owners', clean);
+  await writeSharedKind('owners', clean, opts);
   return clean;
 }
 // The one-line state for the When fold: the timeline, in order.
@@ -7601,7 +7621,8 @@ function buildOwnersEditor({ onChanged } = {}) {
         alert(`“${name}” is already on the list. To merge the two, remove this one and give its things to “${name}”.`);
         return;
       }
-      await saveOwners([...loadOwners().filter((n) => normName(n) !== normName(old)), name]);
+      await saveOwners([...loadOwners().filter((n) => normName(n) !== normName(old)), name],
+        { remove: [sharedRowId('owners', old)] });
       const moved = await setOwnerEverywhere(old, name);
       changed(old, name);
       if (moved) showToast(`Renamed to “${name}” — ${moved} item${moved === 1 ? '' : 's'} updated`);
@@ -7615,7 +7636,8 @@ function buildOwnersEditor({ onChanged } = {}) {
       moveTo = await pickReplacementOwner(old, used, ownerNames().filter((n) => normName(n) !== normName(old)));
       if (moveTo === null) return;                       // cancelled
     } else if (!confirm(`Remove “${old}” from the Owners list?\n\nNothing is theirs, so nothing else changes.`)) return;
-    await saveOwners(loadOwners().filter((n) => normName(n) !== normName(old)));
+    await saveOwners(loadOwners().filter((n) => normName(n) !== normName(old)),
+      { remove: [sharedRowId('owners', old)] });
     if (used) {
       const n = await setOwnerEverywhere(old, moveTo);
       showToast(moveTo
@@ -7971,7 +7993,21 @@ function watchForUpdate(reg) {
   // (never migrate blind), and that wait must not sit in front of the app opening.
   // Meanwhile the screens still show this device's lists — `withLegacyLists` keeps
   // them in the read-only cache until the real adoption lands.
-  db.migrateSharedLists()
+  // ...but FIRST make sure this device has actually downloaded the whole shared
+  // table. On a device that was already syncing when v120 added it, the addon can
+  // record the table as "first download done" from a moment when it was still
+  // empty, and only ever apply changes after that — which is how the iPhone ended
+  // up with one condition out of six. Adoption has to run against the real account
+  // copy, so it waits for this.
+  db.repairSharedSync()
+    .then(async (r) => {
+      if (r && r.repaired && r.after !== r.before) {
+        logDiag('shared-resync', { before: r.before, after: r.after });
+        await refreshShared();
+        render();
+      }
+      return db.migrateSharedLists();
+    })
     .then(async (r) => {
       if (!r || !r.added) return;
       logDiag('shared-lists', { adopted: r.kinds, rows: r.added });
