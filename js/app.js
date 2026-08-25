@@ -37,7 +37,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v122';
+const APP_VERSION = 'v123';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -133,6 +133,25 @@ function adoptSharedRows(stored) {
   SHARED_ROWS = withLegacyLists(stored);
   return SHARED_ROWS;
 }
+// 🚨 NEVER RE-RENDER OVER SOMEONE'S TYPING.
+//
+// v120 gave three things permission to redraw the whole screen on their own: the
+// one-time re-download, the one-time adoption, and coming back to the app. Each is
+// right to redraw — the lists may have changed — but each can also land seconds
+// after launch, which is exactly when Martin was in an item editor typing a new
+// storage place. The redraw took the open editor with it, and the half-finished
+// edit was simply gone: he saved nothing and nothing reached the list.
+//
+// A background refresh is never urgent. If an editor is open or a field has focus,
+// skip it — the next time the screen is drawn it reads the fresh lists anyway.
+function busyEditing() {
+  if (document.querySelector('.editor, .act-editor, .overlay')) return true;
+  const el = document.activeElement;
+  return !!(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+}
+// Redraw only when it cannot cost anything.
+function renderIfIdle() { if (!busyEditing()) render(); }
+
 async function refreshShared() {
   const stored = await db.getSharedRows().catch(() => null);
   if (stored) adoptSharedRows(stored);
@@ -5265,6 +5284,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v123', '2026-08-25 · 19:15 UTC', false, 'Typing in an editor can no longer be wiped out from under you',
+      '<b>What went wrong.</b> Adding a storage place from inside an item’s editor — pick <b>＋ Add a new place…</b>, type the name, Save — did nothing on the Mac. The place never appeared and the item was left without one. <b>Why.</b> v120 gave three things permission to redraw the screen on their own: the one-time list re-download, the one-time adoption of your old lists, and returning to the app. Each is right to redraw, because the lists genuinely may have changed. What none of them checked was whether <b>you were in the middle of something</b>. Both of the one-time jobs run a few seconds after launch — which is exactly when you were in an item editor typing. The redraw rebuilt the editor and <b>emptied the box you had just typed into</b>, so Save recorded a blank place and, quite correctly, added nothing to the list. Nothing was corrupted; the edit simply never happened. <b>The fix:</b> a background refresh now <b>skips the redraw whenever an editor is open or a field has focus</b>, and picks it up the next time the screen is drawn anyway. It was never urgent — it was only ever tidying. This applies to every editor in the app, not just this one, so no background job can take your typing again.',
+      'What you type stays typed. The bug was invisible and looked like the feature was simply broken.'),
     v('v122', '2026-08-25 · 18:00 UTC', false, 'The All items list stops looking as if you had duplicates',
       'From your v121 field check: grouping <b>Care → All items</b> by <b>Whose it is</b> showed <b>“Sports bra.”</b> twice — once marked <b>Bike</b>, once <b>Run</b>. Nothing is duplicated. That list shows <b>one line per template an item belongs to</b>, because what an item packs into can differ from one template to the next — the same sports bra might go in the duffel for Run and a pannier for Bike, and you need to see and set both. It is <b>one item</b>: edit it on either line and every template follows. What was actually wrong was the <b>counting</b>. The header said <b>“538 items”</b> when you have <b>431</b> — 538 was the number of <em>lines</em>. So it now says <b>“431 items · 538 lines”</b>, and the note above the list explains that an item in several templates gets a line for each, with the template’s name on the line. You raised exactly this once before, in v108 (“it seems as if several instances of the same item is stored”) — your catalogue was clean then too, and the wording was what misled you both times. This time the wording is fixed.',
       'The list no longer suggests you have hundreds of duplicates to clean up. You do not.'),
@@ -7923,7 +7945,7 @@ document.addEventListener('visibilitychange', async () => {
   const before = JSON.stringify([PHASES, SHARED_ROWS]);
   await db.refreshPhases().catch(() => {});
   await refreshShared();
-  if (JSON.stringify([PHASES, SHARED_ROWS]) !== before) render();
+  if (JSON.stringify([PHASES, SHARED_ROWS]) !== before) renderIfIdle();
 });
 
 // When a newer published version installs in the background, offer a one-tap
@@ -8019,7 +8041,7 @@ function watchForUpdate(reg) {
       if (r && r.repaired && r.after !== r.before) {
         logDiag('shared-resync', { before: r.before, after: r.after });
         await refreshShared();
-        render();
+        renderIfIdle();
       }
       return db.migrateSharedLists();
     })
@@ -8027,7 +8049,7 @@ function watchForUpdate(reg) {
       if (!r || !r.added) return;
       logDiag('shared-lists', { adopted: r.kinds, rows: r.added });
       await refreshShared();
-      render();
+      renderIfIdle();
     })
     .catch((err) => logDiag('shared-lists', err));
   // Item editors open via partial re-renders (not the router), so watch the
