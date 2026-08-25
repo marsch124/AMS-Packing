@@ -62,23 +62,129 @@ export const CONTAINER_LIMITS_KG = {
 };
 
 // WHEN things get packed / done — the process vector, in timeline order.
-// kind 'task' phases hold to-dos (Preparations); 'pack' phases hold physical items.
-export const PHASES = [
-  { id: 'prep',      label: 'Preparations',                 kind: 'task', hint: 'Book, cancel, charge, arrange — done ahead of time.' },
-  { id: 'week',      label: '≥1 week ahead',                kind: 'pack', hint: 'Things you don’t use at home — pack early.' },
-  { id: 'daybefore', label: 'Day before (stage / move to RV)', kind: 'pack', hint: 'Pack and stage the day before departure.' },
-  { id: 'morning',   label: 'Morning list',                 kind: 'pack', hint: 'Packed the morning of — used the night before / that morning.' },
-  { id: 'door',      label: 'At the front door',            kind: 'pack', hint: 'Last check as you leave (Vid ytterdörren).' },
-  { id: 'wear',      label: 'Wear / carry on the day',      kind: 'pack', hint: 'Worn or carried, not packed away.' },
-  { id: 'after',     label: 'After / recovery',             kind: 'pack', hint: 'For after the activity — shower, change, recovery (Efter).' },
-];
+//
+// EDITABLE AND SYNCED (v118). The seven below are only the factory setting: the
+// live list is whatever is in the `phases` store, which the user edits in
+// Settings → When. Unlike People, Owners, Conditions and the storage places —
+// all of which live on their own device — this list SYNCS, because a phase is
+// stamped on every item, every membership, every trip entry and every to-do, so a
+// phase missing on one device would make the same item read as a different "When"
+// there.
+//
+// Each phase carries:
+//   id        stable string — what items actually store. NEVER changes on a rename.
+//   label     what you read
+//   hint      the small line under it in the picker
+//   emoji     his pick, like a template cover or a kit (see setPhases)
+//   color     one of TEMPLATE_COLORS, or any hex
+//   task      true = holds to-dos rather than physical items (Preparations)
+//   leadDays  how many days before departure this phase becomes due — drives the
+//             "pack this now" nudge. -1 means "after the trip".
+//   order     position in the timeline; the list is always sorted by it
+//
+// The built-in ids are DELIBERATELY STABLE ('prep', 'week', …) so that two devices
+// seeding this table independently produce the same seven primary keys and merge
+// into one list instead of doubling it — the lesson from the 880-item duplication.
+export const DEFAULT_PHASES = Object.freeze([
+  Object.freeze({ id: 'prep',      label: 'Preparations',                    task: true,  leadDays: 30, emoji: '📋', color: '#7c5cd6', hint: 'Book, cancel, charge, arrange — done ahead of time.' }),
+  Object.freeze({ id: 'week',      label: '≥1 week ahead',                   task: false, leadDays: 7,  emoji: '📦', color: '#3b82f6', hint: 'Things you don’t use at home — pack early.' }),
+  Object.freeze({ id: 'daybefore', label: 'Day before (stage / move to RV)', task: false, leadDays: 1,  emoji: '🌙', color: '#06b6d4', hint: 'Pack and stage the day before departure.' }),
+  Object.freeze({ id: 'morning',   label: 'Morning list',                    task: false, leadDays: 0,  emoji: '☀️', color: '#f59e0b', hint: 'Packed the morning of — used the night before / that morning.' }),
+  Object.freeze({ id: 'door',      label: 'At the front door',               task: false, leadDays: 0,  emoji: '🚪', color: '#22c55e', hint: 'Last check as you leave (Vid ytterdörren).' }),
+  Object.freeze({ id: 'wear',      label: 'Wear / carry on the day',         task: false, leadDays: 0,  emoji: '👕', color: '#ec4899', hint: 'Worn or carried, not packed away.' }),
+  Object.freeze({ id: 'after',     label: 'After / recovery',                task: false, leadDays: -1, emoji: '🛁', color: '#14b8a6', hint: 'For after the activity — shower, change, recovery (Efter).' }),
+]);
+export const PHASE_DEFAULT_EMOJI = '📦';
+
+// The live list and its ids. BOTH are mutated IN PLACE by setPhases — never
+// reassigned — because every other module imported these bindings and holds the
+// same array. Replacing them would leave those importers reading a stale copy.
+export const PHASES = DEFAULT_PHASES.map((p) => ({ ...p }));
 export const PHASE_IDS = PHASES.map((p) => p.id);
-// How many days before departure each phase should typically be packed. Drives the
-// "pack this now" nudge: a phase is "due" once days-to-go drops to its lead time.
-export const PHASE_LEAD_DAYS = { prep: 30, week: 7, daybefore: 1, morning: 0, door: 0, wear: 0, after: -1 };
-export function phase(id) { return PHASES.find((p) => p.id === id) || PHASES[1]; }
-export function phaseLabel(id) { return phase(id).label; }
-export function phaseOrder(id) { const i = PHASE_IDS.indexOf(id); return i < 0 ? PHASE_IDS.indexOf('week') : i; }
+
+export function coercePhase(p, i = 0) {
+  const o = (p && typeof p === 'object') ? p : {};
+  const lead = Number(o.leadDays);
+  return {
+    id: String(o.id || '').trim().slice(0, 40),
+    label: String(o.label || '').trim().slice(0, 60),
+    hint: String(o.hint || '').trim().slice(0, 200),
+    emoji: (typeof o.emoji === 'string' && o.emoji.trim()) ? o.emoji.trim().slice(0, 8) : PHASE_DEFAULT_EMOJI,
+    color: (typeof o.color === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(o.color)) ? o.color : TEMPLATE_COLORS[i % TEMPLATE_COLORS.length],
+    task: !!o.task,
+    leadDays: Number.isFinite(lead) ? Math.max(-1, Math.min(365, Math.round(lead))) : 0,
+    order: Number.isFinite(Number(o.order)) ? Number(o.order) : i,
+  };
+}
+// A new phase earns its id from its name (so it reads sensibly in a backup),
+// falling back to a timestamp when the name is all punctuation. `taken` are ids
+// already in use, which the new one must not collide with.
+export function newPhase(label, taken = [], partial = {}) {
+  const base = String(label || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24);
+  let candidate = base || `phase-${Date.now().toString(36)}`;
+  let n = 2;
+  while (taken.includes(candidate)) candidate = `${base || 'phase'}-${n++}`;
+  return coercePhase({ id: candidate, label, ...partial }, taken.length);
+}
+// Install a phase list. Anything unusable (no id, no label, a duplicate id) is
+// dropped; an empty result falls back to the factory seven rather than leaving the
+// app with no phases at all — every item would then have nowhere to be.
+// The result is always sorted by `order`, and the orders renumbered 0..n-1 so two
+// devices that edited the list independently still agree on the timeline.
+export function setPhases(list) {
+  const seen = new Set();
+  const clean = asArray(list).map((p, i) => coercePhase(p, i)).filter((p) => {
+    if (!p.id || !p.label || seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+  const next = (clean.length ? clean : DEFAULT_PHASES.map((p, i) => coercePhase(p, i)))
+    .sort((a, b) => a.order - b.order)
+    .map((p, i) => ({ ...p, order: i }));
+  PHASES.length = 0;
+  PHASES.push(...next);
+  PHASE_IDS.length = 0;
+  PHASE_IDS.push(...next.map((p) => p.id));
+  return PHASES;
+}
+// Have the phases been changed from the factory seven? (Drives the Settings
+// summary line, and whether a backup bothers to carry them.)
+export function phasesCustomised(list = PHASES) {
+  if (list.length !== DEFAULT_PHASES.length) return true;
+  return list.some((p, i) => {
+    const d = DEFAULT_PHASES[i];
+    return p.id !== d.id || p.label !== d.label || p.emoji !== d.emoji
+      || p.color !== d.color || p.task !== !!d.task || p.leadDays !== d.leadDays;
+  });
+}
+// The phase record for an id. Unlike before v118 this does NOT fall back to a real
+// phase for an unknown id — callers that need something to draw use `phaseOrFallback`
+// — because silently answering "≥1 week ahead" is what used to retag items.
+export function phase(id) { return PHASES.find((p) => p.id === id) || null; }
+// Something drawable for any id at all, including one this device doesn't know
+// (set on the other device, or on a phase since removed). It keeps the raw id as
+// its label so nothing ever disappears from a packing list.
+export function phaseOrFallback(id) {
+  return phase(id) || {
+    id: String(id || ''), label: String(id || '') || 'Unsorted', hint: '',
+    emoji: '❓', color: '#64748b', task: false, leadDays: 0, order: PHASES.length,
+  };
+}
+export function phaseLabel(id) { return phaseOrFallback(id).label; }
+export function phaseEmoji(id) { return phaseOrFallback(id).emoji; }
+export function phaseColor(id) { return phaseOrFallback(id).color; }
+// How many days before departure this phase is due. Was the fixed PHASE_LEAD_DAYS
+// table until phases became editable.
+export function phaseLeadDays(id) { return phaseOrFallback(id).leadDays; }
+// Where a phase sits in the timeline. An id this device doesn't know sorts to the
+// END rather than into the middle of the list, so it is visible, not buried.
+export function phaseOrder(id) { const i = PHASE_IDS.indexOf(id); return i < 0 ? PHASE_IDS.length : i; }
+// The id a brand-new item should get: the first non-task phase, so a new thing
+// lands somewhere you actually pack. Falls back to the first phase of any kind.
+export function defaultPhaseId() {
+  const p = PHASES.find((x) => !x.task) || PHASES[0];
+  return p ? p.id : '';
+}
 
 // Activity GROUPS — the top level Martin organises his life activities under.
 // Every building-block list belongs to one of these (or '' = ungrouped / utility list).
@@ -367,7 +473,14 @@ export function coerceItem(it) {
   it.catering = asArray(it.catering);
   it.weather = asArray(it.weather).filter((w) => WEATHER_CONDITION_IDS.includes(w)); // conditional-gear tags
   it.sub = asArray(it.sub);
-  if (!PHASE_IDS.includes(it.phase)) it.phase = 'week';
+  // Any non-empty phase id is KEPT, even one this device doesn't recognise. Phases
+  // are editable and they SYNC, so a whitelist here would silently retag an item
+  // the moment one device read a phase the other had just added — and unlike a
+  // condition, a phase decides where the thing appears on the packing list. Only a
+  // missing or non-string phase falls back to the default.
+  it.phase = typeof it.phase === 'string' && it.phase.trim()
+    ? it.phase.trim().slice(0, 40)
+    : defaultPhaseId();
   if (typeof it.category !== 'string' || !it.category) it.category = CATEGORY_DEFAULT;
   it.itemType = it.itemType === 'reminder' ? 'reminder' : 'item';
   it.charging = !!it.charging;
@@ -560,7 +673,8 @@ export function coerceAction(a) {
   a.itemId = typeof a.itemId === 'string' ? a.itemId : '';        // '' = loose (not tied to an item)
   a.itemName = typeof a.itemName === 'string' ? a.itemName : '';  // cached item name, for display + orphan fallback
   a.priority = ACTION_PRIORITY_IDS.includes(a.priority) ? a.priority : 'normal';
-  a.whenPhase = PHASE_IDS.includes(a.whenPhase) ? a.whenPhase : ''; // optional trip phase (≥1 week ahead…)
+  // Optional trip phase. Kept as-is even when unrecognised — see coerceItem.
+  a.whenPhase = typeof a.whenPhase === 'string' ? a.whenPhase.trim().slice(0, 40) : '';
   a.whenDate = isYMD(a.whenDate) ? a.whenDate : '';                 // optional calendar date (YYYY-MM-DD)
   a.done = !!a.done;
   a.doneAt = typeof a.doneAt === 'string' ? a.doneAt : '';         // ISO timestamp when ticked done
@@ -982,13 +1096,24 @@ export function regenerateEntries(event, lists) {
 
 // --- Grouping for display / export ---
 
+// Group a trip's entries by phase, in timeline order.
+//
+// An entry whose phase this device doesn't recognise — set on the other device, or
+// on a phase since removed — gets its OWN group at the end rather than being
+// dropped into "≥1 week ahead". Before phases were editable that fallback was
+// harmless; now it would quietly move things you had filed somewhere else.
 export function entriesByPhase(entries) {
   const map = new Map(PHASES.map((p) => [p.id, []]));
+  const strays = new Map();                       // unknown phase id → entries
   for (const e of asArray(entries)) {
-    const pid = PHASE_IDS.includes(e.phase) ? e.phase : 'week';
-    map.get(pid).push(e);
+    if (map.has(e.phase)) { map.get(e.phase).push(e); continue; }
+    const key = e.phase || '';
+    if (!strays.has(key)) strays.set(key, []);
+    strays.get(key).push(e);
   }
-  return PHASES.map((p) => ({ phase: p, entries: map.get(p.id) })).filter((g) => g.entries.length);
+  const known = PHASES.map((p) => ({ phase: p, entries: map.get(p.id) })).filter((g) => g.entries.length);
+  const unknown = [...strays].map(([id, list]) => ({ phase: phaseOrFallback(id), entries: list }));
+  return [...known, ...unknown];
 }
 
 function groupByKey(entries, keyFn, order, fallback) {
@@ -1309,7 +1434,7 @@ export function tripNudge(event, todayISO) {
   const daysToGo = daysUntil(event.startDate, todayISO);
   if (daysToGo == null) return null;
   const due = packSteps(event.entries).filter((s) => {
-    const lead = PHASE_LEAD_DAYS[s.phase.id] ?? 0;
+    const lead = phaseLeadDays(s.phase.id);
     return lead >= daysToGo && s.remaining > 0;
   });
   const dueCount = due.reduce((sum, s) => sum + s.remaining, 0);
@@ -1854,7 +1979,7 @@ export function coerceMembership(m) {
   m.container = typeof m.container === 'string' ? m.container : '';      // '' = use item default
   m.section = typeof m.section === 'string' ? m.section : '';            // section id within THIS template ('' = none)
   m.kit = typeof m.kit === 'string' ? m.kit : '';                        // kit NAME this item is packed as part of ('' = none); contextual per template
-  m.phase = PHASE_IDS.includes(m.phase) ? m.phase : '';                  // '' = use item default
+  m.phase = typeof m.phase === 'string' ? m.phase.trim().slice(0, 40) : ''; // '' = use item default; unknown ids kept (see coerceItem)
   m.itemType = (m.itemType === 'item' || m.itemType === 'reminder') ? m.itemType : ''; // '' = use item default
   m.qty = typeof m.qty === 'string' ? m.qty : (m.qty ? String(m.qty) : '');
   m.note = typeof m.note === 'string' ? m.note : '';
@@ -2190,7 +2315,7 @@ function buildCatalogItem(copies) {
     swedish,
     category: _mostCommon(copies.map((c) => c.category), CATEGORY_DEFAULT),
     container: _mostCommon(copies.map((c) => c.container), 'Carry-on / hand luggage'),   // the DEFAULT
-    phase: _mostCommon(copies.map((c) => c.phase).filter((p) => PHASE_IDS.includes(p)), 'week'), // the DEFAULT
+    phase: _mostCommon(copies.map((c) => c.phase).filter(Boolean), defaultPhaseId()), // the DEFAULT (any id, known here or not)
     itemType: _mostCommon(copies.map((c) => c.itemType), 'item'),
     charging: anyTrue('charging'),
     chargeType: _firstNonEmpty(copies.map((c) => c.chargeType)),

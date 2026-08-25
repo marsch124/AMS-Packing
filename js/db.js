@@ -18,6 +18,7 @@ import {
   resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
   id as newId, isPhotoRef, inlinePhotos, looksLikeEmail, ownerNameFromEmail,
+  DEFAULT_PHASES, PHASES, coercePhase, setPhases,
   templateDefaults, containerDefaultsFrom, planContainerMigration,
 } from './model.js';
 import { seedLists } from './seed.js';
@@ -28,13 +29,15 @@ const DB_NAME = 'ams-packing-list';
 // Dexie multiplies this by ten to get the IndexedDB version, so 1 → 10. The
 // hand-built database went up to 6; adopting it is therefore a normal upgrade.
 // Bump this (not the old DB_VERSION) when the SCHEMA below changes.
-const DEXIE_VERSION = 1;
+// v2 (v118): adds the `phases` store — purely additive, so nothing is rebuilt.
+const DEXIE_VERSION = 2;
 const ITEMS = 'items';
 const MEMBERSHIPS = 'memberships';
 const TEMPLATES = 'templates';
 const EVENTS = 'events';
 const ACTIONS = 'actions';          // standalone to-do store (tied-to-item or loose)
 const KITS = 'kits';                // reusable bundles of items always packed together
+const PHASES_STORE = 'phases';      // the editable "When" timeline — SYNCED, unlike the other lists
 const SNAPSHOTS = 'snapshots';      // automatic on-device backup snapshots (a ring buffer)
 const PHOTOS = 'photos';            // item images, held once and referenced by id from items
 const LISTS = 'lists';              // legacy v1 store — read once to migrate, then ignored
@@ -55,6 +58,7 @@ const SCHEMA = {
   [TEMPLATES]: 'id',
   [ACTIONS]: 'id',
   [KITS]: 'id',
+  [PHASES_STORE]: 'id',
   [SNAPSHOTS]: 'id',
   [PHOTOS]: 'id',
 };
@@ -140,6 +144,9 @@ export async function resetFromCloud() {
   // catalogue we just deleted, ready to be pushed up as duplicates the moment
   // they sign in. The flag says: this emptiness is deliberate, wait for the sync.
   try { localStorage.setItem(AWAITING_CLOUD_KEY, '1'); } catch { /* ignore */ }
+  // The phases table is cleared below with everything else, so this device must be
+  // allowed to seed the timeline again if the account turns out not to have one.
+  try { localStorage.removeItem(PHASES_SEEDED_KEY); } catch { /* ignore */ }
   const db = await open();
   // Signing out must never be able to strand the reset. `logout()` can hang
   // (offline, or already signed out), and an un-awaited hang here would leave the
@@ -529,6 +536,73 @@ export function saveKit(kit) {
 }
 export function deleteKit(id) { return delOne(KITS, id); }
 
+// --- Phases: the editable "When" timeline -----------------------------------
+//
+// The ONLY user-editable list that lives in the database rather than on the
+// device. It has to: a phase id is stamped on every item, membership, trip entry
+// and to-do, so a phase that existed on only one device would make the same item
+// read as a different "When" there. Everything else (People, Owners, Conditions,
+// storage places) is deliberately per-device; this one is deliberately not.
+//
+// NOTE the field names: `owner` and `realmId` are reserved by the sync addon and
+// must never be used here — see model.js, and what that collision cost in v117.
+export async function getPhases() {
+  const raw = (await getAllRaw(PHASES_STORE).catch(() => [])) || [];
+  return raw.map((p, i) => coercePhase(p, i)).filter((p) => p.id && p.label).sort((a, b) => a.order - b.order);
+}
+// Write the list whole: every phase is put, and any row no longer in the list is
+// deleted, so a removal actually propagates to the other device instead of the
+// two lists merging back together on the next sync.
+export async function savePhases(list) {
+  const clean = setPhases(list).map((p) => ({ ...p }));
+  const db = await open();
+  const existing = (await getAllRaw(PHASES_STORE).catch(() => [])) || [];
+  const keep = new Set(clean.map((p) => p.id));
+  const gone = existing.map((p) => p && p.id).filter((id) => id && !keep.has(id));
+  await db.transaction('rw', [PHASES_STORE], async () => {
+    if (gone.length) await db.table(PHASES_STORE).bulkDelete(gone);
+    await db.table(PHASES_STORE).bulkPut(clean);
+  });
+  return clean;
+}
+// Put the factory seven in place on a database that has never had them.
+//
+// Safe to run on two devices at once: the built-in ids are STABLE, so both write
+// the same seven primary keys and the rows merge instead of doubling. The
+// localStorage marker then stops this device ever seeding again — otherwise a
+// phase deliberately removed would come back on the next launch.
+const PHASES_SEEDED_KEY = 'ams-phases-seeded';
+export async function ensurePhases() {
+  const have = (await getAllRaw(PHASES_STORE).catch(() => [])) || [];
+  if (have.length) { setPhases(have.map((p, i) => coercePhase(p, i))); return PHASES; }
+  let seeded = false;
+  try { seeded = localStorage.getItem(PHASES_SEEDED_KEY) === '1'; } catch { /* ignore */ }
+  if (seeded) {
+    // Seeded once already and now empty: the user removed them, or the account's
+    // copy is still on its way. Either way, run on the factory seven in memory
+    // WITHOUT writing anything, so nothing is resurrected behind their back.
+    setPhases(DEFAULT_PHASES.map((p) => ({ ...p })));
+    return PHASES;
+  }
+  // A signed-in device should let the account's list land before seeding its own,
+  // exactly as the catalogue does — same reasoning, same trap.
+  if (syncEnabled() && (await isSignedIn())) {
+    await awaitFirstSync(8000);
+    const arrived = (await getAllRaw(PHASES_STORE).catch(() => [])) || [];
+    if (arrived.length) {
+      setPhases(arrived.map((p, i) => coercePhase(p, i)));
+      try { localStorage.setItem(PHASES_SEEDED_KEY, '1'); } catch { /* ignore */ }
+      return PHASES;
+    }
+  }
+  const seed = DEFAULT_PHASES.map((p, i) => coercePhase(p, i));
+  const db = await open();
+  await db.table(PHASES_STORE).bulkPut(seed);
+  try { localStorage.setItem(PHASES_SEEDED_KEY, '1'); } catch { /* ignore */ }
+  setPhases(seed);
+  return PHASES;
+}
+
 // The raw catalog items (the shared "thing itself" records), for screens that
 // need every item once — e.g. the central Actions list resolving item names,
 // and its "tie to an item" picker.
@@ -608,6 +682,11 @@ async function isSignedIn() {
 }
 
 export async function ensureSeeded() {
+  // FIRST, and outside everything below: the phase list has to be in place before
+  // a single item is read, because an item's "When" is looked up in it. It also
+  // has to happen on the paths that return early (an empty catalogue waiting for
+  // the account's copy), which is why it is here and not at the bottom.
+  await ensurePhases();
   const tmpls = await getAllRaw(TEMPLATES);
   let seededVersion = 0;
   try { seededVersion = Number(localStorage.getItem(SEED_KEY)) || 0; } catch { /* ignore */ }
@@ -797,14 +876,17 @@ export async function migrateTemplateNames() {
 // is a complete restore point. Photos/care/all item detail are already inside
 // `lists` because getLists() resolves the full item shape.
 export async function exportJSON(extra = {}) {
-  const [lists, events, actions, kits, photos] = await Promise.all([
-    getLists(), getEvents(), getActions(), getKits(), getAllRaw(PHOTOS),
+  const [lists, events, actions, kits, photos, phases] = await Promise.all([
+    getLists(), getEvents(), getActions(), getKits(), getAllRaw(PHOTOS), getPhases(),
   ]);
   // Items now reference their images by id, so the images must travel in their
   // own array or a restore would come back picture-less. A backup stays a
   // COMPLETE restore point — that is worth the file size.
   return JSON.stringify(
-    { app: 'ams-packing-list', version: 2, exportedAt: new Date().toISOString(), lists, events, actions, kits, photos: photos || [], ...extra },
+    // `phases` travels with the data, not with the device prefs, because every
+    // item in `lists` points into it — a backup without it could restore items
+    // onto a "When" that doesn't exist.
+    { app: 'ams-packing-list', version: 2, exportedAt: new Date().toISOString(), lists, events, actions, kits, phases, photos: photos || [], ...extra },
     null, 2,
   );
 }
@@ -854,7 +936,20 @@ export async function currentCounts() {
 // Write an already-parsed backup payload into the stores. Shared by file import
 // and snapshot restore. Never called without the caller having taken (or chosen
 // to skip) a safety snapshot first.
-async function applyBackup({ lists = [], events = [], actions = [], kits = [], photos = [] }, { merge = false } = {}) {
+async function applyBackup({ lists = [], events = [], actions = [], kits = [], photos = [], phases = [] }, { merge = false } = {}) {
+  // Phases FIRST, so the items restored below always have a "When" to point at.
+  // A backup from before v118 carries none, in which case whatever this device
+  // already uses is left alone. A merge UNIONs (never drops a phase this device
+  // is using); a replace takes the file's list whole, as it does for everything.
+  if (Array.isArray(phases) && phases.length) {
+    const incoming = phases.map((p, i) => coercePhase(p, i)).filter((p) => p.id && p.label);
+    if (incoming.length) {
+      const have = merge ? await getPhases() : [];
+      const byId = new Map(have.map((p) => [p.id, p]));
+      for (const p of incoming) byId.set(p.id, p);
+      await savePhases([...byId.values()]);
+    }
+  }
   const L = lists.map(coerceList);
   const E = events.map(coerceEvent);
   const A = actions.map(coerceAction);
@@ -917,13 +1012,13 @@ export async function importJSON(text, { merge = false } = {}) {
 //     if it still can't save it skips silently rather than breaking anything.
 
 async function snapshotData(prefs) {
-  const [lists, events, actions, kits] = await Promise.all([getLists(), getEvents(), getActions(), getKits()]);
+  const [lists, events, actions, kits, phases] = await Promise.all([getLists(), getEvents(), getActions(), getKits(), getPhases()]);
   // NOTE: no `photos` array here on purpose. Items reference images by id and the
   // photos store is shared, so a snapshot only needs the ids — which is what
   // `referencedPhotoIds()` reads, keeping any image an old snapshot still needs
   // safe from the pruner. Before the split, every snapshot carried a full copy of
   // every image; eight of those was the bulk of the app's storage use.
-  return { lists, events, actions, kits, prefs: prefs || null };
+  return { lists, events, actions, kits, phases, prefs: prefs || null };
 }
 
 export async function listSnapshots() {

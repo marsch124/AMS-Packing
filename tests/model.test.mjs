@@ -30,6 +30,8 @@ import {
   DEFAULT_ITEM_CONDITIONS, ITEM_CONDITION_IDS, coerceCondition, newCondition, setItemConditions,
   itemCondition, conditionTone, conditionReplaces, careSections, MAINTENANCE_UPCOMING_DAYS,
   looksLikeEmail, ownerNameFromEmail,
+  PHASES, DEFAULT_PHASES, setPhases, coercePhase, newPhase, phasesCustomised,
+  phaseOrFallback, phaseLeadDays, phaseEmoji, defaultPhaseId, phaseOrder,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -906,7 +908,11 @@ test('buildTotalEntries: carries the item storage location onto trip entries', (
 test('coerceMembership: normalizes conditions and keeps override sentinels', () => {
   const m = coerceMembership({ id: 'm1', itemId: 'i1', templateId: 't1', seasons: 'Summer', phase: 'bogus', itemType: 'nope', container: 42 });
   assert.deepEqual(m.seasons, []);          // non-array coerced to []
-  assert.equal(m.phase, '');                // invalid phase -> '' (use item default)
+  // Since v118 phases are editable AND synced, so an id this device doesn't know is
+  // KEPT, not blanked: it is almost certainly a phase added on the other device, and
+  // discarding it would move the item to a different place on the packing list.
+  assert.equal(m.phase, 'bogus');
+  assert.equal(coerceMembership({ id: 'm2', itemId: 'i1', templateId: 't1', phase: 42 }).phase, ''); // non-string -> use the item default
   assert.equal(m.itemType, '');             // invalid itemType -> '' (use item default)
   assert.equal(m.container, '');            // non-string -> '' (use item default)
 });
@@ -2404,4 +2410,111 @@ test('buildCatalog: the owner survives being rebuilt from a backup', () => {
   const cat = buildCatalog([list, other]);
   const jacket = cat.items.find((i) => i.name === 'Jacket');
   assert.equal(jacket.ownedBy, 'Anna');
+});
+
+
+// ---- The editable, synced "When" timeline (v118) ----------------------------
+
+// Every test here restores the factory seven afterwards: PHASES is a live list
+// shared by the whole module, so leaving it edited would leak into other tests.
+const withPhases = (list, fn) => {
+  try { setPhases(list); return fn(); }
+  finally { setPhases(DEFAULT_PHASES.map((p) => ({ ...p }))); }
+};
+
+test('setPhases: sorts by order, renumbers, and drops the unusable', () => {
+  withPhases([
+    { id: 'b', label: 'Second', order: 5 },
+    { id: 'a', label: 'First', order: 1 },
+    { id: '', label: 'No id', order: 2 },        // dropped
+    { id: 'c', label: '', order: 3 },            // dropped
+    { id: 'a', label: 'Duplicate id', order: 4 },// dropped
+  ], () => {
+    assert.deepEqual(PHASES.map((p) => p.id), ['a', 'b']);
+    assert.deepEqual(PHASES.map((p) => p.order), [0, 1]);   // renumbered, so two devices agree
+    assert.deepEqual(PHASE_IDS, ['a', 'b']);                // the ids list is kept in step
+  });
+});
+
+test('setPhases: an empty list falls back to the factory seven, never to nothing', () => {
+  withPhases([], () => {
+    assert.equal(PHASES.length, DEFAULT_PHASES.length);
+    assert.deepEqual(PHASES.map((p) => p.id), DEFAULT_PHASES.map((p) => p.id));
+  });
+});
+
+test('coercePhase: fills in an emoji, a colour and a sane lead time', () => {
+  const p = coercePhase({ id: 'x', label: 'X' }, 0);
+  assert.ok(p.emoji);
+  assert.match(p.color, /^#[0-9a-fA-F]{3,8}$/);
+  assert.equal(p.leadDays, 0);
+  assert.equal(p.task, false);
+  assert.equal(coercePhase({ id: 'x', label: 'X', leadDays: 9999 }).leadDays, 365); // clamped
+  assert.equal(coercePhase({ id: 'x', label: 'X', leadDays: -50 }).leadDays, -1);   // clamped
+  assert.equal(coercePhase({ id: 'x', label: 'X', leadDays: 'soon' }).leadDays, 0);
+});
+
+test('newPhase: earns a readable id and never collides', () => {
+  assert.equal(newPhase('Load the car', []).id, 'load-the-car');
+  assert.equal(newPhase('Load the car', ['load-the-car']).id, 'load-the-car-2');
+  assert.match(newPhase('!!!', []).id, /^phase-/);
+});
+
+test('the built-in phase ids are stable — two devices seeding must not double up', () => {
+  // If these ever change, a device that seeds independently writes DIFFERENT
+  // primary keys and the two lists merge into fourteen phases instead of seven.
+  assert.deepEqual(DEFAULT_PHASES.map((p) => p.id),
+    ['prep', 'week', 'daybefore', 'morning', 'door', 'wear', 'after']);
+});
+
+test('phaseOrFallback: an unknown id is shown, never swapped for a real phase', () => {
+  const p = phaseOrFallback('a-phase-from-the-other-device');
+  assert.equal(p.id, 'a-phase-from-the-other-device');
+  assert.equal(p.label, 'a-phase-from-the-other-device');   // reads as itself rather than vanishing
+  assert.ok(p.emoji);
+  assert.equal(phaseLeadDays('nonsense'), 0);
+  assert.ok(phaseEmoji('nonsense'));
+});
+
+test('phaseOrder: an unknown phase sorts to the END, not into the middle', () => {
+  assert.equal(phaseOrder('prep'), 0);
+  assert.equal(phaseOrder('unknown'), PHASE_IDS.length);
+});
+
+test('defaultPhaseId: a new item lands on the first phase you actually pack in', () => {
+  assert.equal(defaultPhaseId(), 'week');           // 'prep' is a to-do phase, so it is skipped
+  withPhases([{ id: 'only', label: 'Only', task: true, order: 0 }], () => {
+    assert.equal(defaultPhaseId(), 'only');         // ...unless there is nothing else
+  });
+});
+
+test('coerceItem: keeps a phase this device does not know (it syncs, so it is real)', () => {
+  // The old behaviour reset anything unrecognised to "≥1 week ahead", which with an
+  // editable+synced list would silently retag items the other device had just filed.
+  assert.equal(coerceItem({ name: 'Tent', phase: 'load-the-car' }).phase, 'load-the-car');
+  assert.equal(coerceItem({ name: 'Tent', phase: '  door  ' }).phase, 'door');
+  assert.equal(coerceItem({ name: 'Tent' }).phase, defaultPhaseId());
+  assert.equal(coerceItem({ name: 'Tent', phase: 42 }).phase, defaultPhaseId());
+});
+
+test('entriesByPhase: an unknown phase gets its own group at the end, not merged away', () => {
+  const groups = entriesByPhase([
+    { id: 'a', name: 'Towel', phase: 'week' },
+    { id: 'b', name: 'Mystery', phase: 'from-the-mac' },
+    { id: 'c', name: 'Keys', phase: 'door' },
+  ]);
+  assert.deepEqual(groups.map((g) => g.phase.id), ['week', 'door', 'from-the-mac']);
+  assert.equal(groups.at(-1).entries.length, 1);
+  // Nothing is lost, and nothing was quietly moved into "≥1 week ahead".
+  assert.equal(groups.reduce((n, g) => n + g.entries.length, 0), 3);
+});
+
+test('phasesCustomised: true only once the list really differs from the standard seven', () => {
+  assert.equal(phasesCustomised(), false);
+  withPhases(DEFAULT_PHASES.map((p, i) => (i === 3 ? { ...p, label: 'The morning of' } : { ...p })), () => {
+    assert.equal(phasesCustomised(), true);
+  });
+  withPhases(DEFAULT_PHASES.map((p) => ({ ...p, emoji: '🧳' })), () => {
+    assert.equal(phasesCustomised(), true);
+  });
 });

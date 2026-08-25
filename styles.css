@@ -2151,6 +2151,18 @@ a.rd-stat.rd-link::after {
   z-index: 5;
 }
 
+/* Each phase carries its own colour (Settings → When), passed in as --phase. It
+   tints the frame rather than filling it, so the step is recognisable at a glance
+   without the words losing contrast against the card behind them. */
+.pack-stepper {
+  border-left: 4px solid color-mix(in srgb, var(--phase, var(--brand)) 70%, var(--line));
+  background: color-mix(in srgb, var(--phase, var(--brand)) 6%, var(--card));
+}
+
+.pack-stepper .pack-phase-t {
+  color: color-mix(in srgb, var(--phase, var(--brand)) 45%, var(--ink));
+}
+
 .pack-stepper .iconbtn {
   flex: none;
 }
@@ -5196,6 +5208,62 @@ table.grid {
 .owner-row [data-owner-del]:hover { color: var(--danger); }
 .owners-modal { max-width: 420px; width: min(420px, 92vw); }
 .owners-modal .owner-list { max-height: min(52vh, 420px); overflow-y: auto; }
+
+/* When / phases manager (Settings → Your packing setup). Each row is one stage of
+   a pack: its emoji and colour, its name, when it starts nudging, and whether it
+   holds to-dos instead of things. The row wears the phase's own colour on its left
+   edge, so the timeline reads as a sequence of colours before you read a word. */
+.phase-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; }
+
+.phase-row {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid var(--line); border-radius: 10px;
+  border-left: 4px solid color-mix(in srgb, var(--phase, var(--brand)) 75%, var(--line));
+  background: color-mix(in srgb, var(--phase, var(--brand)) 4%, transparent);
+}
+
+/* Line one is the identity — emoji, colour, name, and where it sits in the
+   timeline. Line two is the behaviour. Splitting them is what keeps the name
+   readable on a phone instead of being squeezed to a few characters. */
+.phase-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+
+.phase-emoji {
+  flex: none; width: 42px; padding: 5px 4px; text-align: center;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink); font-size: 1rem;
+}
+
+.phase-color {
+  flex: none; width: 28px; height: 28px; padding: 0;
+  border: 1px solid var(--line); border-radius: 8px; background: none; cursor: pointer;
+}
+.phase-color::-webkit-color-swatch-wrapper { padding: 2px; }
+.phase-color::-webkit-color-swatch { border: none; border-radius: 6px; }
+.phase-color::-moz-color-swatch { border: none; border-radius: 6px; }
+
+.phase-name {
+  flex: 1 1 6rem; min-width: 0; width: 100%;
+  padding: 5px 8px; font-size: .9rem; font-weight: 600;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card);
+  color: color-mix(in srgb, var(--phase, var(--brand)) 40%, var(--ink));
+}
+.phase-name:focus-visible { outline: 2px solid var(--phase, var(--brand)); outline-offset: 1px; }
+
+/* gap stays small on purpose: Days + to-dos + the three buttons only just fit
+   across a phone, and a wider gap tips the buttons onto a line of their own. */
+.phase-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-left: 2px; }
+.phase-lead { display: flex; align-items: center; gap: 5px; font-size: .8rem; color: var(--muted); white-space: nowrap; }
+.phase-lead input {
+  width: 52px; padding: 4px 6px; font-size: .85rem;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink);
+}
+.phase-task { font-size: .8rem; white-space: nowrap; }
+.phase-acts { flex: none; display: flex; gap: 0; margin-left: auto; }
+.phase-acts .iconbtn { padding-left: 6px; padding-right: 6px; }
+.phase-row [data-phase-del]:hover { color: var(--danger); }
 
 /* Conditions manager (Settings → Your packing setup). Each row is the condition's
    name plus the two things that decide how it behaves, then its own controls. */

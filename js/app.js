@@ -1,6 +1,7 @@
 // app.js — screens, navigation and wiring for AMS Packing List.
 import {
   CATEGORIES, CONTAINERS, CONTAINER_ROLE, CONTAINER_LIST_NAME, containerNames, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
+  DEFAULT_PHASES, PHASE_DEFAULT_EMOJI, coercePhase, newPhase, setPhases, phasesCustomised, phaseOrFallback, phaseColor, defaultPhaseId,
   ACTIVITY_ORDER, orderActivities,
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, normName, newItem, newList, newEvent,
   TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS, listEmoji, listColor,
@@ -34,7 +35,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v117';
+const APP_VERSION = 'v118';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -988,14 +989,28 @@ const CONTAINER_ICON = {
   'Tech pouch': '🔌', 'Electronics bag': '💻', 'Cool box': '🧊', 'Handbag': '👛',
   'RV storage box': '📦', 'Other': '📦',
 };
-const PHASE_ICON = {
-  'Preparations': '📋', '≥1 week ahead': '🗓️', 'Day before (stage / move to RV)': '📦',
-  'Morning list': '🌅', 'At the front door': '🚪', 'Wear / carry on the day': '🚶',
-  'After / recovery': '🛁',
+// The "When" choices, built fresh every time because the phase list is editable
+// AND synced — a snapshot would go stale the moment the other device added one.
+// Each option carries the phase's own emoji, so the picker reads like the packing
+// list it produces. `cur` is always included, even when it is an id this device
+// doesn't recognise, so a picker can never silently move an item's When.
+function phaseOpts(cur = '') {
+  const opts = PHASES.map((p) => ({ value: p.id, label: `${p.emoji} ${p.label}` }));
+  if (cur && !opts.some((o) => o.value === cur)) {
+    const p = phaseOrFallback(cur);
+    opts.push({ value: cur, label: `${p.emoji} ${p.label}` });
+  }
+  return opts;
+}
+// Phases used to have a hardwired glyph per label here. They now carry their own
+// emoji, chosen in Settings → When, so the icon is looked up on the live list.
+const phaseIconByLabel = (label) => {
+  const p = PHASES.find((x) => x.label === label);
+  return p ? p.emoji : '';
 };
 // The glyph for a group/sub header, matched by its label across all three maps.
 function groupIcon(label) {
-  return CATEGORY_ICON[label] || CONTAINER_ICON[label] || PHASE_ICON[label] || '';
+  return CATEGORY_ICON[label] || CONTAINER_ICON[label] || phaseIconByLabel(label) || '';
 }
 
 // ---------- small render helpers ----------
@@ -2645,7 +2660,7 @@ function entryEditor(ev, entry, body, hooks = null) {
     </div>
     <div class="row2">
       <label class="field"><span>Container</span>${selectHtml('container', containerOpts(entry.container), entry.container)}</label>
-      <label class="field"><span>When</span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), entry.phase)}</label>
+      <label class="field"><span>When</span>${selectHtml('phase', phaseOpts(entry.phase), entry.phase)}</label>
     </div>
     <label class="field"><span>Section <em>groups this item on the list</em></span><input name="section" value="${esc(entry.section)}" list="entry-sections" placeholder="optional" autocomplete="off"><datalist id="entry-sections">${tripSecNames.map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></label>
     <label class="field"><span>Kit <em>pack this together as a unit</em></span><input name="kit" value="${esc(entry.kit)}" list="entry-kits" placeholder="optional — e.g. Charging kit" autocomplete="off"><datalist id="entry-kits">${[...new Set([...(ALL_KITS || []).map((k) => k.name), ...(ev.entries || []).map((e) => (e.kit || '').trim())].filter(Boolean))].map((n) => `<option value="${esc(n)}"></option>`).join('')}</datalist></label>
@@ -3121,10 +3136,12 @@ async function renderPackMode(eventId) {
     packState.idx = Math.max(0, Math.min(packState.idx, steps.length - 1));
     const step = steps[packState.idx];
 
-    const stepper = h(`<div class="pack-stepper">
+    // The phase's own colour rides on the stepper, so each step of the pack is
+    // recognisable before you've read the words.
+    const stepper = h(`<div class="pack-stepper" style="--phase:${esc(step.phase.color || 'var(--brand)')}">
       <button class="iconbtn" data-nav="prev" ${packState.idx === 0 ? 'disabled' : ''} aria-label="Previous phase">${IC.back}</button>
       <div class="pack-phase">
-        <div class="pack-phase-t">${groupIcon(step.phase.label) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(step.phase.label)}</span> ` : ''}${esc(step.phase.label)}</div>
+        <div class="pack-phase-t">${step.phase.emoji ? `<span class="grp-ic" aria-hidden="true">${esc(step.phase.emoji)}</span> ` : ''}${esc(step.phase.label)}</div>
         <div class="pack-phase-n">Phase ${packState.idx + 1} of ${steps.length} · ${step.remaining} of ${step.total} left</div>
       </div>
       <button class="iconbtn" data-nav="next" ${packState.idx >= steps.length - 1 ? 'disabled' : ''} aria-label="Next phase">${IC.fwd}</button>
@@ -3642,9 +3659,16 @@ function manageSections(list) {
 
 // ---- Actions (to-dos) shared helpers ----
 // The "when" choices: any time, or one of the trip phases.
-const ACTION_WHEN_OPTS = [{ value: '', label: 'Any time' }, ...PHASES.map((p) => ({ value: p.id, label: p.label }))];
+// A FUNCTION, not a constant: phases are editable, so a list snapshotted when this
+// module loaded would pin the factory seven forever (the same trap the editable
+// conditions hit — see the `order: () => …` note on the Care groupings).
+const actionWhenOpts = () => [{ value: '', label: 'Any time' }, ...phaseOpts()];
 function actionWhenSelectHtml(dataAttr, val) {
-  return `<select ${dataAttr}>${ACTION_WHEN_OPTS.map((o) => `<option value="${esc(o.value)}"${o.value === (val || '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
+  const opts = actionWhenOpts();
+  // A phase this device doesn't know (added on the other one, or since removed) is
+  // added to the picker rather than silently reset to "Any time".
+  if (val && !opts.some((o) => o.value === val)) opts.push({ value: val, label: phaseLabel(val) });
+  return `<select ${dataAttr}>${opts.map((o) => `<option value="${esc(o.value)}"${o.value === (val || '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`;
 }
 // A short human phrase for an action's timing, for chips.
 function actionWhenLabel(a) {
@@ -3824,7 +3848,7 @@ function itemEditor(list, it, setOpen, draw) {
       <label class="field"><span>Weight empty <em>grams</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>` : `
       <div class="row2">
         <label class="field"><span>Container <em>everywhere</em></span>${selectHtml('container', ['', ...containerOpts(defContainer)].map((c) => ({ value: c, label: c || '— none (task) —' })), defContainer)}</label>
-        <label class="field"><span>When <em>everywhere</em></span>${selectHtml('phase', PHASES.map((p) => ({ value: p.id, label: p.label })), defPhase)}</label>
+        <label class="field"><span>When <em>everywhere</em></span>${selectHtml('phase', phaseOpts(defPhase), defPhase)}</label>
       </div>
       <p class="layer-note">Change these and every list that uses this item follows. To differ in <b>${esc(list.name)}</b> only, set the exception under <b>② In this list</b>.</p>
       <label class="field"><span>Weight (g) <em>per unit</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
@@ -5038,6 +5062,12 @@ function howtoCard() {
         <h3>Who packs what</h3>
         <p>Packing with someone? First set up your <b>People</b> in <b>Settings → People</b> — each with a name and a colour (Martin &amp; Anna are there to start; add, rename or recolour anyone). Then on a trip, open an item and choose <b>Packed by</b>. Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row appears at the top of the packing list so you can show <b>Everyone</b>, just one person, or the still-<b>Unassigned</b> items (each with a count). The same filter sits atop <b>Packing Mode</b>, so each of you can pack only your own things. It’s per-trip, and it <b>travels inside a shared trip</b> — send the trip to someone and the items you gave them arrive marked as theirs (a name that isn’t on their People list still shows, just with an auto-picked colour). Renaming a person carries the new name onto every trip they’re already on.</p>
 
+        <h3>When — the stages of a pack</h3>
+        <p>Every item carries a <b>When</b>: the stage of the pack it belongs to. It is what your packing list is grouped by, and what <b>Packing Mode</b> walks you through one step at a time. The app starts with seven — <b>Preparations</b>, <b>≥1 week ahead</b>, <b>Day before</b>, <b>Morning list</b>, <b>At the front door</b>, <b>Wear / carry on the day</b> and <b>After / recovery</b> — but the list is <b>yours</b>, in <b>Settings → When</b>. Rename them by typing straight over the name, give each one an <b>emoji</b> and a <b>colour</b>, move them up and down the timeline with <b>▲ ▼</b>, remove ones you never use, or add your own — “Load the car”, “Night before the flight”.</p>
+        <p><b>Days ahead</b> is when that stage starts nudging you: set it to 7 and the app begins asking you to pack it a week before you leave. <b>-1</b> means after the trip, which is what <b>After / recovery</b> uses. The <b>to-dos</b> tick marks a stage that holds things to <em>do</em> rather than things to pack — that is what makes <b>Preparations</b> behave differently from the rest.</p>
+        <p><b>Nothing can be lost by any of this.</b> Renaming keeps every item exactly where it was — the app remembers a phase by a hidden name that never changes, so only the words you read are different. Removing a stage that things are filed under makes you say <b>when those things get packed instead</b>, and tells you how many there are — counting your items, the lines on trips you have already built, and your to-dos. There is a <b>Reset to the standard seven</b> if you want the original timeline back.</p>
+        <p><b>This list syncs between your devices</b> — and it is the only one of these lists that does. Your People, Owners, Conditions and Storage places each live on their own device, but a stage is stamped on every item, so a stage that existed on only one device would make the same item read as a different “When” there. Change the timeline on the Mac and the iPhone follows. While one device is still on an older version, anything it doesn't recognise is shown as-is and <b>never quietly moved</b>.</p>
+
         <h3>Whose things are whose</h3>
         <p><b>Owner</b> — on an item, under <b>Details &amp; ownership</b> — is a dropdown of a list you keep in <b>Settings → Owners</b>. <b>Add</b> a name, <b>rename</b> one (every item that is theirs follows, in one go) or <b>remove</b> one — and if things are theirs, the app asks <b>who they go to</b> first, so an item is never left pointing at somebody who no longer exists. Each name shows how many items are theirs. You never have to go to Settings to do it: the same two choices, <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b>, sit at the bottom of the Owner dropdown itself — in the item editor and in <b>Care → All items · table</b>, where you can assign owners down a whole column.</p>
         <p><b>Owners are not People.</b> <b>People</b> is who <em>packs</em> on a trip; <b>Owners</b> is who <em>owns</em> the thing at home. Keeping them apart means “Shared”, “The kids” or “The RV” can own gear without ever appearing in a “Packed by” picker. Your People are offered as owners to start with, but naming an owner never creates a person.</p>
@@ -5075,7 +5105,7 @@ function howtoCard() {
         <h3>Finding your way round Settings</h3>
         <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
         <p>Each section has its <b>own colour and icon</b>, fixed for good, so you come to know them by sight rather than by reading. Closed, the colour sits in the little icon tile; <b>open, it takes over the panel</b> — the tile fills in, and the heading, the edge and a faint wash of the background all follow — so you always know which section you are inside. The colour is an <em>identity</em>, not a warning light: it never changes to tell you something is wrong. When something does need attention, the app says so in words, and on the Home screen.</p>
-        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Owners</b>, <b>Storage places</b>, <b>Conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
+        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
@@ -5103,6 +5133,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v118', '2026-08-25 · 06:00 UTC', false, 'The When list is yours — and it syncs',
+      'The seven stages of a pack — <b>Preparations</b>, <b>≥1 week ahead</b>, <b>Day before</b>, <b>Morning list</b>, <b>At the front door</b>, <b>Wear / carry</b>, <b>After / recovery</b> — were baked into the app. They are now a list you own, in <b>Settings → When</b>. <b>Rename</b> one by typing over it; give each an <b>emoji</b> and a <b>colour</b>; move them up and down the timeline; <b>remove</b> ones you never use; <b>add your own</b>. Your emoji and colour then show up where you actually pack: on the group headings of every packing list, and on the step you are standing in inside <b>Packing Mode</b>, which now wears that stage\'s colour. Two behaviours came out of the code and became settings: <b>Days ahead</b> decides when a stage starts nudging you (7 = a week before you leave; -1 = after the trip), and a <b>to-dos</b> tick marks a stage that holds things to <em>do</em> rather than things to pack, which is what makes Preparations different. <b>Nothing can be lost:</b> renaming keeps every item where it was, because the app remembers a stage by a hidden name that never changes; and removing one makes you say <b>when its things get packed instead</b>, counting your items, the lines on trips you have already built, <em>and</em> your to-dos before it will do anything. There is a <b>Reset to the standard seven</b>. <b>The big difference from Conditions and Owners: this list SYNCS.</b> It is the first of these lists to live in your data rather than on one device, because a stage is stamped on every single item — one that existed only on the Mac would make the same item read as a different “When” on the iPhone. Change the timeline anywhere and both devices follow. While one device is still on an older version, anything it doesn\'t recognise is shown as-is and <b>never quietly moved</b> — a fix that had to go in first, because until now the app silently reset any “When” it didn\'t recognise to “≥1 week ahead”.',
+      'The packing order is now the one in your head, not the one I guessed — and because it syncs, both devices agree on it without you setting anything up twice.'),
     v('v117', '2026-08-25 · 00:30 UTC', false, 'Owners are a proper list — and your e-mail address is off every item',
       '<b>(1) The e-mail address is gone.</b> Nearly every item in the catalogue was showing <b>martin.schabbauer@icloud.com</b> as its owner — on the item rows, in the Care list, in the All-items table and in the “Whose it is” grouping. It was never typed: <b>the syncing system reserves a hidden field called “owner”</b> for its own bookkeeping and stamps the signed-in account into it on every save, and the app happened to use the very same name for <b>whose thing it is</b>. The two collided, and the address won — on <b>422 of 431 items</b>. The app’s own answer now lives under a <b>different name entirely</b>, so the two can never collide again, and a one-time repair on first launch turns that stamped address into <b>Martin</b> while leaving every name you actually typed (<b>Anna</b>, <b>Shared</b>) exactly as it was. <b>Settings → Sync your devices</b> now says <b>Syncing as Martin</b> too — the address is how you sign in, but the app says who you are. <b>(2) Owner is a list you manage.</b> <b>Settings → Owners</b> is a new section beside People: <b>add</b> an owner, <b>rename</b> one — every item that is theirs follows, in one go — and <b>remove</b> one, which first asks <b>who its things go to</b> (or nobody), so nothing is ever orphaned. Each name shows how many items are theirs. The same list is the dropdown <b>everywhere Owner appears</b> — the item editor and the <b>All items · table</b> — and both offer <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b> right in the dropdown, so you never have to go to Settings to fix a name. Owners stay deliberately <b>separate from People</b>: People is who <em>packs</em>, so “Shared” can own things without turning up in every “Packed by” picker.',
       'Whose things are whose is now something you set from a short list you control — instead of a free-text box holding an e-mail address you never typed.'),
@@ -5938,6 +5971,7 @@ const SETTINGS_TONES = {
   people:      '#2f6fe0',  // blue
   places:      '#0a92a6',  // teal (the app's brand)
   owners:      '#5b7f2a',  // olive — whose the gear is (distinct from People's blue beside it)
+  phases:      '#8a3ffc',  // electric violet — the timeline of a pack
   conditions:  '#b45309',  // burnt amber — wear and lifecycle
   presets:     '#c9821a',  // amber
   sharedtrips: '#2f9e63',  // green
@@ -6309,6 +6343,130 @@ async function renderSettings() {
   });
   ownerCard.appendChild(ownersEditor.el);
 
+  // ---- When: the phases of a pack, in timeline order ----
+  const phaseCard = h(`<div class="card block">
+    <h2>When</h2>
+    <p class="muted">The stages of a pack, in the order they happen — set on an item as its <b>When</b>, and the headings your packing list and <b>Packing Mode</b> are built from. Give each one an <b>emoji</b> and a <b>colour</b>, rename it, drag it up or down the timeline, or add your own. <b>Days ahead</b> is when the app starts nudging you to pack it. Unlike your People, Owners and Conditions, <b>this list syncs</b> between your devices — it has to, because every item points into it.</p>
+    <div class="phase-list" data-phases></div>
+    <div class="btnrow">
+      <button class="btn" data-phase="add">${IC.plus}<span>Add phase</span></button>
+      <button class="btn ghost" data-phase="reset">${IC.refresh}<span>Reset to the standard seven</span></button>
+    </div>
+  </div>`);
+
+  const drawPhases = () => {
+    const sum = phaseCard.closest('.sset')?.querySelector('.howto-sum');
+    if (sum) sum.textContent = phasesSummary();
+    const box = phaseCard.querySelector('[data-phases]');
+    const list = PHASES;
+    // The name is an ordinary text box rather than a pen-and-dialog: it is the
+    // thing you are most likely to change, it saves a button on a phone-width row,
+    // and it behaves like the emoji and colour beside it.
+    box.innerHTML = list.map((p, i) => `<div class="phase-row" data-phase-id="${esc(p.id)}" style="--phase:${esc(p.color)}">
+      <div class="phase-head">
+        <input class="phase-emoji" data-phase-emoji="${esc(p.id)}" value="${esc(p.emoji)}" maxlength="4" aria-label="Emoji for ${esc(p.label)}" autocomplete="off">
+        <input type="color" class="phase-color" data-phase-color="${esc(p.id)}" value="${esc(p.color)}" aria-label="Colour for ${esc(p.label)}">
+        <input class="phase-name" data-phase-name="${esc(p.id)}" value="${esc(p.label)}" maxlength="60" aria-label="Name of this phase" autocomplete="off">
+      </div>
+      <div class="phase-controls">
+        <label class="phase-lead" title="How many days before you leave this stage starts nudging you. -1 means after the trip."><span>Days</span>
+          <input type="number" min="-1" max="365" inputmode="numeric" data-phase-lead="${esc(p.id)}" value="${p.leadDays}"></label>
+        <label class="check phase-task${p.task ? ' on' : ''}" title="A to-do phase holds things to DO, not things to pack"><input type="checkbox" data-phase-task="${esc(p.id)}"${p.task ? ' checked' : ''}>to-dos</label>
+        <span class="phase-acts">
+          <button type="button" class="iconbtn sm" data-phase-up="${esc(p.id)}" aria-label="Move ${esc(p.label)} earlier" title="Earlier"${i === 0 ? ' disabled' : ''}>${IC.up}</button>
+          <button type="button" class="iconbtn sm" data-phase-down="${esc(p.id)}" aria-label="Move ${esc(p.label)} later" title="Later"${i === list.length - 1 ? ' disabled' : ''}>${IC.down}</button>
+          <button type="button" class="iconbtn sm" data-phase-del="${esc(p.id)}" aria-label="Remove ${esc(p.label)}" title="Remove">${IC.trash}</button>
+        </span>
+      </div>
+    </div>`).join('');
+  };
+  drawPhases();
+
+  // The three things you can change without a dialog: emoji, colour, lead time
+  // and the to-do switch. Each writes the whole list, which is what syncs.
+  phaseCard.addEventListener('change', async (e) => {
+    const el = e.target;
+    const id = el.dataset.phaseEmoji || el.dataset.phaseColor || el.dataset.phaseLead
+      || el.dataset.phaseTask || el.dataset.phaseName;
+    if (!id) return;
+    const list = PHASES.map((p) => ({ ...p }));
+    const p = list.find((x) => x.id === id);
+    if (!p) return;
+    if (el.dataset.phaseName) {
+      const label = (el.value || '').trim();
+      if (!label) { el.value = p.label; return; }                       // never let a phase go nameless
+      if (list.some((x) => x.id !== p.id && normName(x.label) === normName(label))) {
+        alert(`“${label}” is already on the timeline.`);
+        el.value = p.label; return;
+      }
+      p.label = label;                                                  // the id never changes, so nothing has to move
+    } else if (el.dataset.phaseEmoji) p.emoji = (el.value || '').trim() || PHASE_DEFAULT_EMOJI;
+    else if (el.dataset.phaseColor) p.color = el.value;
+    else if (el.dataset.phaseLead) p.leadDays = Math.max(-1, Math.min(365, parseInt(el.value, 10) || 0));
+    else p.task = el.checked;
+    await db.savePhases(list);
+    drawPhases();
+  });
+
+  phaseCard.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-phase], [data-phase-up], [data-phase-down], [data-phase-del]');
+    if (!btn) return;
+    const list = PHASES.map((p) => ({ ...p }));
+    const act = btn.dataset.phase;
+
+    if (act === 'add') {
+      const label = (prompt('Name the phase — e.g. “Night before the flight”, “Load the car”:', '') || '').trim();
+      if (!label) return;
+      if (list.some((p) => normName(p.label) === normName(label))) { alert(`“${label}” is already on the timeline.`); return; }
+      list.push(newPhase(label, list.map((p) => p.id), { order: list.length }));
+      await db.savePhases(list);
+      drawPhases(); return;
+    }
+    if (act === 'reset') {
+      if (!confirm('Put the timeline back to the standard seven?\n\nAnything you added is removed from the list — but nothing filed under it is deleted, and you will be asked where those things go. Items on a standard phase are untouched.')) return;
+      // Removing the added phases one at a time, so each still asks where its
+      // things go — a reset must not be able to strand anything either.
+      for (const p of PHASES.filter((x) => !DEFAULT_PHASES.some((d) => d.id === x.id))) {
+        const used = await countPhaseUsers(p.id);
+        if (used.total) {
+          const to = await pickReplacementPhase(p, used, PHASES.filter((x) => x.id !== p.id));
+          if (to === null) return;                       // cancelled — leave the whole reset alone
+          await movePhaseEverywhere(p.id, to);
+        }
+      }
+      await db.savePhases(DEFAULT_PHASES.map((p) => ({ ...p })));
+      drawPhases(); render(); return;
+    }
+
+    const idOf = (k) => btn.dataset[k];
+    const move = async (from, to) => {
+      const [row] = list.splice(from, 1);
+      list.splice(to, 0, row);
+      await db.savePhases(list.map((p, i) => ({ ...p, order: i })));
+      drawPhases(); render();
+    };
+    if (idOf('phaseUp')) { const i = list.findIndex((p) => p.id === idOf('phaseUp')); if (i > 0) await move(i, i - 1); return; }
+    if (idOf('phaseDown')) { const i = list.findIndex((p) => p.id === idOf('phaseDown')); if (i >= 0 && i < list.length - 1) await move(i, i + 1); return; }
+
+    if (idOf('phaseDel')) {
+      const p = list.find((x) => x.id === idOf('phaseDel'));
+      if (!p) return;
+      if (list.length <= 1) { alert('Keep at least one phase — otherwise your things have nowhere to be packed.'); return; }
+      const used = await countPhaseUsers(p.id);
+      let moveTo = '';
+      if (used.total) {
+        moveTo = await pickReplacementPhase(p, used, list.filter((x) => x.id !== p.id));
+        if (moveTo === null) return;      // cancelled
+      } else if (!confirm(`Remove the phase “${p.label}”? Nothing is filed under it.`)) return;
+      if (used.total) {
+        const n = await movePhaseEverywhere(p.id, moveTo);
+        showToast(`Removed “${p.label}” — ${n} thing${n === 1 ? '' : 's'} moved to “${phaseLabel(moveTo)}”`);
+      }
+      await db.savePhases(list.filter((x) => x.id !== p.id));
+      drawPhases(); render(); return;
+    }
+  });
+
   // ---- Conditions: the wear/lifecycle ratings an item can carry ----
   const condCard = h(`<div class="card block">
     <h2>Conditions</h2>
@@ -6544,6 +6702,7 @@ async function renderSettings() {
     people.length ? people.map((p) => p.name).join(', ') : 'None yet — for splitting who packs what',
     { icon: 'person' }));
   wrap.appendChild(foldCard('owners', ownerCard, ownersSummary(), { icon: 'person' }));
+  wrap.appendChild(foldCard('phases', phaseCard, phasesSummary(), { icon: 'clock' }));
   wrap.appendChild(foldCard('places', places, places2.length
     ? `${nOf(places2.length, 'place', 'places')} · ${places2.slice(0, 3).join(', ')}${places2.length > 3 ? '…' : ''}`
     : 'None yet', { icon: 'box' }));
@@ -7025,6 +7184,14 @@ function saveOwners(names) {
   try { localStorage.setItem(OWNERS_KEY, JSON.stringify(clean)); } catch { /* ignore */ }
   return clean;
 }
+// The one-line state for the When fold: the timeline, in order.
+function phasesSummary() {
+  const names = PHASES.map((p) => `${p.emoji} ${p.label}`);
+  if (!names.length) return 'None yet';
+  const shown = names.slice(0, 3).join(' → ');
+  return `${PHASES.length} phases · ${shown}${names.length > 3 ? ' → …' : ''}${phasesCustomised() ? '' : ' (standard)'}`;
+}
+
 // Is the roster a real list on this device yet, or still being derived?
 function ownersCustomised() {
   try { return localStorage.getItem(OWNERS_KEY) != null; } catch { return false; }
@@ -7128,6 +7295,104 @@ function pickReplacementOwner(name, used, others) {
     });
   });
 }
+// ---------- Phases: the editable, SYNCED "When" timeline ----------
+//
+// A phase id is stamped in four places, and removing one has to deal with all of
+// them or something ends up filed under a "When" that no longer exists:
+//   • items         — the item's own default phase
+//   • memberships   — a per-template exception ("in Hiking, pack this earlier")
+//   • trip entries  — the phase a already-built packing list froze in
+//   • actions       — a to-do's optional "when" (whenPhase)
+// Counted by the stable item id, so an item in five templates counts once.
+async function countPhaseUsers(phaseId) {
+  if (!phaseId) return { items: 0, entries: 0, actions: 0, total: 0 };
+  const [lists, events, actions] = await Promise.all([db.getLists(), db.getEvents(), db.getActions()]);
+  const items = new Set();
+  for (const l of lists) for (const it of (l.items || [])) {
+    if (it.phase === phaseId || it._defPhase === phaseId) items.add(it._itemId || it.id);
+  }
+  let entries = 0;
+  for (const ev of events) for (const e of (ev.entries || [])) if (e.phase === phaseId) entries++;
+  const acts = actions.filter((a) => a.whenPhase === phaseId).length;
+  return { items: items.size, entries, actions: acts, total: items.size + entries + acts };
+}
+// Move everything on `fromId` to `toId`. Used by "remove a phase" — never by
+// rename, which keeps the id and therefore needs no data change at all.
+async function movePhaseEverywhere(fromId, toId) {
+  if (!fromId) return 0;
+  const target = toId || defaultPhaseId();
+  let moved = 0;
+  const lists = await db.getLists();
+  for (const l of lists) {
+    let touched = false;
+    for (const it of (l.items || [])) {
+      // THREE separate channels carry a phase, and all three have to move or the
+      // change half-lands. Writing only the resolved value is silently useless:
+      // membershipFromResolved takes the per-list exception from `_ovPhase`
+      // VERBATIM when it is set — which it always is after a resolve — so the old
+      // id would simply be written straight back.
+      //   it.phase     the RESOLVED value (what this template actually uses)
+      //   it._defPhase the item's own default, shared by every template
+      //   it._ovPhase  this template's exception ('' = no exception)
+      if (it.phase === fromId) { it.phase = target; touched = true; moved++; }
+      if (it._defPhase === fromId) { it._defPhase = target; touched = true; }
+      if (it._ovPhase === fromId) { it._ovPhase = target; touched = true; }
+    }
+    if (touched) await saveGuard(db.saveList(l));
+  }
+  const events = await db.getEvents();
+  for (const ev of events) {
+    let touched = false;
+    for (const e of (ev.entries || [])) if (e.phase === fromId) { e.phase = target; touched = true; moved++; }
+    if (touched) await db.saveEvent(ev);
+  }
+  const actions = await db.getActions();
+  for (const a of actions) {
+    if (a.whenPhase !== fromId) continue;
+    a.whenPhase = toId || '';        // a to-do may legitimately go back to "Any time"
+    await db.saveAction(a);
+    moved++;
+  }
+  ALL_LISTS = await db.getLists();
+  return moved;
+}
+// Ask what happens to everything on a phase being removed. Resolves with the id to
+// move them to, or null if cancelled. Unlike conditions there is no "leave them
+// unset" — everything has to be packed at SOME point — so the list is the other
+// phases only.
+function pickReplacementPhase(ph, used, others) {
+  return new Promise((resolve) => {
+    const opts = others.map((p) => `<option value="${esc(p.id)}">${esc(p.emoji)} ${esc(p.label)}</option>`).join('');
+    const bits = [
+      used.items ? `<b>${used.items}</b> item${used.items === 1 ? '' : 's'}` : '',
+      used.entries ? `<b>${used.entries}</b> line${used.entries === 1 ? '' : 's'} on a trip you've already built` : '',
+      used.actions ? `<b>${used.actions}</b> to-do${used.actions === 1 ? '' : 's'}` : '',
+    ].filter(Boolean).join(' · ');
+    const body = h(`<div class="modal">
+      <h2>Remove “${esc(ph.label)}”?</h2>
+      <p class="modal-sub">${bits} ${used.total === 1 ? 'is' : 'are'} filed under it. Choose when ${used.total === 1 ? 'it gets' : 'they get'} packed instead — nothing is deleted, only re-timed.</p>
+      <label class="field"><span>Move ${used.total === 1 ? 'it' : 'them'} to</span><select name="phase-move">${opts}</select></label>
+      <div class="modal-actions">
+        <button class="btn danger lg" data-c="ok">${IC.trash}<span>Remove and move</span></button>
+        <button class="btn ghost lg" data-c="cancel">Keep it</button>
+      </div>
+    </div>`);
+    const overlay = h('<div class="overlay"></div>');
+    overlay.appendChild(body);
+    document.body.appendChild(overlay);
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; overlay.remove(); document.removeEventListener('keydown', onKey, true); resolve(v); };
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
+    document.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+    body.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-c]')?.dataset.c;
+      if (!c) return;
+      finish(c === 'ok' ? ($('select[name=phase-move]', body).value || '') : null);
+    });
+  });
+}
+
 // The Owners editor itself — one implementation, used in two places: the Settings
 // card and the ⚙ Manage owners… modal that every Owner dropdown can open.
 //
