@@ -38,7 +38,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v126';
+const APP_VERSION = 'v127';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2040,6 +2040,16 @@ function eventForm(ev, lists, isEdit) {
   ], ev.mode || 'trip')}
       <p class="grp-hint" data-mode-hint></p></fieldset>
 
+    <!-- Activities sit right under List type (v127): the two answer the same
+         question — what is this trip FOR — and everything below them (transport,
+         season, weather, catering) is detail about the conditions. The legend is
+         plain "Activities to pack for" in both modes now; the hint below it is
+         what explains that a full trip already has its base and transport kit. -->
+    <fieldset><legend>Activities to pack for</legend>
+      <p class="grp-hint" data-activities-hint></p>
+      ${activitiesPicker(lists, ev.activities, ev.contexts)}
+    </fieldset>
+
     <fieldset data-trip-only><legend>Way of transport</legend>${radioRow('transport', TRANSPORTS, ev.transport)}
       ${baseHint || transportHint ? `<p class="grp-hint">${baseHint}${transportHint}</p>` : ''}</fieldset>
     <fieldset><legend>Time of year</legend>${radioRow('season', SEASONS, ev.season)}</fieldset>
@@ -2049,25 +2059,21 @@ function eventForm(ev, lists, isEdit) {
     <label class="field-check"><input type="checkbox" name="laundry"${ev.laundry ? ' checked' : ''}>
       <span class="fc-txt"><b>${ic('laundry','sm')}Laundry available on this trip</b><em>Caps per-night items (socks, underwear, tees) at ${LAUNDRY_CAP_NIGHTS} rather than one per night, so a long trip doesn’t demand a dozen. Short trips are unaffected.</em></span></label>
 
-    <fieldset><legend data-activities-legend>Extra activities to pack for</legend>
-      <p class="grp-hint" data-activities-hint></p>
-      ${activitiesPicker(lists, ev.activities, ev.contexts)}
-    </fieldset>
-
     <div class="actions">
       ${isEdit ? `<a class="btn lg" href="#/event/${ev.id}">Cancel</a>` : ''}
       <button type="submit" class="btn primary lg">${isEdit ? 'Save & regenerate' : 'Create Event'}</button>
     </div>`;
 
   // Full trip vs Quick activity: quick mode drops the base + transport kit, so hide
-  // the trip-only choices and re-word the activity picker to match.
+  // the trip-only choices and re-word the activity picker's HINT to match. The
+  // legend itself is fixed at "Activities to pack for" in both modes (v127) — it
+  // used to flip to "Extra activities…" for a full trip, and a heading that
+  // renames itself under you is harder to read than a sentence that explains why.
   function syncMode() {
     const quick = form.querySelector('input[name=mode]:checked')?.value === 'quick';
     form.querySelectorAll('[data-trip-only]').forEach((el) => el.classList.toggle('hidden', quick));
-    const legend = form.querySelector('[data-activities-legend]');
     const aHint = form.querySelector('[data-activities-hint]');
     const mHint = form.querySelector('[data-mode-hint]');
-    if (legend) legend.textContent = quick ? 'Activities to pack for' : 'Extra activities to pack for';
     if (aHint) aHint.innerHTML = quick
       ? 'Just the gear for what you tick — set <b>Context</b> (Indoor / Outdoor) to trim it to the essentials.'
       : 'Your common base and transport kit are already in — tick only the extra activities you’ll do.';
@@ -2497,7 +2503,8 @@ function tripSetupCard(ev) {
       inner += '<div class="setup-grp-lbl">Other lists</div>'
         + `<div class="setup-tags">${ung.map((l) => `<span class="setup-tag">${ic('box','sm')}${esc(l.name)}</span>`).join('')}</div>`;
     }
-    blocks.push(`<div class="setup-block"><span class="setup-lbl">${quick ? 'Activities packed for' : 'Extra activities'}</span>${inner}</div>`);
+    // One label in both modes, matching the form's fixed "Activities to pack for".
+    blocks.push(`<div class="setup-block"><span class="setup-lbl">Activities packed for</span>${inner}</div>`);
   }
   // No WET activities on this trip to nest them under — show them on their own,
   // still last, so a chosen option can never go missing from the recap.
@@ -5398,7 +5405,7 @@ function howtoCard() {
         <ul>
           <li><b>1. Your common base — always included.</b> There's one always-on base template (currently named <b>“Travel”</b>) holding everything you need on <em>any</em> trip: clothes, toiletries, documents, everyday electronics and chargers. It's added to every Packing List automatically, so you can't forget your underwear because you picked the wrong option. You never tick it; to change what's in it, edit the <b>Travel</b> template in the <b>Templates</b> tab.</li>
           <li><b>2. Your transport's own kit — added by the “Way of transport” radio.</b> Each of <b>Car / Plane / RV</b> has its own base template, and picking one <b>automatically pulls its whole kit in</b>. Choose <b>RV</b> and the full motorhome kit (levelling chocks, water hose, gas, awning, kitchen…) comes along — no extra step, no separate tick. <b>Plane</b> adds the carry-on-rules stuff (liquids bag, travel documents, power bank / spare batteries that must fly in the cabin); <b>Car</b> adds a few road extras (car charger, phone mount, snacks). Each is editable in the <b>Templates</b> tab, so you can grow them over time. This replaces the old “Start from” shortcut: the transport radio <em>is</em> the shortcut now.</li>
-          <li><b>3. The extra activities you tick.</b> Under <b>Extra activities to pack for</b> you tick your <b>GA</b> (Goal Activity — Golf, Hiking, Diving…) and <b>WET</b> (Workout, Exercise &amp; Training — Swim, Bike, Run…) templates. Only these need ticking; the base and transport templates are already in, which is why they don't appear in that picker.</li>
+          <li><b>3. The activities you tick.</b> Under <b>Activities to pack for</b> — which sits directly under <b>List type</b>, since the two together are what the trip is <em>for</em> — you tick your <b>GA</b> (Goal Activity — Golf, Hiking, Diving…) and <b>WET</b> (Workout, Exercise &amp; Training — Swim, Bike, Run…) templates. Only these need ticking; the base and transport templates are already in, which is why they don't appear in that picker.</li>
         </ul>
         <p>So a plain RV holiday needs <em>zero</em> ticks — just pick <b>RV</b> — and you get the common base + the whole RV kit. Add a round of golf by ticking <b>Golf</b>, and its clubs and shoes join the same list.</p>
 
@@ -5556,6 +5563,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v127', '2026-08-26 · 16:30 UTC', false, 'Activities move up the trip form, and lose the word “Extra”',
+      'Following on from v126’s reshuffle: <b>Activities to pack for</b> now sits <b>directly under List type</b>, instead of at the very bottom past transport, season, weather, catering and laundry. Those two questions belong together — <b>List type</b> and <b>the activities you tick</b> are what the trip is <em>for</em>, and everything below them (how you travel, what time of year, the weather, the catering) is detail about the <em>conditions</em>. In practice it means the two things you always change are both at the top, and the settings you often leave alone have moved out of the way. It is also just called <b>Activities to pack for</b> now, in both modes. It used to rename itself to <b>“Extra</b> activities to pack for” whenever you were building a full trip — a heading that changes under you is harder to read than one that stays put, and the line underneath already explains the point far better: <em>“Your common base and transport kit are already in — tick only the extra activities you’ll do.”</em> The trip-setup card on a trip now uses the same wording, so the two agree. <b>Nothing about what gets packed has changed</b> — same picker, same templates, same list.',
+      'The two questions you actually answer on every trip are now the first two on the form.'),
     v('v126', '2026-08-26 · 14:00 UTC', false, 'The trip’s name comes first, and the Swedish import wording is off your lists',
       '<b>(1) Event name is the first thing on the form.</b> Creating a trip used to open with <b>List type</b> — asking you to classify a trip before you had even said what it was. The form now runs in the order you actually think in: <b>name</b>, <b>dates</b>, <b>destination</b>, and only then <b>List type</b> and the rest of the settings. Nothing was added or removed; the same choices are all there, in a sensible order. <b>(2) The Swedish / import wording is no longer shown.</b> Every item imported from your original lists carried a second name underneath it — <b>Kroppslotion</b> under Body lotion, <b>Ansiktsprodukter</b> under Face products, and in a fair few cases the very same words twice (<b>Tooth pickers</b> under Tooth pickers). It was useful while the lists were being translated; now it is just a second line of noise on every row. It has been taken off <b>all six places it appeared</b>: your trip’s <b>Packing List</b>, <b>Packing Mode</b>, the <b>trip review</b>, <b>search results</b>, the <b>Maintenance-mode overview</b> and the <b>kit</b> member picker. <b>Nothing is deleted.</b> The wording is still stored on every item and is still a <b>search key</b> — type “Kroppslotion” into search and Body lotion still comes up — and it is still a column in the <b>Excel export</b>. It simply isn’t drawn on screen any more. (There was never a field to edit or clear it yourself, which is exactly why it needed doing in the app.)',
       'The trip form asks the obvious question first, and every item list is one line shorter and easier to read.'),
