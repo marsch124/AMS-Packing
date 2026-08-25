@@ -1004,9 +1004,29 @@ export function namesToRows(kind, names) {
   }
   return out;
 }
-// Always A–Z, which is the order both of these lists have always been shown in.
+// A–Z. The order the Owners list has always been offered in, and the order every
+// Owner dropdown still uses.
 export function namesFromRows(rows, kind) {
   return sharedRowsOfKind(rows, kind).map((r) => r.name).sort((a, b) => a.localeCompare(b));
+}
+// The stored order instead — for Storage places, where since v125 the order is
+// something you arrange yourself. `sharedRowsOfKind` has already sorted by `order`
+// with the id as a tiebreak, so this is simply "don't re-sort it".
+export function orderedNamesFromRows(rows, kind) {
+  return sharedRowsOfKind(rows, kind).map((r) => r.name);
+}
+// Owners, most-owned first — the Settings list answers "whose is most of this?"
+// before it answers "where is X in the alphabet". Ties settle A–Z so the order is
+// stable and both devices, counting the same items, agree on it.
+// `counts` is a Map of normalised name → number, as `ownerUsage()` builds.
+export function ownersByUsage(names, counts) {
+  const at = (v) => {
+    const k = normName(v);
+    const n = counts && typeof counts.get === 'function' ? counts.get(k) : (counts || {})[k];
+    return Number(n) || 0;
+  };
+  return asArray(names).slice()
+    .sort((a, b) => (at(b) - at(a)) || String(a).localeCompare(String(b)));
 }
 
 // --- trip presets ---
@@ -1609,6 +1629,74 @@ export function endFromNights(startDate, nights) {
   if (Number.isNaN(start)) return '';
   const n = Number.isFinite(nights) && nights > 0 ? Math.floor(nights) : 0;
   return new Date(start + n * 86400000).toISOString().slice(0, 10);
+}
+
+// --- The calendar behind the trip date picker (v125) ---
+//
+// Everything here is UTC, deliberately, because that is the footing the rest of
+// the app's dates already stand on (`nightsBetween`, `endFromNights`, `daysUntil`
+// all parse `YYYY-MM-DDT00:00:00Z`). Build a grid from a LOCAL `new Date(y, m, d)`
+// instead and the picker in one time zone hands back the day before the one that
+// was tapped — the classic off-by-one that only shows up east or west of the
+// machine it was written on.
+
+// 'YYYY-MM' for a date, '' if it isn't one.
+export function monthKey(iso) {
+  const s = String(iso || '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00Z`)) ? s.slice(0, 7) : '';
+}
+// Step a 'YYYY-MM' by whole months, rolling the year over in both directions.
+export function shiftMonth(key, delta = 0) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(key || ''));
+  if (!m) return '';
+  const total = Number(m[1]) * 12 + (Number(m[2]) - 1) + Math.trunc(Number(delta) || 0);
+  const year = Math.floor(total / 12);
+  const month = total - year * 12;
+  return `${String(year).padStart(4, '0')}-${String(month + 1).padStart(2, '0')}`;
+}
+// One month as a fixed 6×7 grid of ISO days, so every month draws the same height
+// and the panel never jumps as you page through it. `weekStart` is 1 for Monday
+// (Europe) / 0 for Sunday. Cells outside the month are still real dates — they are
+// simply marked, so a tap on one can still pick that day.
+export function monthGrid(key, weekStart = 1) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(key || ''));
+  if (!m) return { key: '', year: 0, month: 0, days: [] };
+  const year = Number(m[1]);
+  const month = Number(m[2]) - 1;
+  const first = Date.UTC(year, month, 1);
+  const ws = Number(weekStart) === 0 ? 0 : 1;
+  // How many days of the previous month to show before the 1st.
+  const lead = (new Date(first).getUTCDay() - ws + 7) % 7;
+  const days = [];
+  for (let i = 0; i < 42; i += 1) {
+    const t = first + (i - lead) * 86400000;
+    const d = new Date(t);
+    days.push({ iso: d.toISOString().slice(0, 10), inMonth: d.getUTCMonth() === month });
+  }
+  return { key: `${m[1]}-${m[2]}`, year, month, days };
+}
+// Where one day sits in the chosen range — what the cell is painted from.
+// 'only' is a start with no end yet (and a same-day start+end), which is why it is
+// its own state rather than a start that happens to look unfinished.
+export function rangeCellState(iso, start, end) {
+  const d = String(iso || '').slice(0, 10);
+  const a = String(start || '').slice(0, 10);
+  const b = String(end || '').slice(0, 10);
+  if (!d || !a) return '';
+  if (!b) return d === a ? 'only' : '';
+  if (a === b) return d === a ? 'only' : '';
+  if (d === a) return 'start';
+  if (d === b) return 'end';
+  return d > a && d < b ? 'between' : '';
+}
+// Two picked days in the order a trip happens. Tapping an earlier day second is a
+// correction, not an error, so it becomes the new start rather than a red warning.
+export function orderRange(a, b) {
+  const x = String(a || '').slice(0, 10);
+  const y = String(b || '').slice(0, 10);
+  if (!x) return [y, ''];
+  if (!y) return [x, ''];
+  return x <= y ? [x, y] : [y, x];
 }
 
 // Order events for the Home preview and the Events tab: nearest upcoming trip

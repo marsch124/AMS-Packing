@@ -22,7 +22,8 @@ import {
   shoppingReason, shoppingSuggestions, openShoppingCount,
   PERSON_COLORS, coercePerson, newPerson, personColor, assignedPeople, DEFAULT_PEOPLE,
   SHARED_KINDS, sharedRowId, sharedRowsOfKind, sharedRowsFrom, isFactoryList,
-  conditionsFromRows, peopleFromRows, namesFromRows, namesToRows, presetsFromRows, presetsToRows,
+  conditionsFromRows, peopleFromRows, namesFromRows, orderedNamesFromRows, ownersByUsage, namesToRows, presetsFromRows, presetsToRows,
+  monthKey, shiftMonth, monthGrid, rangeCellState, orderRange,
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
@@ -37,7 +38,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v124';
+const APP_VERSION = 'v125';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -145,7 +146,10 @@ function adoptSharedRows(stored) {
 // A background refresh is never urgent. If an editor is open or a field has focus,
 // skip it — the next time the screen is drawn it reads the fresh lists anyway.
 function busyEditing() {
-  if (document.querySelector('.editor, .act-editor, .overlay')) return true;
+  // `.dr-open` = the trip date picker is open. Its trigger is a button, so the
+  // activeElement test below would miss it and a background refresh could redraw
+  // the whole event form — and the half-typed trip name with it.
+  if (document.querySelector('.editor, .act-editor, .overlay, .dr-open')) return true;
   const el = document.activeElement;
   return !!(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 }
@@ -213,6 +217,27 @@ async function putShared(rows) {
   SHARED_ROWS = [...byId.values()];
   return adoptSharedRows(await db.putSharedRows(rows));
 }
+// One past the end of a list, for a row being added ON ITS OWN.
+//
+// 🪤 `namesToRows`/`presetsToRows` number a list from 0, so a ONE-ENTRY list comes
+// out as `order: 0` — and a single-row write therefore lands the new entry at the
+// FRONT. That was invisible while every one of these lists was read back A–Z; the
+// moment Storage places gained an order of its own (v125) it meant every place you
+// typed on an item jumped to the top of everybody's dropdown. Any list that is read
+// back in its stored order must number an appended row itself.
+function nextSharedOrder(kind) {
+  const rows = sharedRowsOfKind(SHARED_ROWS, kind);
+  return rows.length ? Math.max(...rows.map((r) => r.order)) + 1 : 0;
+}
+// A row that is genuinely new goes on the end; one that already exists KEEPS the
+// place it had. (Saving a trip preset under a name you already used is an update,
+// and it should not jump to the bottom of the Home preset bar for it.)
+function appendedShared(kind, rows) {
+  const have = new Map(sharedRowsOfKind(SHARED_ROWS, kind).map((r) => [r.id, r.order]));
+  let next = nextSharedOrder(kind);
+  return rows.map((r) => (have.has(r.id) ? { ...r, order: have.get(r.id) } : { ...r, order: next++ }));
+}
+
 // Remove SINGLE ENTRIES. A real delete, so the removal reaches the other device
 // instead of the two lists merging back together on the next sync.
 async function deleteShared(ids) {
@@ -386,16 +411,20 @@ window.addEventListener('unhandledrejection', (e) => logDiag('promise', e && e.r
 // The saved set of places. Nothing stored means the standard set from the code —
 // so an untouched app behaves exactly as it always did, and no device ever plants
 // the defaults into shared data for the other one to collide with.
+// Since v125 the ORDER is yours: the rows come back in the order they are stored,
+// not A–Z, so the places you reach for most can sit at the top of every dropdown.
 function loadStorageLocs() {
-  const names = namesFromRows(SHARED_ROWS, 'places');
+  const names = orderedNamesFromRows(SHARED_ROWS, 'places');
   return names.length ? names : DEFAULT_STORAGE_LOCATIONS.slice();
 }
-// The whole list at once — for a rename or a removal, where the point IS the list.
+// The whole list at once — for a reorder, a rename or a removal, where the point IS
+// the list. The order it is given in is the order that is written down.
 async function saveStorageLocs(arr, opts = {}) {
-  // De-duplicate case-insensitively, keeping first spelling, then sort.
+  // De-duplicate case-insensitively, keeping the first spelling. Deliberately NOT
+  // sorted: this used to end `.sort()`, which would now quietly undo every reorder.
   const seen = new Map();
   for (const s of arr) { const t = (s || '').trim(); const k = t.toLowerCase(); if (t && !seen.has(k)) seen.set(k, t); }
-  const clean = [...seen.values()].sort((a, b) => a.localeCompare(b));
+  const clean = [...seen.values()];
   await writeSharedKind('places', clean, opts);
   return clean;
 }
@@ -413,7 +442,7 @@ async function rememberStorageLoc(name) {
   // everything else the editor was holding.
   try {
     if (!sharedStored('places')) await saveStorageLocs([...locs, t]);
-    else await putShared(namesToRows('places', [t]));
+    else await putShared(appendedShared('places', namesToRows('places', [t])));
   } catch (err) {
     logDiag('storage-place', err);
   }
@@ -447,11 +476,19 @@ async function removeStorageLoc(name) {
   }
   await deleteShared([sharedRowId('places', t)]);
 }
+// Every place a dropdown should offer: the list you keep in Settings, IN THE ORDER
+// YOU ARRANGED IT, followed by anything an item mentions that the list hasn't got
+// (a place typed on the other device, say), A–Z. Sorting the whole thing would
+// throw your order away; interleaving the strays into it would be worse.
 function collectStorages(lists) {
-  const seen = new Map(); // lowercase key -> display spelling
+  const seen = new Map();   // lowercase key -> display spelling, your order
+  const extra = new Map();  // in use on an item, but not on the list
   for (const s of loadStorageLocs()) { const t = s.trim(); if (t) seen.set(t.toLowerCase(), t); }
-  for (const l of lists) for (const it of l.items) if (it.storage) { const t = it.storage.trim(); if (t) seen.set(t.toLowerCase(), t); }
-  return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  for (const l of lists) for (const it of l.items) if (it.storage) {
+    const t = it.storage.trim();
+    if (t && !seen.has(t.toLowerCase())) extra.set(t.toLowerCase(), t);
+  }
+  return [...seen.values(), ...[...extra.values()].sort((a, b) => a.localeCompare(b))];
 }
 
 // The distinct values already used for a given item field (color / size /
@@ -475,7 +512,7 @@ function conditionBadgeHTML(it) {
   const c = itemCondition(it.condition);
   if (!c || !c.tone) return '';
   const glyph = c.replace ? `${ic('swap','xs')} ` : '';
-  return `<span class="badge cond ${esc(c.tone)}" title="Condition: ${esc(c.label)}">${glyph}${esc(c.label)}</span>`;
+  return `<span class="badge cond ${esc(c.tone)}" title="Item condition: ${esc(c.label)}">${glyph}${esc(c.label)}</span>`;
 }
 
 // The options for a Condition picker. An item carrying a condition this device has
@@ -902,7 +939,7 @@ const AI_GROUPS = [
   // `order` is a FUNCTION here because the condition list is editable and is
   // installed after this module is evaluated — a snapshot taken now would pin the
   // factory four forever and mis-sort anything you added.
-  { key: 'condition',    label: 'Condition',         of: (r) => itemConditionLabel(r.it.condition), order: () => ITEM_CONDITIONS.map((c) => c.label), empty: 'Not rated' },
+  { key: 'condition',    label: 'Item condition',    of: (r) => itemConditionLabel(r.it.condition), order: () => ITEM_CONDITIONS.map((c) => c.label), empty: 'Not rated' },
   { key: 'template',     label: 'Template',          of: (r) => r.list.name || '',                                                   empty: 'No template' },
   { key: 'category',     label: 'Category',          of: (r) => r.it.category || '',     order: CATEGORIES,                          empty: 'No category' },
   { key: 'owner',        label: 'Whose it is',       of: (r) => r.it.ownedBy || '',                                                  empty: 'Nobody named' },
@@ -1755,6 +1792,213 @@ async function findMapPlaces(pending, btn) {
 }
 
 // ============================================================
+// The trip date picker — one dropdown, both ends of the trip (v125)
+// ============================================================
+//
+// It used to be two separate `<input type="date">` boxes, which meant two separate
+// calendars that knew nothing about each other: you picked a departure in one,
+// closed it, opened the other, and had to find the same month again with no sight
+// of where the trip started or how long it had got. A date range is ONE idea, so
+// it is now one control — open it, tap the day you leave, tap the day you come
+// back, and it closes itself with the nights counted.
+//
+// Two deliberate decisions:
+//   * The panel opens IN FLOW, not floating over the page. An absolutely-positioned
+//     popover has to be kept in view against scrolling, a soft keyboard and the
+//     card's own overflow; a panel that simply pushes the form down cannot be
+//     clipped, and behaves the same on the Mac and the phone.
+//   * The picked dates are written to HIDDEN INPUTS still named `startDate` and
+//     `endDate`, and every pick fires a `change` on the wrapper. So the form's
+//     FormData reading and the live nights readout below it are untouched —
+//     nothing downstream of this control had to know it changed.
+//
+// All the date arithmetic is in model.js and all of it is UTC: build a grid from a
+// local `new Date(y, m, d)` and a picker west of Greenwich hands back the day
+// before the one that was tapped.
+function tripDatesField(startISO = '', endISO = '') {
+  let start = String(startISO || '').slice(0, 10);
+  let end = String(endISO || '').slice(0, 10);
+  let picking = 'start';         // which end the next tap sets
+  let hover = '';                // the day under the cursor, for the live preview
+  let view = monthKey(start) || monthKey(todayISO()) || '';
+  const MONTHS_SHOWN = 2;        // side by side on the Mac, stacked on a phone
+
+  const el = h(`<div class="daterange" data-daterange>
+    <span class="dr-lbl">Trip dates <em>(optional — start, then end)</em></span>
+    <button type="button" class="dr-trigger" aria-expanded="false"></button>
+    <div class="dr-pop" hidden>
+      <div class="dr-step" data-dr-step></div>
+      <div class="dr-nav">
+        <button type="button" class="iconbtn sm" data-dr-nav="-1" aria-label="Previous month" title="Previous month">${IC.back}</button>
+        <span class="dr-span" data-dr-span></span>
+        <button type="button" class="iconbtn sm" data-dr-nav="1" aria-label="Next month" title="Next month">${IC.fwd}</button>
+      </div>
+      <div class="dr-months" data-dr-months></div>
+      <div class="dr-foot">
+        <span class="dr-sum" data-dr-sum></span>
+        <span class="dr-foot-btns">
+          <button type="button" class="btn ghost sm" data-dr="today">Today</button>
+          <button type="button" class="btn ghost sm" data-dr="clear">Clear</button>
+          <button type="button" class="btn primary sm" data-dr="done">Done</button>
+        </span>
+      </div>
+    </div>
+    <input type="hidden" name="startDate" value="${esc(start)}">
+    <input type="hidden" name="endDate" value="${esc(end)}">
+  </div>`);
+
+  const trigger = el.querySelector('.dr-trigger');
+  const pop = el.querySelector('.dr-pop');
+  const startInput = el.querySelector('input[name=startDate]');
+  const endInput = el.querySelector('input[name=endDate]');
+
+  // Weekday initials in the user's own language, taken from a week that really
+  // starts on a Monday (1 Jan 2024 was one) rather than hard-coded English.
+  const weekdayNames = () => Array.from({ length: 7 }, (_, i) =>
+    new Date(Date.UTC(2024, 0, 1 + i)).toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' }));
+  const monthName = (key) => {
+    const m = /^(\d{4})-(\d{2})$/.exec(key || '');
+    if (!m) return '';
+    return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, 1))
+      .toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  };
+
+  // What the closed field says. Three honest states, never a bare "dd/mm/yyyy".
+  function triggerHTML() {
+    const n = nightsBetween(start, end);
+    if (!start) return `${ic('cal', 'md')}<span class="dr-txt muted">Add dates</span>`;
+    if (!end) return `${ic('cal', 'md')}<span class="dr-txt">${esc(prettyDate(start))}<em>no return day yet</em></span>`;
+    return `${ic('cal', 'md')}<span class="dr-txt">${esc(prettyRange(start, end))}<em>${n === 0 ? 'day trip · 0 nights' : `${n + 1} days · ${n} night${n === 1 ? '' : 's'}`}</em></span>`;
+  }
+
+  // The range as it stands, including the day under the cursor while you are still
+  // choosing the far end — so you can see how long the trip is before committing.
+  function shownRange() {
+    if (picking === 'end' && start && !end && hover) return orderRange(start, hover);
+    return [start, end];
+  }
+
+  function drawPanel() {
+    const [a, b] = shownRange();
+    const today = todayISO();
+    const names = weekdayNames();
+    const months = Array.from({ length: MONTHS_SHOWN }, (_, i) => monthGrid(shiftMonth(view, i)));
+    el.querySelector('[data-dr-months]').innerHTML = months.map((m) => `<div class="dr-month">
+      <div class="dr-mname">${esc(monthName(m.key))}</div>
+      <div class="dr-wdays">${names.map((n) => `<span>${esc(n.slice(0, 2))}</span>`).join('')}</div>
+      <div class="dr-grid">${m.days.map((d) => {
+      // Days belonging to a neighbouring month are drawn as empty cells, not as
+      // faint numbers. With two months on screen at once the same day would
+      // otherwise appear TWICE — 1–6 Sept sits in both the August and the
+      // September grid — and a selected range would light up in both places,
+      // which reads as two ranges. The blank keeps the 7×6 geometry so the
+      // weeks still line up under their weekday headings.
+      if (!d.inMonth) return '<span class="dr-day out" aria-hidden="true"></span>';
+      const state = rangeCellState(d.iso, a, b);
+      const cls = ['dr-day', state, d.iso === today ? 'today' : ''].filter(Boolean).join(' ');
+      return `<button type="button" class="${cls}" data-d="${d.iso}" tabindex="-1">${Number(d.iso.slice(8, 10))}</button>`;
+    }).join('')}</div>
+    </div>`).join('');
+
+    el.querySelector('[data-dr-span]').textContent = months.length > 1
+      ? `${monthName(months[0].key)} – ${monthName(months[months.length - 1].key)}`
+      : monthName(months[0].key);
+
+    const step = el.querySelector('[data-dr-step]');
+    step.textContent = picking === 'start' || !start
+      ? 'Tap the day you leave'
+      : 'Now tap the day you come back — or the same day for a day trip';
+
+    const n = nightsBetween(a, b);
+    el.querySelector('[data-dr-sum]').textContent = !a ? 'No dates yet'
+      : !b ? prettyDate(a)
+        : `${prettyRange(a, b)} · ${n === 0 ? '0 nights (day trip)' : `${n} night${n === 1 ? '' : 's'}`}`;
+  }
+
+  // The one place the value leaves this control. Everything downstream — the nights
+  // hint, the submit handler — reads the hidden inputs, so they are written first
+  // and the event goes out afterwards.
+  function commit() {
+    startInput.value = start;
+    endInput.value = end;
+    trigger.innerHTML = triggerHTML();
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function open() {
+    view = monthKey(start) || monthKey(todayISO()) || view;
+    picking = start && end ? 'start' : (start ? 'end' : 'start');
+    hover = '';
+    pop.hidden = false;
+    // `busyEditing()` skips background re-renders while this class is on, so a
+    // sync refresh arriving mid-pick cannot redraw the form out from under you.
+    el.classList.add('dr-open');
+    trigger.setAttribute('aria-expanded', 'true');
+    drawPanel();
+    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('click', onOutside, true);
+  }
+  function close() {
+    if (pop.hidden) return;
+    pop.hidden = true;
+    el.classList.remove('dr-open');
+    trigger.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('keydown', onKey, true);
+    document.removeEventListener('click', onOutside, true);
+  }
+  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  const onOutside = (e) => { if (!el.contains(e.target)) close(); };
+
+  trigger.addEventListener('click', () => { if (pop.hidden) open(); else close(); });
+
+  pop.addEventListener('click', (e) => {
+    const nav = e.target.closest('[data-dr-nav]');
+    if (nav) { view = shiftMonth(view, Number(nav.dataset.drNav)); drawPanel(); return; }
+
+    const act = e.target.closest('[data-dr]')?.dataset.dr;
+    if (act === 'clear') { start = ''; end = ''; picking = 'start'; hover = ''; commit(); drawPanel(); return; }
+    if (act === 'today') { view = monthKey(todayISO()); drawPanel(); return; }
+    if (act === 'done') { close(); return; }
+
+    const day = e.target.closest('[data-d]');
+    if (!day) return;
+    const iso = day.dataset.d;
+    if (picking === 'start' || !start) {
+      // A fresh range always starts here — including the second visit to a field
+      // that already holds one, because "change these dates" nearly always means
+      // "start again", not "nudge the return day".
+      start = iso; end = ''; picking = 'end'; hover = '';
+      commit(); drawPanel();
+      return;
+    }
+    if (iso < start) {
+      // Earlier than the start: a correction, not an error. Re-anchor rather than
+      // refuse, which is what every date-range picker does and what people expect.
+      start = iso; end = ''; picking = 'end'; hover = '';
+      commit(); drawPanel();
+      return;
+    }
+    end = iso; picking = 'start'; hover = '';
+    commit(); drawPanel();
+    close();          // both ends chosen — the flow is finished, so get out of the way
+  });
+
+  // Live preview of the range while the far end is still being chosen. Pointer
+  // only; a touch has no hover, and there the tap itself is the feedback.
+  pop.addEventListener('mouseover', (e) => {
+    if (picking !== 'end' || !start || end) return;
+    const day = e.target.closest('[data-d]');
+    if (!day || day.dataset.d === hover) return;
+    hover = day.dataset.d;
+    drawPanel();
+  });
+  pop.addEventListener('mouseleave', () => { if (hover) { hover = ''; drawPanel(); } });
+
+  trigger.innerHTML = triggerHTML();
+  return el;
+}
+
+// ============================================================
 // Event settings form (used inline on Home for new, and on the edit route)
 // ============================================================
 function eventForm(ev, lists, isEdit) {
@@ -1788,12 +2032,7 @@ function eventForm(ev, lists, isEdit) {
 
     <label class="field"><span>Event name</span>
       <input name="name" value="${esc(ev.name)}" placeholder="e.g. Dolomites road trip" autocomplete="off"></label>
-    <div class="row2">
-      <label class="field"><span>Start date <em>(optional)</em></span>
-        <input type="date" name="startDate" value="${esc(ev.startDate)}"></label>
-      <label class="field"><span>End date <em>(optional)</em></span>
-        <input type="date" name="endDate" value="${esc(endVal)}" min="${esc(ev.startDate || '')}"></label>
-    </div>
+    <div data-dates-slot></div>
     <p class="nights-hint muted" data-nights-hint></p>
     <label class="field"><span>Destination <em>(optional — for weather)</em></span>
       <input name="destination" value="${esc(ev.destination)}" placeholder="e.g. Chamonix" autocomplete="off"></label>
@@ -1853,28 +2092,33 @@ function eventForm(ev, lists, isEdit) {
     form.querySelectorAll('.preset-chip').forEach((c) => c.classList.toggle('applied', c === btn));
   });
 
+  // Both ends of the trip come from ONE control (v125). It supplies the same two
+  // hidden inputs the form has always read, so nothing below this line changed.
+  const datesField = tripDatesField(ev.startDate, endVal);
+  form.querySelector('[data-dates-slot]').replaceWith(datesField);
+
   // Live nights readout: the trip length is derived from start -> end, and still
   // shown explicitly because it drives per-night quantities.
   const startInput = form.querySelector('input[name=startDate]');
   const endInput = form.querySelector('input[name=endDate]');
   const nightsHint = form.querySelector('[data-nights-hint]');
   function refreshNights() {
-    if (startInput.value) endInput.min = startInput.value;  // can't come home before you leave
     const n = nightsBetween(startInput.value, endInput.value);
-    let msg; let warn = false;
-    if (!startInput.value || !endInput.value) msg = 'Add an end date to count the days — nights scale per-night quantities.';
-    else if (n == null) { msg = 'End date is before the start date.'; warn = true; }
+    let msg;
+    if (!startInput.value) msg = 'No dates yet — the nights between them scale per-night quantities (socks, underwear, tees).';
+    else if (!endInput.value) msg = 'Add the day you come back to count the nights — they scale per-night quantities.';
     else {
       const days = n + 1;  // inclusive calendar days: start and end day both count
       msg = n === 0
         ? '1 day · 0 nights (day trip)'
         : `${days} days · ${n} night${n === 1 ? '' : 's'}`;
     }
+    // The picker cannot produce an end before a start any more — an earlier tap
+    // re-anchors the range — so the old "End date is before the start date"
+    // warning has nothing left to warn about.
     nightsHint.textContent = msg;
-    nightsHint.classList.toggle('warn', warn);
   }
-  startInput.addEventListener('change', refreshNights);
-  endInput.addEventListener('change', refreshNights);
+  datesField.addEventListener('change', refreshNights);
   refreshNights();
 
   // Per-group "select all / none" for the activity picker.
@@ -2162,7 +2406,7 @@ async function renderEvent(eventId) {
       ev.entries = regenerateEntries(ev, lists);
       if (await saveGuard(db.saveEvent(ev))) render();
     } else if (act === 'preset') {
-      const name = (prompt('Save this trip’s setup (its activities + conditions, not its dates or packed items) as a preset you can reuse for a similar trip.\n\nPreset name:', ev.name || '') || '').trim();
+      const name = (prompt('Save this trip’s setup — which activities are ticked plus its transport, season, catering, weather and laundry settings — as a preset you can reuse for a similar trip.\n\nIt saves no items and no dates: the gear still comes from your templates.\n\nPreset name:', ev.name || '') || '').trim();
       if (!name) return;
       if (loadPresets().some((p) => p.name.toLowerCase() === name.toLowerCase())
         && !confirm(`A preset called “${name}” already exists. Replace it?`)) return;
@@ -4048,7 +4292,7 @@ function itemEditor(list, it, setOpen, draw) {
           <label class="field"><span>Owner <em>whose it is</em></span>
             <select name="ownedBy-sel" data-was="${esc(it.ownedBy || '')}">${ownerOptsHTML(it.ownedBy)}</select></label>
           <div class="row2">
-            <label class="field"><span>Condition</span>${selectHtml('condition', conditionOpts(it.condition), it.condition)}</label>
+            <label class="field"><span>Item condition <em>how worn it is</em></span>${selectHtml('condition', conditionOpts(it.condition), it.condition)}</label>
             <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
           </div>
           <div class="lifecycle${it.retired ? ' is-retired' : ''}">
@@ -4664,7 +4908,7 @@ function allItemsSection(lists) {
       .map((d) => ({ ...d, icon: 'folder', n: secPool.filter((r) => (r.section || '') === d.value).length }));
     // Only offer a group when it actually splits the collection in two or more.
     const useful = (defs) => defs.filter((d) => d.n).length > 1;
-    groupsEl.innerHTML = (useful(condDefs) ? chipRow('Condition', condDefs, careCondFilter, 'data-cond', 'cond') : '')
+    groupsEl.innerHTML = (useful(condDefs) ? chipRow('Item condition', condDefs, careCondFilter, 'data-cond', 'cond') : '')
       + (useful(secDefs) ? chipRow('Section', secDefs, careSecFilter, 'data-sec', 'sec') : '');
   };
 
@@ -4982,7 +5226,7 @@ function howtoCard() {
 
         <h3>The idea</h3>
         <p>Everything here exists to surface <b>the exact packing list for whatever you're about to do</b> — one activity or a combination (a city trip + a run + a hike), under the specific conditions of that trip. You keep small, reusable <b>templates</b>; an <b>Event</b> composes the ones you pick into a single <b>Packing List</b> for a trip and filters it down to what actually applies. Category, where it's packed and when to pack it are just how that result is organised.</p>
-        <p class="hint">Three words to keep straight: a <b>Template</b> is a reusable building block (Swim, Run, Travel, Golf…); an <b>Event</b> is one specific trip that combines templates; the <b>Packing List</b> is the single merged list that Event produces — the one you actually pack from.</p>
+        <p class="hint">Four words to keep straight: a <b>Template</b> is a reusable building block that holds <em>gear</em> (Swim, Run, Travel, Golf…); an <b>Event</b> is one specific trip that combines templates; the <b>Packing List</b> is the single merged list that Event produces — the one you actually pack from; and a <b>Trip preset</b> holds no gear at all — it is a saved set of <em>answers</em> to the Home form, so a trip you take often can be set up in one tap. There's a section on the difference between a Template and a Trip preset further down.</p>
 
         <h3>Quick start (the whole app in four steps)</h3>
         <p>If you remember nothing else, remember this loop:</p>
@@ -5020,7 +5264,7 @@ function howtoCard() {
           <li><b>Category</b> (what it is), <b>Container</b> (which bag it goes in), <b>Phase</b> (when to pack it — see the timeline below).</li>
           <li><b>Reminder</b> vs item: a reminder is a to-do prompt (e.g. “charge the Garmin”), not a physical thing to tick off.</li>
  <li><b>Flags:</b> needs charging (with an optional <b>charge type</b> — USB-C, USB-A, Lightning, special charger… shown on the badge, e.g. USB-C, so you know which cables to bring), short-home-list, liquid/gel (100 ml rule), restricted — think before packing (battery / carry-on rules), <b>per-night</b> (quantity scales with trip length), and a <b>weight</b> in grams.</li>
-          <li><b>Conditions</b> — “only include when…”: Season, Context (Indoor/Outdoor/Race — applies to <b>Workout / Exercise (WET)</b> lists only), Transport (Car/Plane/RV), Catering, and <b>Weather</b> (see below). A blank condition means “always applies”.</li>
+          <li><b>Inclusion rules</b> — the “only include this item when…” block: Season, Context (Indoor/Outdoor/Race — applies to <b>Workout / Exercise (WET)</b> lists only), Transport (Car/Plane/RV), Catering, and <b>Weather</b> (see below). A row left untouched means “always applies”. (These are nothing to do with an item’s <b>Item condition</b>, which grades how worn it is — see below.)</li>
           <li><b>Sub-items:</b> optional nested things bundled under one line.</li>
  <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. Each item lives <b>once</b> and every template simply points to it — so <b>everything under “① The item itself” updates in every template it belongs to</b>: its name, category, weight, flags, photos, care record, purchase details, <b>and its default bag and when</b>. It still appears just once in <b>Care</b>. What stays separate per template is only what you deliberately make separate: its <b>quantity</b>, <b>section</b>, <b>note</b>, <b>conditions</b>, and a <b>per-list bag exception</b> if you set one. Items that are in <b>no</b> template show a <b>No template</b> flag.</li>
         </ul>
@@ -5069,14 +5313,14 @@ function howtoCard() {
         <h3>Syncing your devices</h3>
         <p>Your catalogue can be kept in step across every device you use. Open <b>Settings \u2192 Sync your devices</b> and tap <b>Sign in to sync</b>: you type your e-mail, a <b>one-time code</b> arrives, and that's it \u2014 there is no password. Do the same on your other device and from then on the two match each other automatically.</p>
         <ul>
-          <li><b>What travels:</b> your templates, items, trips, to-dos and kits \u2014 everything that makes up the catalogue \u2014 plus the <b>lists you make in Settings</b>: your <b>When</b> timeline, <b>Conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>.</li>
+          <li><b>What travels:</b> your templates, items, trips, to-dos and kits \u2014 everything that makes up the catalogue \u2014 plus the <b>lists you make in Settings</b>: your <b>When</b> timeline, <b>Item conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>.</li>
           <li><b>What stays on the device:</b> your <b>photos</b>, the <b>automatic backups</b> (both below) \u2014 and how each device <b>looks and behaves</b>: the theme, the view you last used, which Settings sections you left open, and this device's own backup dates. You may well want dark on the phone and light on the Mac.</li>
           <li><b>Offline is fine.</b> Changes you make with no signal are queued and sent the moment you're back online.</li>
           <li><b>You are never locked out.</b> The app works fully without signing in \u2014 signing in only starts the sharing. Signing out on a device stops it syncing but leaves everything on it untouched.</li>
         </ul>
 
         <h4>The lists you make in Settings</h4>
-        <p>The rule is <b>lists you author travel; how a device looks does not</b>. Six lists travel: the <b>When</b> timeline, <b>Conditions</b>, <b>Trip presets</b>, <b>People</b> (names <em>and</em> their colours), <b>Owners</b> and <b>Storage places</b>. Change any of them anywhere and every signed-in device follows.</p>
+        <p>The rule is <b>lists you author travel; how a device looks does not</b>. Six lists travel: the <b>When</b> timeline, <b>Item conditions</b>, <b>Trip presets</b>, <b>People</b> (names <em>and</em> their colours), <b>Owners</b> and <b>Storage places</b>. Change any of them anywhere and every signed-in device follows.</p>
         <p><b>The first time each device runs this version</b> it offers up the lists you had already made on it, and they are <b>merged</b> \u2014 an entry your account already has is left exactly as it is, and anything only one device had is added. So the first time round you may see the combined set. <b>Go through the six lists once afterwards and remove anything you don't want</b>: from then on a removal travels too.</p>
         <p>Two things are deliberately never written into your shared data: the <b>standard</b> versions of these lists (the four conditions, Martin &amp; Anna, the standard storage places) live in the app itself, so no device can ever plant them over yours \u2014 and a device <b>waits until it has actually seen your account's copy</b> before offering anything up.</p>
 
@@ -5114,10 +5358,27 @@ function howtoCard() {
 
         <h3>Creating a trip</h3>
         <p>The <b>Home</b> tab is the builder. Set the trip's conditions, tick any <b>extra activities</b> you're doing, and press <b>Create Event</b> — it generates an editable Event (with its own Packing List) that then lives under the <b>Events</b> tab.</p>
- <p><b>Presets.</b> For trips you take often, save the whole setup and reuse it. On any trip, tap <b>Save as preset</b> to remember its recipe — the activities plus all the conditions (trip/quick, transport, season, WET options, forced weather gear, laundry), but not the dates, destination or packed items. Back on <b>Home</b>, a <b>Start from a preset</b> row lets you fill the whole builder in one tap, then just add this trip's name and dates. Manage them under <b>Settings → Trip presets</b>; they ride along in your backups.</p>
+ <p><b>Trip presets.</b> For trips you take often, save the whole setup and reuse it. On any trip, tap <b>Save as preset</b> to remember its recipe — the activities plus every trip setting (trip/quick, transport, season, WET options, forced weather gear, laundry), but not the dates, destination or packed items. Back on <b>Home</b>, a <b>Start from a preset</b> row lets you fill the whole builder in one tap, then just add this trip's name and dates. Manage them under <b>Settings → Trip presets</b>; they ride along in your backups.</p>
+
+        <h3>Template vs Trip preset — what each one actually is</h3>
+        <p>They sound alike and they are not alike at all. The one-line version: <b>a Template holds your gear; a Trip preset holds your answers.</b></p>
+        <ul>
+          <li><b>A Template is a box of things.</b> “Diving”, “Run”, “Travel”, “Golf” — each holds actual <b>items</b>, with their quantities, sections, bags and when-to-pack. Templates are what the app is <em>made of</em>; they live in the <b>Templates</b> tab and you edit them over the years as your kit changes.</li>
+          <li><b>A Trip preset is a filled-in form.</b> It contains <b>no items whatsoever</b>. It remembers the answers you gave on the <b>Home</b> builder: full trip or quick activity, which transport, which season, catering, the WET options, any forced weather gear, laundry on or off, and <b>which activities you ticked</b> — which is to say, which templates get combined. It lives in <b>Settings → Trip presets</b>.</li>
+        </ul>
+        <p>So they work at different moments. A preset is <b>spent the instant you press Create Event</b> — it fills the form, the form builds the trip, and the trip has no further connection to the preset. Templates keep working after that: the trip's Packing List <em>is</em> your templates merged, and <b>Save &amp; regenerate</b> on a trip rebuilds it from them again.</p>
+        <p>Which explains everything that follows from it:</p>
+        <ul>
+          <li><b>Add a new head torch</b> to your Diving template and every future dive trip has it. Put it in a preset — you can't; a preset has nowhere to put an item.</li>
+          <li><b>Change a preset</b> (or delete it) and <b>nothing anywhere changes</b> — not one existing trip, not one item. You have only changed a shortcut. <b>Delete a template</b> and you have thrown away the gear list itself.</li>
+          <li>A preset points at activities <b>by name</b>. Rename or empty a template and the preset still ticks that box — it just brings in whatever that template holds <em>now</em>.</li>
+          <li>You can happily have <b>none</b> of either: no presets at all (fill the form each time), or a trip built from a single template.</li>
+        </ul>
+        <p><b>A worked example.</b> You have templates called <b>Travel</b>, <b>Diving</b> and <b>Swim</b> — three boxes of gear. You take a Red Sea dive week most winters, so once you've set a trip up the way you like it (transport Plane, season Winter, Diving + Swim ticked, catering half-board, laundry on) you tap <b>Save as preset</b> and call it “Dive week”. Next winter you tap <b>Dive week</b> on Home, type the name and the dates, and press Create Event. The preset supplied the <em>answers</em>; the three <b>templates</b> supplied every single <em>item</em> on the list that comes out.</p>
+        <p class="hint">Rule of thumb: if you're thinking about <b>a thing you own</b>, you want a Template. If you're thinking about <b>a kind of trip you take</b>, you want a Trip preset. Both travel between your devices, and both are in your backups.</p>
  <p><b>Kits.</b> A <b>kit</b> is a bundle of small things you always pack together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Build your kits under <b>Settings → Kits</b>: give each a name and an emoji, then search your catalogue to pick its members. Once a kit exists you can add it <b>as one unit</b> in two places — from a <b>template</b> (its <b>Add a kit</b> button, so every trip built from that template includes the whole bundle) or straight onto a single <b>trip</b> (the <b>Kit</b> button on the trip’s toolbar). On the Packing List the kit’s items <b>cluster together</b> under a <b>kit header</b> with a <b>Pack all</b> button, so you tick the whole pouch off in one tap. Need to tweak one trip? Open any item on a trip and use its <b>Kit</b> field to add it to, move it between, or clear it from a kit just for that trip. Kits are included in your backups and automatic snapshots. (Deleting a kit only removes the bundle — items you already added to templates or trips stay put.)</p>
         <ul>
-          <li><b>Name, start date, end date, destination</b> (end date and destination are optional). You give the <b>end date</b> — the return day — rather than counting nights yourself; the app works out the nights and shows them live below the dates.</li>
+          <li><b>Name, trip dates, destination</b> (the dates and the destination are both optional). <b>Trip dates is one dropdown for the whole trip.</b> Tap it and a calendar opens showing <b>two months side by side</b> (stacked on a phone); tap the day you <b>leave</b>, then the day you <b>come back</b>, and it closes itself. The days in between fill in as you go — on the Mac the range even previews under the mouse — so you can see how long the trip is before you commit. Tapping a day <em>earlier</em> than the start simply begins the range again there, and tapping the <b>same day twice</b> gives you a <b>day trip</b> (0 nights). <b>Clear</b> empties both ends; <b>Today</b> brings the calendar back to this month. You never count nights yourself — the app does it and shows the total live, both in the field and under it.</li>
  <li><b>Time of year, catering, context</b> narrow the list; the <b>nights between your start and end date</b> drive per-night quantities (e.g. socks ×6 for six nights). Tick <b>Laundry available</b> to cap those per-night items at ${LAUNDRY_CAP_NIGHTS} — so a long trip doesn’t demand a dozen (short trips are unaffected); capped items show a small by their ×count.</li>
           <li>The <b>start date</b> also decides where a trip sorts on Home and the Events tab — nearest upcoming first, then undated drafts, then past trips.</li>
         </ul>
@@ -5176,11 +5437,11 @@ function howtoCard() {
         <h3>Care, storage &amp; maintenance</h3>
         <p>Every item can carry a few extra things about the <em>physical object</em>, set in its editor (in the <b>Templates</b> tab) — its <b>photos sit right beside the item name</b>, while where it's stored and how to look after it live in the <b>Storage &amp; maintenance</b> panel below:</p>
         <ul>
- <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b> or remove places — under <b>Storage places</b> in <b>Settings</b>.</li>
+ <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b>, remove or <b>reorder</b> places — under <b>Storage places</b> in <b>Settings</b>. <b>The order you put them in there is the order in this dropdown</b>, so the two or three places you actually use can sit at the top instead of wherever the alphabet puts them.</li>
  <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one. Pictures are kept in their own place and the item just points at them, so your lists and backups stay quick; if you ever want to reclaim space, <b>Settings → Your data → Tidy up photos</b> frees any picture nothing uses any more.</li>
           <li><b>Maintenance</b> — how and how often to look after it: a <b>maintenance cadence</b> (monthly … every 2 years, or a custom number of days), when it was <b>last done</b>, free-text <b>how-to notes</b> (steps, products, settings), and a <b>how-to link</b>. Tap <b>Log done today</b> to record a service — it resets the schedule and adds a dated entry to the item's maintenance history.</li>
           <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b> (a dropdown of your <b>Owners</b> list — see <b>Settings → Owners</b> — with <b>＋ Add an owner…</b> to name a new one on the spot and <b>⚙ Manage owners…</b> to rename or remove one without leaving the item; an owner is <em>not</em> a Person, so “Shared” or “The kids” can own things without appearing in every “Packed by” picker), <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
- <li><b>Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>Not in use</b> tag, and the new <b>Not in use</b> filter chip rounds them all up. (This is different from <b>Condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
+ <li><b>Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>Not in use</b> tag, and the new <b>Not in use</b> filter chip rounds them all up. (This is different from <b>Item condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
         </ul>
         <p>The <b>Care</b> tab then gathers everything with care info across all your lists, under the heading <b>Maintenance list</b> (below the Containers / All items / Shopping links at the top, and above the <b>All items</b> browser at the bottom). It shows two ways:</p>
         <ul>
@@ -5189,8 +5450,8 @@ function howtoCard() {
         </ul>
  <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>reminder</b> also shows on the <b>Home</b> screen.</p>
  <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>No template</b> (loose items), <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> and <b>Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
- <p>Below the category chips sit two more filter rows, <b>Condition</b> and <b>Section</b>, which appear whenever they’d actually split the collection. The rule is worth knowing: chips <b>in the same row</b> mean “either of these”, and the <b>rows combine</b> — so <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn, not liquids plus worn things. Each chip’s number is what you’d get if you tapped it, counted against the filters already on, and <b>Show all</b> clears every row at once. (One item that lives in three templates is three rows here — that’s why a section, which belongs to a template, can be filtered at all.)</p>
- <p><b>Sort</b> reorders the whole index — <b>Alphabetically</b>, <b>Container</b>, <b>Where it’s stored</b>, <b>Weight</b>, <b>Manufacturer</b>, <b>Acquired</b>, <b>Warranty until</b> or <b>Section</b> — and <b>▲/▼</b> flips the direction. Anything with that field left blank <b>always sinks to the bottom</b>, whichever direction you choose, so “Manufacturer, Z–A” shows you makers rather than three hundred blanks. <b>Group</b> then breaks the list into headed, <b>collapsible</b> sections — by <b>Container</b>, <b>Where it’s stored</b>, <b>Section</b>, <b>Manufacturer</b>, <b>Condition</b>, <b>Template</b>, <b>Category</b>, <b>Whose it is</b>, <b>Care status</b> or <b>First letter</b> — each showing how many it holds, with your sort still applying inside each one and the “not set” bucket always last. Tap a group’s header to fold it away. Sort and grouping are <b>remembered on this device</b>; the filter chips deliberately are not, so the index always opens showing everything.</p>
+ <p>Below the category chips sit two more filter rows, <b>Item condition</b> and <b>Section</b>, which appear whenever they’d actually split the collection. The rule is worth knowing: chips <b>in the same row</b> mean “either of these”, and the <b>rows combine</b> — so <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn, not liquids plus worn things. Each chip’s number is what you’d get if you tapped it, counted against the filters already on, and <b>Show all</b> clears every row at once. (One item that lives in three templates is three rows here — that’s why a section, which belongs to a template, can be filtered at all.)</p>
+ <p><b>Sort</b> reorders the whole index — <b>Alphabetically</b>, <b>Container</b>, <b>Where it’s stored</b>, <b>Weight</b>, <b>Manufacturer</b>, <b>Acquired</b>, <b>Warranty until</b> or <b>Section</b> — and <b>▲/▼</b> flips the direction. Anything with that field left blank <b>always sinks to the bottom</b>, whichever direction you choose, so “Manufacturer, Z–A” shows you makers rather than three hundred blanks. <b>Group</b> then breaks the list into headed, <b>collapsible</b> sections — by <b>Container</b>, <b>Where it’s stored</b>, <b>Section</b>, <b>Manufacturer</b>, <b>Item condition</b>, <b>Template</b>, <b>Category</b>, <b>Whose it is</b>, <b>Care status</b> or <b>First letter</b> — each showing how many it holds, with your sort still applying inside each one and the “not set” bucket always last. Tap a group’s header to fold it away. Sort and grouping are <b>remembered on this device</b>; the filter chips deliberately are not, so the index always opens showing everything.</p>
 
         <h3>Actions — your to-do list</h3>
         <p>The <b>Actions</b> tab (the red one in the bottom bar) is a proper <b>to-do list</b> for the things you need to <em>do</em>, not pack. Actions come in two kinds:</p>
@@ -5201,7 +5462,7 @@ function howtoCard() {
  <p>Every action can carry a <b>priority</b> (High / Normal), a <b>when</b> (a trip phase like “≥1 week ahead”, or a specific <b>date</b>), and a tick to mark it <b>done</b>. The Actions tab gathers them all in one place — open ones first (High before Normal, soonest first) — with completed ones tucked into a collapsible <b>Done</b> group. Ticking an item’s action done is <b>permanent on that item</b>; it doesn’t reset each trip. Actions live on-device and travel in your <b>JSON backup</b>, and whenever anything is open a <b>“To-dos to tackle”</b> card appears on the <b>Home</b> screen.</p>
 
         <h3>Shopping list</h3>
- <p>A separate <b>Shopping list</b> (on the <b>Care</b> tab) rounds up what to <b>buy or restock before a trip</b>. It suggests three kinds of thing automatically: items you flag as a <b>Consumable</b> in their editor (things you use up — sunscreen, toothpaste, energy gels, a gas canister), items whose <b>Condition</b> you’ve set to <b>Needs replacing</b>, and anything past or within a month of its <b>replace-by / expiry date</b>. Tap <b>＋ Add</b> beside a suggestion to move it onto your buy-list, or the <b>Add</b> button for a one-off like “travel adapter”. <b>Tick</b> a line once you’ve bought it — bought things drop into a collapsible group. It’s built on the same store as your to-dos (so it’s in every backup), and a <b>“Shopping list — N to buy”</b> nudge shows on <b>Home</b> whenever something’s waiting. Your <b>Actions</b> tab stays purely to-dos; shopping keeps its own screen.</p>
+ <p>A separate <b>Shopping list</b> (on the <b>Care</b> tab) rounds up what to <b>buy or restock before a trip</b>. It suggests three kinds of thing automatically: items you flag as a <b>Consumable</b> in their editor (things you use up — sunscreen, toothpaste, energy gels, a gas canister), items whose <b>Item condition</b> you’ve set to <b>Needs replacing</b>, and anything past or within a month of its <b>replace-by / expiry date</b>. Tap <b>＋ Add</b> beside a suggestion to move it onto your buy-list, or the <b>Add</b> button for a one-off like “travel adapter”. <b>Tick</b> a line once you’ve bought it — bought things drop into a collapsible group. It’s built on the same store as your to-dos (so it’s in every backup), and a <b>“Shopping list — N to buy”</b> nudge shows on <b>Home</b> whenever something’s waiting. Your <b>Actions</b> tab stays purely to-dos; shopping keeps its own screen.</p>
 
         <h3>Countdown &amp; “pack now” nudges</h3>
  <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b></b> maintenance nudge when gear is overdue or due soon, a <b>shopping</b> nudge when you’ve things to buy, a <b>“To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), and a <b></b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
@@ -5217,12 +5478,12 @@ function howtoCard() {
         <p>Every item carries a <b>When</b>: the stage of the pack it belongs to. It is what your packing list is grouped by, and what <b>Packing Mode</b> walks you through one step at a time. The app starts with seven — <b>Preparations</b>, <b>≥1 week ahead</b>, <b>Day before</b>, <b>Morning list</b>, <b>At the front door</b>, <b>Wear / carry on the day</b> and <b>After / recovery</b> — but the list is <b>yours</b>, in <b>Settings → When</b>. Rename them by typing straight over the name, give each one an <b>emoji</b> and a <b>colour</b>, move them up and down the timeline with <b>▲ ▼</b>, remove ones you never use, or add your own — “Load the car”, “Night before the flight”.</p>
         <p><b>Days ahead</b> is when that stage starts nudging you: set it to 7 and the app begins asking you to pack it a week before you leave. <b>-1</b> means after the trip, which is what <b>After / recovery</b> uses. The <b>to-dos</b> tick marks a stage that holds things to <em>do</em> rather than things to pack — that is what makes <b>Preparations</b> behave differently from the rest.</p>
         <p><b>Nothing can be lost by any of this.</b> Renaming keeps every item exactly where it was — the app remembers a phase by a hidden name that never changes, so only the words you read are different. Removing a stage that things are filed under makes you say <b>when those things get packed instead</b>, and tells you how many there are — counting your items, the lines on trips you have already built, and your to-dos. There is a <b>Reset to the standard seven</b> if you want the original timeline back.</p>
-        <p><b>This list syncs between your devices</b> — it was the first of the Settings lists to do so, and since v120 your Conditions, Trip presets, People, Owners and Storage places travel with it. A stage is stamped on every item, so one that existed on only a single device would make the same item read as a different “When” there. Change the timeline on the Mac and the iPhone follows. While one device is still on an older version, anything it doesn't recognise is shown as-is and <b>never quietly moved</b>.</p>
+        <p><b>This list syncs between your devices</b> — it was the first of the Settings lists to do so, and since v120 your Item conditions, Trip presets, People, Owners and Storage places travel with it. A stage is stamped on every item, so one that existed on only a single device would make the same item read as a different “When” there. Change the timeline on the Mac and the iPhone follows. While one device is still on an older version, anything it doesn't recognise is shown as-is and <b>never quietly moved</b>.</p>
 
         <h3>Whose things are whose</h3>
-        <p><b>Owner</b> — on an item, under <b>Details &amp; ownership</b> — is a dropdown of a list you keep in <b>Settings → Owners</b>. <b>Add</b> a name, <b>rename</b> one (every item that is theirs follows, in one go) or <b>remove</b> one — and if things are theirs, the app asks <b>who they go to</b> first, so an item is never left pointing at somebody who no longer exists. Each name shows how many items are theirs. You never have to go to Settings to do it: the same two choices, <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b>, sit at the bottom of the Owner dropdown itself — in the item editor and in <b>Care → All items · table</b>, where you can assign owners down a whole column.</p>
+        <p><b>Owner</b> — on an item, under <b>Details &amp; ownership</b> — is a dropdown of a list you keep in <b>Settings → Owners</b>. <b>Add</b> a name, <b>rename</b> one (every item that is theirs follows, in one go) or <b>remove</b> one — and if things are theirs, the app asks <b>who they go to</b> first, so an item is never left pointing at somebody who no longer exists. Each name shows how many items are theirs, and the list is ordered <b>biggest owner first</b> so you can see at a glance whose most of the kit is (the dropdowns stay A–Z — there you already know the name you're after). You never have to go to Settings to do it: the same two choices, <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b>, sit at the bottom of the Owner dropdown itself — in the item editor and in <b>Care → All items · table</b>, where you can assign owners down a whole column.</p>
         <p><b>Owners are not People.</b> <b>People</b> is who <em>packs</em> on a trip; <b>Owners</b> is who <em>owns</em> the thing at home. Keeping them apart means “Shared”, “The kids” or “The RV” can own gear without ever appearing in a “Packed by” picker. Your People are offered as owners to start with, but naming an owner never creates a person.</p>
-        <p>Like People, Storage places and Conditions, the Owners <em>list</em> lives on each device, while the owner <em>on an item</em> travels with your data — so a name given on the Mac reaches the iPhone on its items, and joins that device's dropdown as a name in use, but set it up on both (or carry it over in a backup file) if you want it offered on an item that hasn't got it yet.</p>
+        <p><b>The Owners list travels between your devices</b> (since v120), along with People, Storage places, Item conditions and Trip presets — add a name on the Mac and the iPhone has it. The owner <em>on an item</em> has always travelled with your data, which is why this list could heal itself even before that: a name given on the other device is offered in the dropdown as a name in use, whether or not the roster itself has caught up yet.</p>
 
         <h3>Weather (optional, per trip)</h3>
         <p>Add a <b>destination</b> to a trip, then tap <b>Get forecast</b>. The forecast comes from Open-Meteo (free, no account), is cached on the trip so it still shows offline, and only fetches when you ask and you're online.</p>
@@ -5243,8 +5504,9 @@ function howtoCard() {
         <h3>Spreadsheet export</h3>
         <p><b>Excel</b> exports a trip as an .xlsx (phase, container, item, qty, packed, note). Settings can export every event at once.</p>
 
-        <h3>Conditions — grading the gear you own</h3>
- <p>Every item can carry a <b>condition</b>, set in its editor under <b>Details &amp; ownership</b>. The app starts with four — <b>New</b>, <b>Good</b>, <b>Worn</b>, <b>Needs replacing</b> — but the list is <b>yours to change</b>, in <b>Settings → Conditions</b>. Rename them, drag them into the order you want (that order is the order in every dropdown, and the order the Care tab groups by), remove ones you never use, or add your own — “Failing”, “Borrowed, must return”, “Being repaired”.</p>
+        <h3>Item conditions — grading the gear you own</h3>
+ <p>Every item can carry an <b>item condition</b>, set in its editor under <b>Details &amp; ownership</b>. The app starts with four — <b>New</b>, <b>Good</b>, <b>Worn</b>, <b>Needs replacing</b> — but the list is <b>yours to change</b>, in <b>Settings → Item conditions</b>. Rename them, drag them into the order you want (that order is the order in every dropdown, and the order the Care tab groups by), remove ones you never use, or add your own — “Failing”, “Borrowed, must return”, “Being repaired”.</p>
+ <p class="hint"><b>Why the longer name?</b> The app uses the word “condition” for two different things, and they’re easy to mix up. An <b>item condition</b> says <b>how worn a thing is</b> — it never affects what gets packed. An item’s <b>“only include this item when…”</b> rules (season, transport, catering, weather) decide <b>whether the thing comes on a trip at all</b>. Same word, opposite jobs, so the grading one is spelled out in full wherever it appears.</p>
         <p>Two things make a condition do work rather than just sit there, and both are yours to set per condition:</p>
         <ul>
  <li><b>Badge</b> — whether the rating shows on item rows, and how loudly: <b>no badge</b> (quiet, which is right for New and Good), an <b>amber</b> one, or a <b>red</b> one. Healthy gear stays unbadged so the ones that need attention stand out.</li>
@@ -5256,7 +5518,7 @@ function howtoCard() {
         <h3>Finding your way round Settings</h3>
         <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
         <p>Each section has its <b>own colour and icon</b>, fixed for good, so you come to know them by sight rather than by reading. Closed, the colour sits in the little icon tile; <b>open, it takes over the panel</b> — the tile fills in, and the heading, the edge and a faint wash of the background all follow — so you always know which section you are inside. The colour is an <em>identity</em>, not a warning light: it never changes to tell you something is wrong. When something does need attention, the app says so in words, and on the Home screen.</p>
-        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
+        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Item conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
@@ -5284,6 +5546,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v125', '2026-08-26 · 09:30 UTC', false, 'One date picker for the whole trip — and four smaller things',
+      '<b>(1) The dates are now one control.</b> A trip’s <b>start</b> and <b>end</b> were two separate date boxes, which meant two separate calendars that knew nothing about each other: you picked a departure in one, closed it, opened the other, and had to find the same month all over again with no sight of where the trip began or how long it had got. A date range is <b>one idea</b>, so it is now <b>one dropdown</b>. Tap <b>Trip dates</b>, tap the day you leave, tap the day you come back — and it closes itself, having counted the nights. <b>Two months are shown side by side</b> (stacked on the phone) so a trip that crosses a month boundary needs no paging at all, the <b>whole range fills in as you move the mouse</b> so you can see the length before you commit, and picking a day <em>earlier</em> than your start simply starts the range again there rather than refusing. The closed field reads properly too — <b>“12 – 19 Sept 2026 · 8 days · 7 nights”</b> instead of two grey dd/mm/yyyy boxes. <b>Clear</b> empties both ends and <b>Today</b> jumps the calendar back to this month. Same day twice = a <b>0-night day trip</b>. <b>(2) Your Owners list is ordered by who owns most.</b> <b>Settings → Owners</b> used to be alphabetical, which told you nothing; it now puts <b>whoever owns the most items at the top</b>, counts still beside each name, ties settled A–Z. The Owner <em>dropdowns</em> stay alphabetical on purpose — you go there knowing the name you want. <b>(3) Storage places can be put in your own order.</b> <b>Settings → Storage places</b> was locked to A–Z, so “Bedroom wardrobe” always came before the garage whether or not that is where your things are. Each place now has <b>▲▼ buttons</b>, and <b>the order you set is the order in every “Where it’s stored” dropdown</b> in the app — put the two or three you actually use at the top and stop scrolling past the loft. Anything an item mentions that isn’t on your list still follows underneath, alphabetically. <b>(4) “Conditions” is now “Item conditions”.</b> The app was using one word for two unrelated things: how <b>worn</b> a thing is (New / Good / Worn / Needs replacing), and an item’s <b>“only include this item when…”</b> rules that decide whether it comes on a trip at all. The grading one is now spelled out in full everywhere it appears — the Settings section, the field in an item’s editor, the filter row and the grouping on <b>All items</b> — and the guide has a short note on the difference. Nothing about how either works has changed; only what they are called. <b>(5) The guide explains Template vs Trip preset.</b> A new section spells out what has only ever been implied: <b>a Template holds your gear, a Trip preset holds your answers.</b> A preset contains no items at all — it is a saved fill-in of the Home form (transport, season, catering, weather, laundry and which activities are ticked), spent the moment you press Create Event, so changing or deleting one can never touch a trip or an item. Worked example included.',
+      'Setting a trip’s dates is one gesture instead of two hunts through a calendar; the two Settings lists you use most are in an order that suits you rather than the alphabet; and two things that were easy to confuse now say plainly what they are.'),
     v('v124', '2026-08-25 · 20:30 UTC', false, 'The repair that actually reaches your iPhone',
       '<b>v121’s repair did not work.</b> Your iPhone still showed one condition out of six, and two storage places out of seventeen — the two being exactly the ones you had just changed on the Mac. That is the whole diagnosis in one sentence: <b>a row you CHANGE reaches the other device reliably; a row that merely already exists does not.</b> v121 tried to make the iPhone re-download the list from scratch, which depended on how the syncing library keeps its own internal notes. It did not do what its source code led me to believe, and I should not have bet your evening on it. <b>v124 bets on nothing.</b> The device that has the lists simply <b>writes them again</b> — every entry becomes an ordinary change, and ordinary changes are the one thing that has demonstrably worked all along. It happens by itself, once, on each device. And because relying on an automatic thing is what went wrong last time, there is now also a button: <b>Settings → Sync your devices → Re-send my lists to my other devices</b>. Press it on whichever device is <b>right</b>, and it sends its lists again. It only ever <b>adds</b> to the other device — since v121 nothing is deleted just for being absent from the list a device happens to be holding — so it is safe to press whenever something looks short, and safe to press twice.',
       'Your iPhone gets the lists it should have had, and if anything ever looks short again you can fix it yourself with one button instead of waiting for me.'),
@@ -6055,7 +6320,7 @@ async function syncCard() {
   const st = await db.syncStatus().catch(() => ({ enabled: true, signedIn: false, user: '', state: 'error' }));
   const body = st.signedIn
     ? `<p class="data-status">${ic('check', 'sm')}<b>Syncing as ${esc(accountName(st.user))}</b></p>
-       <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on — and so are the lists you make here: <b>When</b>, <b>Conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>. Changes made offline are sent as soon as you're back online.</p>
+       <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on — and so are the lists you make here: <b>When</b>, <b>Item conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>. Changes made offline are sent as soon as you're back online.</p>
        <p class="muted sync-note">Photos, the automatic backups, and how each device looks — theme, view, which sections are open — deliberately stay on the device they belong to.</p>`
     : `<p class="data-status">${ic('warn', 'sm')}<b>Not syncing on this device</b></p>
        <p class="muted">Sign in with your e-mail to keep this device in step with your others. You'll get a one-time code by e-mail — there's no password. Everything here keeps working offline either way.</p>`;
@@ -6069,7 +6334,7 @@ async function syncCard() {
       ${st.signedIn ? '<button class="btn ghost" data-sync="resend">Re-send my lists to my other devices</button>' : ''}
       <button class="btn ghost danger-txt" data-sync="reset">Replace this device with the account copy</button>
     </div>
-    ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Conditions, Trip presets, People, Owners or Storage places look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
+    ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Item conditions, Trip presets, People, Owners or Storage places look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
     <p class="muted sync-note">Use <b>Replace this device</b> only on a device holding the <em>wrong</em> catalogue — it erases what is on this one and takes the account's copy instead. The device with your real catalogue should <b>sign in</b>, not this.</p>
   </div>`);
   el.addEventListener('click', async (e) => {
@@ -6339,17 +6604,20 @@ async function renderSettings() {
 
   const places = h(`<div class="card block">
     <h2>Storage places</h2>
-    <p class="muted">The set of places offered in every item’s <b>Where it’s stored</b> dropdown. Add your own, rename them, or remove ones you don’t use. Renaming carries over to every item already kept there.</p>
+    <p class="muted">The set of places offered in every item’s <b>Where it’s stored</b> dropdown. Add your own, rename them, or remove ones you don’t use. Renaming carries over to every item already kept there. <b>The order here is the order in every dropdown</b> — move the places you reach for most to the top.</p>
     <div class="places-list" data-places></div>
     <div class="btnrow"><button class="btn" data-place="add">${IC.plus}<span>Add a place</span></button></div>
   </div>`);
   const drawPlaces = () => {
     const box = places.querySelector('[data-places]');
-    const locs = loadStorageLocs().sort((a, b) => a.localeCompare(b));
+    // In YOUR order, not A–Z: the arrows below are what sets it.
+    const locs = loadStorageLocs();
     box.innerHTML = locs.length
-      ? locs.map((s) => `<div class="place-row">
+      ? locs.map((s, i) => `<div class="place-row">
           <span class="place-name">${esc(s)}</span>
           <span class="place-acts">
+            <button type="button" class="iconbtn sm" data-place-up="${esc(s)}" aria-label="Move ${esc(s)} up" title="Move up"${i === 0 ? ' disabled' : ''}>${IC.up}</button>
+            <button type="button" class="iconbtn sm" data-place-down="${esc(s)}" aria-label="Move ${esc(s)} down" title="Move down"${i === locs.length - 1 ? ' disabled' : ''}>${IC.down}</button>
             <button type="button" class="iconbtn sm" data-place-edit="${esc(s)}" aria-label="Rename ${esc(s)}" title="Rename">${IC.edit}</button>
             <button type="button" class="iconbtn sm" data-place-del="${esc(s)}" aria-label="Remove ${esc(s)}" title="Remove">${IC.trash}</button>
           </span></div>`).join('')
@@ -6360,7 +6628,9 @@ async function renderSettings() {
     const add = e.target.closest('[data-place="add"]');
     const edit = e.target.closest('[data-place-edit]');
     const del = e.target.closest('[data-place-del]');
-    if (!add && !edit && !del) return;
+    const up = e.target.closest('[data-place-up]');
+    const down = e.target.closest('[data-place-down]');
+    if (!add && !edit && !del && !up && !down) return;
       // Re-read before changing anything. A list is shared, so this screen may have
       // been open while the other device added to it — and an edit that started
       // from a stale copy would write that copy back and delete what it never saw.
@@ -6385,6 +6655,20 @@ async function renderSettings() {
       if (!confirm(`Remove “${name}” from the list of places?\n\nItems already stored there keep their label; this just takes it off the standard list.`)) return;
       await removeStorageLoc(name);
       drawPlaces();
+    } else if (up || down) {
+      // A reorder is the one edit here that IS the whole list, so it writes the
+      // whole list — after the re-read above, so a place added on the other device
+      // is carried along rather than deleted by this screen's older copy.
+      const name = (up || down).dataset.placeUp || (up || down).dataset.placeDown;
+      const list = loadStorageLocs();
+      const i = list.findIndex((s) => s.toLowerCase() === (name || '').toLowerCase());
+      const to = i + (up ? -1 : 1);
+      if (i < 0 || to < 0 || to >= list.length) return;
+      const [row] = list.splice(i, 1);
+      list.splice(to, 0, row);
+      await saveStorageLocs(list);
+      drawPlaces();   // no render(): nothing else on this screen shows the order, and
+                      // re-rendering Settings would throw away the scroll position
     }
   });
 
@@ -6392,7 +6676,7 @@ async function renderSettings() {
   // The "Save as preset" button; start a new trip from one on Home.
   const presetCard = h(`<div class="card block">
     <h2>Trip presets</h2>
-    <p class="muted">Saved trip setups — the activities and conditions, not the dates or packed items. Start a new trip from one on the <b>Home</b> screen; save a new one from any trip via its <b>Save as preset</b> button.</p>
+    <p class="muted">A preset is a <b>saved answer sheet for the Home builder</b> — which activities you tick plus every trip setting (transport, season, catering, weather, laundry). It holds <b>no items</b>: the gear still comes from your <b>templates</b>. Start a new trip from one on the <b>Home</b> screen; save a new one from any trip via its <b>Save as preset</b> button. Changing or deleting a preset never touches a trip you already made.</p>
     <div class="snap-list" data-presets></div>
   </div>`);
   const drawPresets = () => {
@@ -6549,7 +6833,7 @@ async function renderSettings() {
   // ---- When: the phases of a pack, in timeline order ----
   const phaseCard = h(`<div class="card block">
     <h2>When</h2>
-    <p class="muted">The stages of a pack, in the order they happen — set on an item as its <b>When</b>, and the headings your packing list and <b>Packing Mode</b> are built from. Give each one an <b>emoji</b> and a <b>colour</b>, rename it, drag it up or down the timeline, or add your own. <b>Days ahead</b> is when the app starts nudging you to pack it. Unlike your People, Owners and Conditions, <b>this list syncs</b> between your devices — it has to, because every item points into it.</p>
+    <p class="muted">The stages of a pack, in the order they happen — set on an item as its <b>When</b>, and the headings your packing list and <b>Packing Mode</b> are built from. Give each one an <b>emoji</b> and a <b>colour</b>, rename it, drag it up or down the timeline, or add your own. <b>Days ahead</b> is when the app starts nudging you to pack it. Unlike your People, Owners and Item conditions, <b>this list syncs</b> between your devices — it has to, because every item points into it.</p>
     <div class="phase-list" data-phases></div>
     <div class="btnrow">
       <button class="btn" data-phase="add">${IC.plus}<span>Add phase</span></button>
@@ -6675,10 +6959,15 @@ async function renderSettings() {
     }
   });
 
-  // ---- Conditions: the wear/lifecycle ratings an item can carry ----
+  // ---- Item conditions: the wear/lifecycle ratings an item can carry ----
+  //
+  // Called "Item conditions" on screen since v125, not "Conditions": the app uses
+  // the word twice — this list grades how worn a thing is, while an item's
+  // "only include this item when…" rules are conditions too. The longer name says
+  // which one you are looking at without having to read the paragraph under it.
   const condCard = h(`<div class="card block">
-    <h2>Conditions</h2>
-    <p class="muted">How you grade the gear you own — set on an item under <b>Details &amp; ownership</b>. Rename them, reorder them (the order here is the order in every dropdown), or add your own. <b>Badge</b> decides whether the rating shows on item rows and how loudly; <b>needs replacing</b> makes it feed the <b>shopping list</b> and show the replace prompt, so a condition you invent can do that job too.</p>
+    <h2>Item conditions</h2>
+    <p class="muted">How you grade the gear you own — set on an item under <b>Details &amp; ownership</b> as its <b>Item condition</b>. Rename them, reorder them (the order here is the order in every dropdown), or add your own. <b>Badge</b> decides whether the rating shows on item rows and how loudly; <b>needs replacing</b> makes it feed the <b>shopping list</b> and show the replace prompt, so a condition you invent can do that job too. <em>(Not to be confused with an item’s “only include this item when…” rules — those decide whether a thing comes on a trip at all.)</em></p>
     <div class="cond-list" data-conds></div>
     <div class="btnrow">
       <button class="btn" data-cond="add">${IC.plus}<span>Add condition</span></button>
@@ -7239,7 +7528,7 @@ async function addPreset(name, ev) {
     createdAt: new Date().toISOString(), config: presetConfigFromEvent(ev),
   };
   if (!sharedStored('presets')) await savePresets([...loadPresets().filter((p) => p.id !== preset.id), preset]);
-  else await putShared(presetsToRows([preset]));
+  else await putShared(appendedShared('presets', presetsToRows([preset])));
   return preset;
 }
 async function deletePreset(pid) {
@@ -7410,9 +7699,10 @@ function phasesSummary() {
 
 // Is the roster a real list yet, or still being derived from what's in use?
 function ownersCustomised() { return sharedCustomised('owners'); }
-// The one-line state for the Settings fold: who is on the list.
+// The one-line state for the Settings fold: who is on the list, biggest owner
+// first — the same order as the list inside, so the summary previews it honestly.
 function ownersSummary() {
-  const names = ownerNames();
+  const names = ownersByUsage(ownerNames(), ownerUsage());
   if (!names.length) return 'None yet — whose each thing is';
   const shown = names.slice(0, 4).join(', ');
   return names.length > 4 ? `${names.length} owners · ${shown}…` : shown;
@@ -7442,7 +7732,7 @@ async function addOwnerByName(suggest = '') {
   const existing = ownerNames().find((n) => normName(n) === normName(name));
   if (existing) return existing;
   if (!sharedStored('owners')) await saveOwners([...loadOwners(), name]);
-  else await putShared(namesToRows('owners', [name]));
+  else await putShared(appendedShared('owners', namesToRows('owners', [name])));
   return name;
 }
 // How many items each owner has, counted by the stable item id so an item in five
@@ -7622,8 +7912,11 @@ function buildOwnersEditor({ onChanged } = {}) {
   const changes = new Map();
   const box = el.querySelector('[data-owners]');
   const draw = () => {
-    const names = ownerNames();
     const use = ownerUsage();
+    // Most-owned first (v125). The dropdowns stay A–Z — you go there knowing the
+    // name you want — but this list is where you come to see whose most of it is,
+    // so it ranks by how many items each name actually holds, ties A–Z.
+    const names = ownersByUsage(ownerNames(), use);
     box.innerHTML = names.length ? names.map((n) => {
       const c = use.get(normName(n)) || 0;
       return `<div class="owner-row" data-owner-name="${esc(n)}">

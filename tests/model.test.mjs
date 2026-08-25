@@ -36,6 +36,8 @@ import {
   conditionsToRows, conditionsFromRows, peopleToRows, peopleFromRows,
   namesToRows, namesFromRows, presetsToRows, presetsFromRows,
   sharedRowsFrom, defaultListFor, isFactoryList,
+  orderedNamesFromRows, ownersByUsage,
+  monthKey, shiftMonth, monthGrid, rangeCellState, orderRange,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -2643,4 +2645,121 @@ test('sharedRowsFrom: every kind builds rows, and an unknown kind builds none', 
     assert.ok(rows.every((r) => r.kind === kind && r.id.startsWith(`${kind}:`)), kind);
   }
   assert.deepEqual(sharedRowsFrom('phases', [{ id: 'x', label: 'X' }]), []);
+});
+
+// ---------- v125: the trip date picker's calendar ----------
+
+test('monthKey: a real date gives its month, anything else gives nothing', () => {
+  assert.equal(monthKey('2026-09-12'), '2026-09');
+  assert.equal(monthKey('2026-09-12T10:00:00Z'), '2026-09');
+  assert.equal(monthKey(''), '');
+  assert.equal(monthKey('not a date'), '');
+  assert.equal(monthKey('2026-13-01'), '');   // month 13 is not a month
+});
+
+test('shiftMonth: steps months and rolls the year over both ways', () => {
+  assert.equal(shiftMonth('2026-09', 1), '2026-10');
+  assert.equal(shiftMonth('2026-12', 1), '2027-01');
+  assert.equal(shiftMonth('2026-01', -1), '2025-12');
+  assert.equal(shiftMonth('2026-06', 0), '2026-06');
+  assert.equal(shiftMonth('2026-01', -13), '2024-12');
+  assert.equal(shiftMonth('nonsense', 1), '');
+});
+
+test('monthGrid: always 42 cells, starting on the chosen weekday, in UTC', () => {
+  // 1 Sept 2026 is a Tuesday, so a Monday-first grid leads with 31 August.
+  const g = monthGrid('2026-09', 1);
+  assert.equal(g.days.length, 42);
+  assert.equal(g.days[0].iso, '2026-08-31');
+  assert.equal(g.days[0].inMonth, false);
+  assert.equal(g.days[1].iso, '2026-09-01');
+  assert.equal(g.days[1].inMonth, true);
+  assert.equal(g.days.filter((d) => d.inMonth).length, 30);
+  // Sunday-first shifts the whole grid one day earlier.
+  assert.equal(monthGrid('2026-09', 0).days[0].iso, '2026-08-30');
+  // Every cell is exactly one day after the last — no gaps, no repeats, and no
+  // daylight-saving hiccup, which is the whole reason this is UTC arithmetic.
+  for (let i = 1; i < g.days.length; i += 1) {
+    const step = Date.parse(`${g.days[i].iso}T00:00:00Z`) - Date.parse(`${g.days[i - 1].iso}T00:00:00Z`);
+    assert.equal(step, 86400000, `${g.days[i - 1].iso} -> ${g.days[i].iso}`);
+  }
+  assert.deepEqual(monthGrid('rubbish').days, []);
+});
+
+test('monthGrid: a month starting exactly on the week start needs no lead-in', () => {
+  // 1 June 2026 is a Monday.
+  assert.equal(monthGrid('2026-06', 1).days[0].iso, '2026-06-01');
+  // February in a leap year still fills 42 cells.
+  assert.equal(monthGrid('2028-02', 1).days.filter((d) => d.inMonth).length, 29);
+});
+
+test('rangeCellState: paints the two ends, the days between, and nothing else', () => {
+  assert.equal(rangeCellState('2026-09-12', '2026-09-12', '2026-09-19'), 'start');
+  assert.equal(rangeCellState('2026-09-19', '2026-09-12', '2026-09-19'), 'end');
+  assert.equal(rangeCellState('2026-09-15', '2026-09-12', '2026-09-19'), 'between');
+  assert.equal(rangeCellState('2026-09-20', '2026-09-12', '2026-09-19'), '');
+  assert.equal(rangeCellState('2026-09-11', '2026-09-12', '2026-09-19'), '');
+  // A start with no end yet, and a same-day trip, are both a single round cell —
+  // 'start' would draw a flat right edge leading into a range that isn't there.
+  assert.equal(rangeCellState('2026-09-12', '2026-09-12', ''), 'only');
+  assert.equal(rangeCellState('2026-09-12', '2026-09-12', '2026-09-12'), 'only');
+  assert.equal(rangeCellState('2026-09-13', '2026-09-12', ''), '');
+  assert.equal(rangeCellState('2026-09-12', '', ''), '');
+});
+
+test('orderRange: two taps become a trip, whichever order they came in', () => {
+  assert.deepEqual(orderRange('2026-09-12', '2026-09-19'), ['2026-09-12', '2026-09-19']);
+  // Tapping an earlier day second is a correction, not an error.
+  assert.deepEqual(orderRange('2026-09-19', '2026-09-12'), ['2026-09-12', '2026-09-19']);
+  assert.deepEqual(orderRange('2026-09-12', '2026-09-12'), ['2026-09-12', '2026-09-12']);
+  assert.deepEqual(orderRange('2026-09-12', ''), ['2026-09-12', '']);
+  assert.deepEqual(orderRange('', '2026-09-12'), ['2026-09-12', '']);
+  assert.deepEqual(orderRange('', ''), ['', '']);
+});
+
+test('the picker and nightsBetween agree on what a range means', () => {
+  const [a, b] = orderRange('2026-09-19', '2026-09-12');
+  assert.equal(nightsBetween(a, b), 7);
+  assert.equal(nightsBetween(...orderRange('2026-09-12', '2026-09-12')), 0);
+});
+
+// ---------- v125: list ordering in Settings ----------
+
+test('orderedNamesFromRows: storage places keep the order they are stored in', () => {
+  const rows = namesToRows('places', ['Garage', 'Bedroom wardrobe', 'Loft / attic']);
+  // The A–Z reader is unchanged — the Owner dropdowns still rely on it.
+  assert.deepEqual(namesFromRows(rows, 'places'), ['Bedroom wardrobe', 'Garage', 'Loft / attic']);
+  // The ordered reader hands back what was written, which is what the ▲▼ set.
+  assert.deepEqual(orderedNamesFromRows(rows, 'places'), ['Garage', 'Bedroom wardrobe', 'Loft / attic']);
+  assert.deepEqual(orderedNamesFromRows(rows, 'owners'), []);
+});
+
+test('orderedNamesFromRows: two devices appending at the same order still agree', () => {
+  // Both devices append, so two rows genuinely can share an `order`; the id
+  // tiebreak in sharedRowsOfKind is what stops them being sorted differently on
+  // each device and then written back at each other.
+  const rows = [
+    { kind: 'places', key: 'shed', name: 'Shed', order: 3 },
+    { kind: 'places', key: 'boat locker', name: 'Boat locker', order: 3 },
+    { kind: 'places', key: 'garage', name: 'Garage', order: 1 },
+  ];
+  assert.deepEqual(orderedNamesFromRows(rows, 'places'), ['Garage', 'Boat locker', 'Shed']);
+  assert.deepEqual(orderedNamesFromRows([...rows].reverse(), 'places'), ['Garage', 'Boat locker', 'Shed']);
+});
+
+test('ownersByUsage: the biggest owner comes first, ties settle A–Z', () => {
+  const counts = new Map([['martin', 300], ['anna', 120], ['shared', 120], ['the kids', 0]]);
+  assert.deepEqual(
+    ownersByUsage(['The kids', 'Shared', 'Anna', 'Martin'], counts),
+    ['Martin', 'Anna', 'Shared', 'The kids'],
+  );
+  // A name nobody owns anything under still appears — it just sinks.
+  assert.deepEqual(ownersByUsage(['Bengt', 'Martin'], counts), ['Martin', 'Bengt']);
+  // Counts are matched case-insensitively, the same way the roster de-duplicates.
+  assert.deepEqual(ownersByUsage(['anna', 'MARTIN'], counts), ['MARTIN', 'anna']);
+  // No counts at all is simply A–Z, so an empty catalogue reads sensibly.
+  assert.deepEqual(ownersByUsage(['Shared', 'Anna'], new Map()), ['Anna', 'Shared']);
+  assert.deepEqual(ownersByUsage([], counts), []);
+  // A plain object works as well as a Map — the helper shouldn't care.
+  assert.deepEqual(ownersByUsage(['Anna', 'Martin'], { martin: 5, anna: 1 }), ['Martin', 'Anna']);
 });
