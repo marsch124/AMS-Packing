@@ -37,7 +37,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v121';
+const APP_VERSION = 'v122';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4558,7 +4558,7 @@ function allItemsSection(lists) {
       <h2>${IC.list}<span>All items</span></h2>
       <button class="btn ghost sm" type="button" data-ai-add>${IC.plus}<span>New item</span></button>
     </div>
-    <p class="ai-hint">Jump to any item to set where it’s stored, add a photo, or plan its maintenance.</p>
+    <p class="ai-hint">Jump to any item to set where it’s stored, add a photo, or plan its maintenance. An item that belongs to <b>several templates</b> gets a line for each — the template’s name is on the line — because what it packs into can differ between them. It is still <b>one item</b>: edit it on any line and every template follows.</p>
     <form class="ai-addform hidden" data-ai-form>
       <div class="row2">
         <label class="field"><span>Add to</span>${selectHtml('ai-list', [
@@ -4674,11 +4674,23 @@ function allItemsSection(lists) {
 
     listEl.innerHTML = '';
     if (!shown.length) {
-      countEl.textContent = flat.length ? `0 of ${flat.length} items` : 'No items yet';
+      countEl.textContent = flat.length
+        ? `0 of ${new Set(flat.map((r) => r.it._itemId || r.it.id)).size} items`
+        : 'No items yet';
       listEl.appendChild(h(`<div class="empty"><p class="empty-s">${flat.length ? 'No items match your search.' : 'Nothing here yet — add an item to a template and it will appear.'}</p></div>`));
       return;
     }
-    const head = (q || anyFilter()) ? `${shown.length} of ${flat.length} items` : `${flat.length} items`;
+    // Rows are not items. A row is one item AS IT SITS IN ONE TEMPLATE, so an item in
+    // Bike and Run has two — which reads as a duplicate unless the count says
+    // otherwise. Martin reported "several instances of the same item" once before
+    // (v108) and his catalogue was clean then too; the wording was what misled him.
+    const distinct = (rs) => new Set(rs.map((r) => r.it._itemId || r.it.id)).size;
+    const nAll = distinct(flat);
+    const nShown = distinct(sorted);
+    const lines = (n) => `${n} line${n === 1 ? '' : 's'}`;
+    const head = (q || anyFilter())
+      ? `${nShown} of ${nAll} items · ${lines(shown.length)}`
+      : (flat.length === nAll ? `${nAll} items` : `${nAll} items · ${lines(flat.length)}`);
 
     if (!gd.key) {
       countEl.textContent = head;
@@ -5253,6 +5265,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v122', '2026-08-25 · 18:00 UTC', false, 'The All items list stops looking as if you had duplicates',
+      'From your v121 field check: grouping <b>Care → All items</b> by <b>Whose it is</b> showed <b>“Sports bra.”</b> twice — once marked <b>Bike</b>, once <b>Run</b>. Nothing is duplicated. That list shows <b>one line per template an item belongs to</b>, because what an item packs into can differ from one template to the next — the same sports bra might go in the duffel for Run and a pannier for Bike, and you need to see and set both. It is <b>one item</b>: edit it on either line and every template follows. What was actually wrong was the <b>counting</b>. The header said <b>“538 items”</b> when you have <b>431</b> — 538 was the number of <em>lines</em>. So it now says <b>“431 items · 538 lines”</b>, and the note above the list explains that an item in several templates gets a line for each, with the template’s name on the line. You raised exactly this once before, in v108 (“it seems as if several instances of the same item is stored”) — your catalogue was clean then too, and the wording was what misled you both times. This time the wording is fixed.',
+      'The list no longer suggests you have hundreds of duplicates to clean up. You do not.'),
     v('v121', '2026-08-25 · 16:30 UTC', false, 'Fixes v120: the iPhone was only getting the newest entry',
       '<b>What went wrong.</b> After v120 your iPhone showed <b>one</b> storage place and <b>one</b> condition — in each case the one you had just added on the Mac — while the Mac still showed everything. Nothing was lost: your account held the full set the whole time (I checked: 6 conditions, 16 places, 3 owners, 2 people), and so did the Mac. Only the iPhone’s own copy was short. <b>Why.</b> The syncing system keeps a note of which tables it has already done a first, complete download of. v120 added a new table for these lists, and a device that was <em>already</em> syncing does that first download the next time it connects — but your iPhone got there before the Mac had put anything in it. So it downloaded nothing, ticked the table off as done, and from then on only ever received <b>changes</b>. The two entries you made during the field check were changes; the twenty-five that already existed were not. (The same trap cost you the When list in v118: “in sync” describes the database as a whole, never a table that was made seconds ago.) <b>The fix</b> is in two parts. First, each device now <b>forgets that this table was ever synced and downloads it again from scratch, once</b> — sending anything it holds up first, so nothing can be lost either way. Second, and more important: <b>a save can no longer delete an entry just because it wasn’t on the list it was holding.</b> Removal is now something the app has to name explicitly — this rename, this deletion, this reset. That matters because the short list on your iPhone was one edit away from becoming the real one: had you changed anything there, the missing five conditions would have been deleted for both devices. Now they could not have been.',
       'Both devices end up with the full set — and a device that has an incomplete picture can no longer impose it on the other one.'),
