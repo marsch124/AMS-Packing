@@ -19,6 +19,7 @@ import {
   buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
   id as newId, isPhotoRef, inlinePhotos, looksLikeEmail, ownerNameFromEmail,
   DEFAULT_PHASES, PHASES, coercePhase, setPhases,
+  SHARED_KINDS, coerceSharedRow, sharedRowsOfKind, sharedRowsFrom, isFactoryList,
   templateDefaults, containerDefaultsFrom, planContainerMigration,
 } from './model.js';
 import { seedLists } from './seed.js';
@@ -30,7 +31,9 @@ const DB_NAME = 'ams-packing-list';
 // hand-built database went up to 6; adopting it is therefore a normal upgrade.
 // Bump this (not the old DB_VERSION) when the SCHEMA below changes.
 // v2 (v118): adds the `phases` store — purely additive, so nothing is rebuilt.
-const DEXIE_VERSION = 2;
+// v3 (v120): adds the `shared` store (the five author-made Settings lists) —
+// also purely additive.
+const DEXIE_VERSION = 3;
 const ITEMS = 'items';
 const MEMBERSHIPS = 'memberships';
 const TEMPLATES = 'templates';
@@ -38,6 +41,7 @@ const EVENTS = 'events';
 const ACTIONS = 'actions';          // standalone to-do store (tied-to-item or loose)
 const KITS = 'kits';                // reusable bundles of items always packed together
 const PHASES_STORE = 'phases';      // the editable "When" timeline — SYNCED, unlike the other lists
+const SHARED = 'shared';            // the five lists you AUTHOR (conditions, presets, people, owners, places) — SYNCED
 const SNAPSHOTS = 'snapshots';      // automatic on-device backup snapshots (a ring buffer)
 const PHOTOS = 'photos';            // item images, held once and referenced by id from items
 const LISTS = 'lists';              // legacy v1 store — read once to migrate, then ignored
@@ -59,6 +63,7 @@ const SCHEMA = {
   [ACTIONS]: 'id',
   [KITS]: 'id',
   [PHASES_STORE]: 'id',
+  [SHARED]: 'id',
   [SNAPSHOTS]: 'id',
   [PHOTOS]: 'id',
 };
@@ -147,6 +152,12 @@ export async function resetFromCloud() {
   // (The phases table is cleared below with everything else. Nothing to reset for
   // it: since v119 the timeline is never seeded into the database — an empty table
   // simply means "the factory seven", read from the code.)
+  //
+  // The five author-made lists are cleared too, and are then taken from the account
+  // like everything else. Mark them adopted so this device does NOT offer up the
+  // pre-v120 copies still sitting in its localStorage: that would push a list the
+  // user has deliberately discarded straight back into the account.
+  markAdopted(SHARED_KINDS);
   const db = await open();
   // Signing out must never be able to strand the reset. `logout()` can hang
   // (offline, or already signed out), and an un-awaited hang here would leave the
@@ -605,6 +616,149 @@ export async function ensurePhases() {
 // changed the list is never working from a stale copy — writing one back would
 // delete rows this device had simply never seen.
 export async function refreshPhases() { return ensurePhases(); }
+
+// --- The five author-made Settings lists ------------------------------------
+//
+// Conditions · Trip presets · People · Owners · Storage places, all in the one
+// `shared` store, one row per ENTRY. The shape and the reasoning are in model.js;
+// this is only the storage. Two rules govern everything below:
+//
+//  1. NOTHING IS EVER SEEDED HERE. A kind with no rows means "the factory list,
+//     from the code". Writing defaults into shared data is what destroyed the
+//     customised timeline in v118 — see `ensurePhases` above for the full story.
+//  2. ADDING AND REMOVING ONE ENTRY WRITES ONE ROW. Only a genuine whole-list
+//     operation — a reorder, a reset, a restore — writes a list whole. That is
+//     what makes a stale screen harmless: it can no longer delete an entry added
+//     on the other device simply by saving the copy it happens to be holding.
+export async function getSharedRows() {
+  const raw = (await getAllRaw(SHARED).catch(() => [])) || [];
+  return raw.map((r, i) => coerceSharedRow(r, i)).filter((r) => r.kind && r.key && r.name);
+}
+// Write these rows and nothing else. Anything already in the store is untouched.
+export async function putSharedRows(rows) {
+  const clean = (Array.isArray(rows) ? rows : []).map((r, i) => coerceSharedRow(r, i))
+    .filter((r) => r.kind && r.key && r.name);
+  if (clean.length) {
+    const db = await open();
+    await db.table(SHARED).bulkPut(clean);
+    markAdopted([...adoptedKinds(), ...clean.map((r) => r.kind)]);
+  }
+  return getSharedRows();
+}
+// Remove these rows and nothing else. A real delete, so the removal propagates.
+export async function deleteSharedRows(ids) {
+  const clean = (Array.isArray(ids) ? ids : []).filter((x) => typeof x === 'string' && x);
+  if (clean.length) {
+    const db = await open();
+    await db.table(SHARED).bulkDelete(clean);
+    markAdopted([...adoptedKinds(), ...clean.map((id) => id.split(':')[0])]);
+  }
+  return getSharedRows();
+}
+// Replace one whole list: put every row it now has, and delete the rows of that
+// kind which are gone. For reorders, resets and restores — the operations that
+// really are about the list rather than about one entry. An empty list therefore
+// means "back to the factory version", stored as nothing at all.
+export async function replaceSharedKind(kind, list) {
+  if (!SHARED_KINDS.includes(kind)) return getSharedRows();
+  const rows = sharedRowsFrom(kind, list);
+  const db = await open();
+  const existing = (await getAllRaw(SHARED).catch(() => [])) || [];
+  const keep = new Set(rows.map((r) => r.id));
+  const gone = existing.filter((r) => r && r.kind === kind && r.id && !keep.has(r.id)).map((r) => r.id);
+  await db.transaction('rw', [SHARED], async () => {
+    if (gone.length) await db.table(SHARED).bulkDelete(gone);
+    if (rows.length) await db.table(SHARED).bulkPut(rows);
+  });
+  // Authoring the list supersedes whatever this device had before v120 — including
+  // when the list is written EMPTY (a reset, or the last entry removed). Without
+  // this, "no rows" would send the reader back to the pre-v120 fallback and the
+  // reset would look as though it had done nothing. Marked only once the write has
+  // actually gone through, so a failure leaves the fallback intact.
+  markAdopted([...adoptedKinds(), kind]);
+  return getSharedRows();
+}
+// Add only the rows this store hasn't got. Never overwrites, so a list arriving
+// from a backup — or from a device being adopted — can add to what is here and
+// can never quietly replace it.
+export async function addSharedRowsIfAbsent(rows) {
+  const have = new Set(((await getAllRaw(SHARED).catch(() => [])) || []).map((r) => r && r.id));
+  return putSharedRows((Array.isArray(rows) ? rows : []).filter((r) => r && !have.has(r.id)));
+}
+
+// --- Adopting this device's pre-v120 lists ----------------------------------
+//
+// Before v120 all five lists lived in localStorage. The keys are still read once,
+// so nothing anyone had is lost when the lists move into the account.
+const LEGACY_LIST_KEYS = {
+  conditions: 'ams-conditions',
+  presets: 'ams-trip-presets',
+  people: 'ams-people',
+  owners: 'ams-owners',
+  places: 'ams-storage-locations',
+};
+const SHARED_ADOPTED_KEY = 'ams-shared-lists';   // which kinds this device has already offered up
+function adoptedKinds() {
+  try {
+    const a = JSON.parse(localStorage.getItem(SHARED_ADOPTED_KEY) || '[]');
+    return Array.isArray(a) ? a.filter((k) => SHARED_KINDS.includes(k)) : [];
+  } catch { return []; }
+}
+function markAdopted(kinds) {
+  try { localStorage.setItem(SHARED_ADOPTED_KEY, JSON.stringify([...new Set(kinds)])); } catch { /* ignore */ }
+}
+// What this device had in localStorage for one list, or null once that copy has
+// been superseded — either because the list was adopted into the account, or
+// because it has since been authored here. Used twice: by the adoption below, and
+// by the app to keep showing your own list until it has been adopted.
+export function legacySharedList(kind) {
+  const key = LEGACY_LIST_KEYS[kind];
+  if (!key || adoptedKinds().includes(kind)) return null;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw == null) return null;
+    const a = JSON.parse(raw);
+    return Array.isArray(a) ? a : null;
+  } catch { return null; }
+}
+
+// Move this device's own lists into the account, once.
+//
+// Three guards, each of which has a v118-shaped disaster behind it:
+//
+//  • NEVER MIGRATE BLIND. On a signed-in device the store is empty for the first
+//    second or two no matter what the account holds, and writing this device's
+//    copy into that gap is precisely how a customised list gets replaced by a
+//    stale one. If the first sync doesn't land, nothing is marked and we simply
+//    try again next launch.
+//  • NEVER ADOPT A FACTORY LIST. If this device's list is still exactly what the
+//    app ships, it is not data — it is the default, and the default lives in the
+//    code. Writing it up would plant seven rows for the other device's real ones
+//    to collide with.
+//  • NEVER OVERWRITE. Only rows the store hasn't got are added, so the first
+//    device to arrive sets the list and a second one can add to it but never
+//    replace it.
+export async function migrateSharedLists() {
+  const done = adoptedKinds();
+  const todo = SHARED_KINDS.filter((k) => !done.includes(k));
+  if (!todo.length) return { added: 0, kinds: [] };
+  if (await isSignedIn()) {
+    if (!(await awaitFirstSync(12000))) return { added: 0, kinds: [], waiting: true };
+  }
+  const have = await getSharedRows();
+  const add = [];
+  const kinds = [];
+  for (const kind of todo) {
+    const local = legacySharedList(kind);
+    if (!local || !local.length || isFactoryList(kind, local)) continue;
+    const known = new Set(sharedRowsOfKind(have, kind).map((r) => r.id));
+    const rows = sharedRowsFrom(kind, local).filter((r) => !known.has(r.id));
+    if (rows.length) { add.push(...rows); kinds.push(kind); }
+  }
+  if (add.length) await putSharedRows(add);
+  markAdopted([...done, ...todo]);
+  return { added: add.length, kinds };
+}
 
 // The raw catalog items (the shared "thing itself" records), for screens that
 // need every item once — e.g. the central Actions list resolving item names,

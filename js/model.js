@@ -865,6 +865,203 @@ export function assignedPeople(entries) {
   return out;
 }
 
+// --- The five author-made Settings lists, in ONE shared store ---------------
+//
+// Conditions · Trip presets · People · Owners · Storage places.
+//
+// Until v120 each of these lived in the browser's localStorage, which meant a list
+// you AUTHORED on the Mac simply did not exist on the iPhone. That showed up
+// differently in each one, and all five were real:
+//   • a condition invented on one device reached the other as raw text — the ITEM
+//     carries the condition's id, and only the list holds its readable name;
+//   • a trip preset saved on one was absent on the other with nothing to hint at
+//     it, and nothing else in the data refers to a preset, so it could not heal;
+//   • a person could be blue here and green there, because only the NAME travels
+//     on a trip line and the colour lives in the roster;
+//   • owners and storage places self-heal (both are plain text on the item), but
+//     “Bedroom wardrobe” describes one house, not one device.
+//
+// The line drawn, deliberately: LISTS YOU AUTHOR SYNC; HOW A DEVICE LOOKS AND
+// BEHAVES DOES NOT. The theme, the view mode, which Settings folds are open and
+// this device's own backup dates all stay exactly where they were.
+//
+// All five share ONE store, and — the part that matters — ONE ROW PER ENTRY
+// rather than one row per list. A row is the unit the sync merges, so a person
+// added here and a place added there both survive. Holding a whole list in a
+// single record would make the last device to save win outright and drop the
+// other's additions without a trace.
+//
+// The row is deliberately plain:
+//   id     `${kind}:${key}` — STABLE, so two devices that add “Garage shelf”
+//          independently land on the SAME key and merge instead of doubling it
+//          (the 880-item lesson). Never a random id.
+//   kind   which of the five lists the row belongs to
+//   key    its identity within that list: the normalised NAME for the name-keyed
+//          lists; for a condition, its own slug id
+//   name   the display spelling
+//   order  position, for the lists where order is something you set
+//   data   everything else, NESTED — so no field of ours can ever collide with the
+//          `owner` and `realmId` properties the sync addon reserves for itself.
+//          See what that collision cost in v117: 422 items stamped with an e-mail.
+//
+// 🚨 NOTHING IS EVER SEEDED INTO THIS STORE. The factory conditions, the factory
+// people and the standard storage places live in the CODE; a kind with no rows
+// means “use the defaults”, and your first real edit is what writes rows. v118
+// seeded factory phases into shared data using stable ids and they landed exactly
+// on top of Martin's customised rows and replaced them — stable ids prevent
+// duplication precisely BY overwriting. Same mechanism, so: never seed.
+export const SHARED_KINDS = Object.freeze(['conditions', 'presets', 'people', 'owners', 'places']);
+
+// The starter roster. In the CODE only — an account that has never edited People
+// stores no rows at all, and both devices show these two straight from here.
+export const DEFAULT_PEOPLE = Object.freeze([
+  Object.freeze({ name: 'Martin', color: PERSON_COLORS[0] }),
+  Object.freeze({ name: 'Anna', color: PERSON_COLORS[1] }),
+]);
+
+export function sharedRowId(kind, key) { return `${kind}:${normName(key)}`; }
+
+export function coerceSharedRow(r, i = 0) {
+  const o = (r && typeof r === 'object') ? r : {};
+  const kind = SHARED_KINDS.includes(o.kind) ? o.kind : '';
+  const key = normName(o.key).slice(0, 60);
+  const data = (o.data && typeof o.data === 'object' && !Array.isArray(o.data)) ? o.data : {};
+  return {
+    id: (typeof o.id === 'string' && o.id) ? o.id : sharedRowId(kind, key),
+    kind,
+    key,
+    name: String(o.name ?? '').trim().slice(0, 80),
+    order: Number.isFinite(Number(o.order)) ? Number(o.order) : i,
+    data,
+  };
+}
+
+// The rows of one list, in a settled order. The id tiebreak is load-bearing, not
+// tidiness: two devices both append, so two rows genuinely can share an `order`,
+// and without a deterministic second key each device would sort them differently
+// and then write that disagreement back at the other.
+export function sharedRowsOfKind(rows, kind) {
+  return asArray(rows)
+    .map((r, i) => coerceSharedRow(r, i))
+    .filter((r) => r.kind === kind && r.key && r.name)
+    .sort((a, b) => (a.order - b.order) || a.id.localeCompare(b.id));
+}
+
+// --- conditions ---
+// The key is the condition's slug id, but `data.cid` holds it VERBATIM as well:
+// that id is stamped on every item, so it has to survive the round trip exactly,
+// whatever normalising the key needed.
+export function conditionsToRows(list) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of asArray(list)) {
+    const c = coerceCondition(raw);
+    if (!c.id || !c.label || seen.has(normName(c.id))) continue;
+    seen.add(normName(c.id));
+    out.push(coerceSharedRow({
+      kind: 'conditions', key: c.id, name: c.label, order: out.length,
+      data: { tone: c.tone, replace: c.replace, cid: c.id },
+    }, out.length));
+  }
+  return out;
+}
+export function conditionsFromRows(rows) {
+  return sharedRowsOfKind(rows, 'conditions')
+    .map((r) => coerceCondition({ id: r.data.cid || r.key, label: r.name, tone: r.data.tone, replace: r.data.replace }));
+}
+
+// --- people ---
+export function peopleToRows(list) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of asArray(list)) {
+    const p = coercePerson({ ...(raw && typeof raw === 'object' ? raw : {}) });
+    if (!p.name || seen.has(normName(p.name))) continue;
+    seen.add(normName(p.name));
+    out.push(coerceSharedRow({
+      kind: 'people', key: p.name, name: p.name, order: out.length, data: { color: p.color },
+    }, out.length));
+  }
+  return out;
+}
+export function peopleFromRows(rows) {
+  // The person's `id` is the ROW's id, so it is the same on both devices — the
+  // Settings list addresses its rows by it.
+  return sharedRowsOfKind(rows, 'people')
+    .map((r) => coercePerson({ id: r.id, name: r.name, color: r.data.color }));
+}
+
+// --- owners & storage places (name-only lists) ---
+export function namesToRows(kind, names) {
+  const seen = new Set();
+  const out = [];
+  for (const v of asArray(names)) {
+    const name = String(typeof v === 'string' ? v : (v && v.name) || '').trim();
+    const key = normName(name);
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    out.push(coerceSharedRow({ kind, key, name, order: out.length }, out.length));
+  }
+  return out;
+}
+// Always A–Z, which is the order both of these lists have always been shown in.
+export function namesFromRows(rows, kind) {
+  return sharedRowsOfKind(rows, kind).map((r) => r.name).sort((a, b) => a.localeCompare(b));
+}
+
+// --- trip presets ---
+// Keyed by the normalised NAME, which quietly gives “Save as preset” the same
+// replace-the-same-name behaviour it always had: the second save lands on the
+// first one's key.
+export function presetsToRows(list) {
+  const seen = new Set();
+  const out = [];
+  for (const p of asArray(list)) {
+    const name = String((p && p.name) || '').trim();
+    if (!name || !p.config || seen.has(normName(name))) continue;
+    seen.add(normName(name));
+    out.push(coerceSharedRow({
+      kind: 'presets', key: name, name, order: out.length,
+      data: { config: p.config, createdAt: String((p && p.createdAt) || '') },
+    }, out.length));
+  }
+  return out;
+}
+export function presetsFromRows(rows) {
+  return sharedRowsOfKind(rows, 'presets')
+    .filter((r) => r.data && r.data.config)
+    .map((r) => ({ id: r.id, name: r.name, createdAt: r.data.createdAt || '', config: r.data.config }));
+}
+
+// One list → its rows, whichever of the five it is.
+export function sharedRowsFrom(kind, list) {
+  if (kind === 'conditions') return conditionsToRows(list);
+  if (kind === 'people') return peopleToRows(list);
+  if (kind === 'presets') return presetsToRows(list);
+  if (kind === 'owners' || kind === 'places') return namesToRows(kind, list);
+  return [];
+}
+// The factory list for a kind, or [] where there isn't one (nobody ships you a
+// trip preset, and the owners list is derived from your own data).
+export function defaultListFor(kind) {
+  if (kind === 'conditions') return DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c }));
+  if (kind === 'people') return DEFAULT_PEOPLE.map((p) => ({ ...p }));
+  if (kind === 'places') return DEFAULT_STORAGE_LOCATIONS.slice();
+  return [];
+}
+// Is this list still exactly what the app ships? The one question that decides
+// whether a list is worth writing into shared data at all — see the seeding note
+// at the top of this section.
+export function isFactoryList(kind, list) {
+  const def = defaultListFor(kind);
+  if (!def.length) return false;
+  const a = sharedRowsFrom(kind, list);
+  const b = sharedRowsFrom(kind, def);
+  if (a.length !== b.length) return false;
+  return a.every((r, i) => r.id === b[i].id && r.name === b[i].name
+    && JSON.stringify(r.data) === JSON.stringify(b[i].data));
+}
+
 export function newItem(partial = {}) {
   return coerceItem({
     id: id(),

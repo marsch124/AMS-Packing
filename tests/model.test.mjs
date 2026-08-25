@@ -32,6 +32,10 @@ import {
   looksLikeEmail, ownerNameFromEmail,
   PHASES, DEFAULT_PHASES, setPhases, coercePhase, newPhase, phasesCustomised,
   phaseOrFallback, phaseLeadDays, phaseEmoji, defaultPhaseId, phaseOrder,
+  SHARED_KINDS, DEFAULT_PEOPLE, DEFAULT_STORAGE_LOCATIONS, sharedRowId, coerceSharedRow, sharedRowsOfKind,
+  conditionsToRows, conditionsFromRows, peopleToRows, peopleFromRows,
+  namesToRows, namesFromRows, presetsToRows, presetsFromRows,
+  sharedRowsFrom, defaultListFor, isFactoryList,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -2531,4 +2535,112 @@ test('setPhases: a tie on order is broken deterministically, so two devices agre
     assert.deepEqual(orderOf(a), orderOf(b));
     assert.deepEqual(orderOf(a), ['alpha', 'zulu']);
   } finally { setPhases(DEFAULT_PHASES.map((p) => ({ ...p }))); }
+});
+
+// --- The five shared Settings lists (v120) ----------------------------------
+
+test('sharedRowId: two devices adding the same name land on the same key', () => {
+  // The whole reason ids are built from the name rather than generated: this is
+  // what makes two devices MERGE a list instead of doubling it.
+  assert.equal(sharedRowId('places', 'Garage shelf'), sharedRowId('places', '  garage   SHELF '));
+  assert.equal(sharedRowId('places', 'Garage shelf'), 'places:garage shelf');
+  assert.notEqual(sharedRowId('places', 'Garage'), sharedRowId('owners', 'Garage'));
+});
+
+test('conditions: a round trip keeps the id items are stamped with, verbatim', () => {
+  const list = [
+    { id: 'good', label: 'Good', tone: '', replace: false },
+    { id: 'borrowed-from-anna', label: 'Borrowed', tone: 'warn', replace: false },
+    { id: 'failing', label: 'Failing', tone: 'danger', replace: true },
+  ];
+  const back = conditionsFromRows(conditionsToRows(list));
+  assert.deepEqual(back, list);
+  // The id survives even when the key had to be normalised to build the row.
+  const odd = conditionsFromRows(conditionsToRows([{ id: 'Mixed Case', label: 'Odd' }]));
+  assert.equal(odd[0].id, 'Mixed Case');
+});
+
+test('conditions: order survives, and a tie on order is broken deterministically', () => {
+  const list = [{ id: 'c', label: 'C' }, { id: 'a', label: 'A' }, { id: 'b', label: 'B' }];
+  assert.deepEqual(conditionsFromRows(conditionsToRows(list)).map((c) => c.label), ['C', 'A', 'B']);
+  // Both devices appended, so both rows claim the same order. Without the id
+  // tiebreak each device would settle it differently and then fight.
+  const tied = [
+    { kind: 'conditions', key: 'zulu', name: 'Z', order: 4, data: { cid: 'zulu' } },
+    { kind: 'conditions', key: 'alpha', name: 'A', order: 4, data: { cid: 'alpha' } },
+  ];
+  assert.deepEqual(conditionsFromRows(tied).map((c) => c.id), ['alpha', 'zulu']);
+  assert.deepEqual(conditionsFromRows(tied.slice().reverse()).map((c) => c.id), ['alpha', 'zulu']);
+});
+
+test('people: a round trip keeps the colour, and the id is the same on both devices', () => {
+  const people = [{ id: 'whatever-local-id', name: 'Anna', color: '#a855f7' }];
+  const back = peopleFromRows(peopleToRows(people));
+  assert.equal(back[0].name, 'Anna');
+  assert.equal(back[0].color, '#a855f7');
+  assert.equal(back[0].id, 'people:anna');   // derived from the name, not generated
+});
+
+test('people: the same name twice collapses to one row rather than doubling', () => {
+  const rows = peopleToRows([{ name: 'Anna', color: '#a855f7' }, { name: ' anna ', color: '#22c55e' }]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].data.color, '#a855f7');   // first spelling and first colour win
+});
+
+test('owners & places: names round-trip, de-duplicate case-insensitively, sort A–Z', () => {
+  const rows = namesToRows('places', ['Garage', 'garage', 'Attic', '  ', 'RV / camper']);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(namesFromRows(rows, 'places'), ['Attic', 'Garage', 'RV / camper']);
+  // Rows of another kind are never picked up by mistake.
+  assert.deepEqual(namesFromRows([...rows, ...namesToRows('owners', ['Martin'])], 'owners'), ['Martin']);
+});
+
+test('presets: re-saving under a name you already used replaces it, never doubles it', () => {
+  const a = presetsToRows([{ name: 'Golf weekend', config: { mode: 'trip', season: 'Summer' } }]);
+  const b = presetsToRows([{ name: 'golf  Weekend', config: { mode: 'quick' } }]);
+  assert.equal(a[0].id, b[0].id);
+  const back = presetsFromRows(b);
+  assert.equal(back[0].name, 'golf  Weekend');
+  assert.deepEqual(back[0].config, { mode: 'quick' });
+  // A preset with no config is not a preset — it is dropped rather than shown empty.
+  assert.deepEqual(presetsFromRows(presetsToRows([{ name: 'Broken' }])), []);
+});
+
+test('sharedRowsOfKind: rows of other lists are never mixed in', () => {
+  const rows = [...namesToRows('places', ['Attic']), ...namesToRows('owners', ['Martin']),
+    ...peopleToRows([{ name: 'Anna' }])];
+  assert.deepEqual(sharedRowsOfKind(rows, 'places').map((r) => r.name), ['Attic']);
+  assert.deepEqual(sharedRowsOfKind(rows, 'people').map((r) => r.name), ['Anna']);
+  assert.deepEqual(sharedRowsOfKind(rows, 'presets'), []);
+});
+
+test('coerceSharedRow: a row from an unknown list, or with junk in it, is dropped', () => {
+  assert.equal(coerceSharedRow({ kind: 'nonsense', key: 'x', name: 'X' }).kind, '');
+  assert.deepEqual(coerceSharedRow({ kind: 'places', key: 'a', name: 'A', data: 'not an object' }).data, {});
+  assert.equal(sharedRowsOfKind([{ kind: 'places', key: '', name: '' }], 'places').length, 0);
+});
+
+test('isFactoryList: the defaults are recognised so they are never written as data', () => {
+  // This is the guard that keeps v118 from happening again: a list that is still
+  // exactly what the app ships is not data, and must never reach shared storage.
+  for (const kind of ['conditions', 'people', 'places']) {
+    assert.equal(isFactoryList(kind, defaultListFor(kind)), true, kind);
+  }
+  assert.equal(isFactoryList('places', [...DEFAULT_STORAGE_LOCATIONS, 'Boat locker']), false);
+  assert.equal(isFactoryList('people', DEFAULT_PEOPLE.map((p) => ({ ...p, color: '#123456' }))), false);
+  assert.equal(isFactoryList('people', [{ name: 'Martin' }, { name: 'Bengt' }]), false);
+  assert.equal(isFactoryList('conditions', DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c, label: c.label.toUpperCase() }))), false);
+  // Presets and owners have no factory version, so nothing is ever "just default".
+  assert.equal(isFactoryList('presets', []), false);
+  assert.equal(isFactoryList('owners', ['Martin']), false);
+});
+
+test('sharedRowsFrom: every kind builds rows, and an unknown kind builds none', () => {
+  for (const kind of SHARED_KINDS) {
+    const rows = sharedRowsFrom(kind, defaultListFor(kind).length ? defaultListFor(kind)
+      : (kind === 'presets' ? [{ name: 'P', config: {} }] : ['Someone']));
+    assert.ok(rows.length, kind);
+    assert.ok(rows.every((r) => r.kind === kind && r.id.startsWith(`${kind}:`)), kind);
+  }
+  assert.deepEqual(sharedRowsFrom('phases', [{ id: 'x', label: 'X' }]), []);
 });

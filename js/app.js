@@ -20,7 +20,9 @@ import {
   newAction, coerceAction, ACTION_PRIORITIES, actionPriorityLabel, compareActions,
   newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
   shoppingReason, shoppingSuggestions, openShoppingCount,
-  PERSON_COLORS, coercePerson, newPerson, personColor, assignedPeople,
+  PERSON_COLORS, coercePerson, newPerson, personColor, assignedPeople, DEFAULT_PEOPLE,
+  SHARED_KINDS, sharedRowId, sharedRowsOfKind, sharedRowsFrom, isFactoryList,
+  conditionsFromRows, peopleFromRows, namesFromRows, namesToRows, presetsFromRows, presetsToRows,
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
@@ -35,7 +37,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v119';
+const APP_VERSION = 'v120';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -100,12 +102,98 @@ function openPhotoLightbox(src) {
 }
 
 // Storage locations powering every item's "Where it's stored" dropdown. The list
-// is the user's saved set of places (seeded with DEFAULT_STORAGE_LOCATIONS) plus
-// any place already in use on an item, so the wording stays consistent instead of
-// being retyped slightly differently. The saved set is add/rename/remove-able in
-// Settings and persisted in localStorage.
+// is the user's saved set of places (falling back to DEFAULT_STORAGE_LOCATIONS)
+// plus any place already in use on an item, so the wording stays consistent
+// instead of being retyped slightly differently. The saved set is
+// add/rename/remove-able in Settings and — since v120 — shared between devices.
 let STORAGES = [];
-const STORAGE_LOC_KEY = 'ams-storage-locations';
+
+// ---------- The five lists you author, shared between your devices ----------
+//
+// Conditions · Trip presets · People · Owners · Storage places. They live in one
+// synced store, one row per entry; the shape and the reasoning are in model.js,
+// the storage in db.js. THIS is the copy every screen reads.
+//
+// It has to be readable synchronously — `personColor()` runs once per row, and
+// the Owner dropdown is built inside a template string — so the rows are cached
+// here and re-read by `refreshShared()`: on every render, whenever the app comes
+// back to the fore, and at the top of Settings. A device left open therefore
+// cannot keep working from a list the other device has since changed.
+let SHARED_ROWS = [];
+// Which lists are really IN the store, as opposed to being shown from this
+// device's pre-v120 copy or from the code's defaults. The distinction matters:
+// see `sharedStored` below.
+let SHARED_STORED = new Set();
+// THE ONLY PLACE THE CACHE IS SET. Every read and every write comes through here,
+// because what the store hands back is only part of the answer: a list it has no
+// rows for still has to show this device's own copy. Assigning the store's rows
+// straight to the cache would blank every list except the one just written.
+function adoptSharedRows(stored) {
+  SHARED_STORED = new Set(stored.map((r) => r.kind));
+  SHARED_ROWS = withLegacyLists(stored);
+  return SHARED_ROWS;
+}
+async function refreshShared() {
+  const stored = await db.getSharedRows().catch(() => null);
+  if (stored) adoptSharedRows(stored);
+  // The live condition list every screen and every save reads. Installed here so
+  // one re-read keeps all of it in step.
+  setItemConditions(loadConditions());
+  return SHARED_ROWS;
+}
+// Until this device's own pre-v120 lists have been adopted into the account, keep
+// showing them: a list with no stored rows falls back to what this device had in
+// localStorage, and only then to the factory list in the code. This is IN MEMORY
+// ONLY — actually adopting them is `db.migrateSharedLists()`, which waits until it
+// has seen the account's copy so it can never write over it. A list the account
+// already has always wins, so this can never resurrect anything.
+function withLegacyLists(rows) {
+  const out = rows.slice();
+  for (const kind of SHARED_KINDS) {
+    if (rows.some((r) => r.kind === kind)) continue;
+    const legacy = db.legacySharedList(kind);
+    if (!legacy || !legacy.length || isFactoryList(kind, legacy)) continue;
+    out.push(...sharedRowsFrom(kind, legacy));
+  }
+  return out;
+}
+// Is the list in force something other than the factory one? Counts this device's
+// pre-v120 copy, because that IS the user's list — it just hasn't been adopted
+// yet. Drives the Settings summary lines and decides whether a backup carries the
+// list at all (a backup must never plant the defaults as data).
+const sharedCustomised = (kind) => sharedRowsOfKind(SHARED_ROWS, kind).length > 0;
+// Is the list actually IN the store? Deliberately NOT the same question. Adding or
+// removing one entry writes one row — but only once there are rows to add it to.
+// While the list on screen is coming from the code's defaults or from this
+// device's pre-v120 copy, the FIRST edit has to write the whole list down, or
+// storing one entry would silently discard everything shown beside it.
+const sharedStored = (kind) => SHARED_STORED.has(kind);
+
+// --- The three ways to write. Each returns after the store is updated, and each
+// keeps the cache exact; the cache is also updated up front so a redraw that does
+// not wait still shows the right thing.
+//
+// Replace ONE WHOLE LIST — for reorders, resets and restores.
+async function writeSharedKind(kind, list) {
+  SHARED_ROWS = [...SHARED_ROWS.filter((r) => r.kind !== kind), ...sharedRowsFrom(kind, list)];
+  return adoptSharedRows(await db.replaceSharedKind(kind, list));
+}
+// Add or update SINGLE ENTRIES, touching nothing else. This is what an "add" and
+// a "rename" use, so a screen holding a stale list can't delete an entry made on
+// the other device just by saving what it happens to be holding.
+async function putShared(rows) {
+  const byId = new Map(SHARED_ROWS.map((r) => [r.id, r]));
+  for (const r of rows) byId.set(r.id, r);
+  SHARED_ROWS = [...byId.values()];
+  return adoptSharedRows(await db.putSharedRows(rows));
+}
+// Remove SINGLE ENTRIES. A real delete, so the removal reaches the other device
+// instead of the two lists merging back together on the next sync.
+async function deleteShared(ids) {
+  const gone = new Set(ids);
+  SHARED_ROWS = SHARED_ROWS.filter((r) => !gone.has(r.id));
+  return adoptSharedRows(await db.deleteSharedRows(ids));
+}
 
 // --- Data safety: persistent storage + backup reminders ---
 // All data lives in this device's IndexedDB (see db.js). Two guards:
@@ -269,30 +357,32 @@ function diagAsText() {
 // Catch anything uncaught, app-wide.
 window.addEventListener('error', (e) => logDiag('window', (e && e.error) || (e && e.message)));
 window.addEventListener('unhandledrejection', (e) => logDiag('promise', e && e.reason));
+// The saved set of places. Nothing stored means the standard set from the code —
+// so an untouched app behaves exactly as it always did, and no device ever plants
+// the defaults into shared data for the other one to collide with.
 function loadStorageLocs() {
-  try {
-    const raw = localStorage.getItem(STORAGE_LOC_KEY);
-    if (raw) {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr)) return arr.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim());
-    }
-  } catch { /* ignore */ }
-  return DEFAULT_STORAGE_LOCATIONS.slice();
+  const names = namesFromRows(SHARED_ROWS, 'places');
+  return names.length ? names : DEFAULT_STORAGE_LOCATIONS.slice();
 }
-function saveStorageLocs(arr) {
+// The whole list at once — for a rename or a removal, where the point IS the list.
+async function saveStorageLocs(arr) {
   // De-duplicate case-insensitively, keeping first spelling, then sort.
   const seen = new Map();
   for (const s of arr) { const t = (s || '').trim(); const k = t.toLowerCase(); if (t && !seen.has(k)) seen.set(k, t); }
   const clean = [...seen.values()].sort((a, b) => a.localeCompare(b));
-  try { localStorage.setItem(STORAGE_LOC_KEY, JSON.stringify(clean)); } catch { /* ignore */ }
+  await writeSharedKind('places', clean);
   return clean;
 }
 // Add a place to the saved set if it isn't already there (case-insensitive).
-function rememberStorageLoc(name) {
+// Deliberately ONE ROW: this is called whenever an item is saved with a place the
+// list hasn't got, and an item save must never rewrite the whole shared list.
+async function rememberStorageLoc(name) {
   const t = (name || '').trim();
   if (!t) return;
   const locs = loadStorageLocs();
-  if (!locs.some((s) => s.toLowerCase() === t.toLowerCase())) saveStorageLocs([...locs, t]);
+  if (locs.some((s) => s.toLowerCase() === t.toLowerCase())) return;
+  if (!sharedStored('places')) await saveStorageLocs([...locs, t]);
+  else await putShared(namesToRows('places', [t]));
 }
 // Rename a saved place and carry the new spelling onto every item using the old
 // one, so nothing is orphaned. Returns how many items were updated.
@@ -300,7 +390,7 @@ async function renameStorageLoc(oldName, newName) {
   const from = (oldName || '').trim();
   const to = (newName || '').trim();
   if (!from || !to || from.toLowerCase() === to.toLowerCase()) return 0;
-  saveStorageLocs(loadStorageLocs().map((s) => (s.toLowerCase() === from.toLowerCase() ? to : s)).concat(to));
+  await saveStorageLocs(loadStorageLocs().map((s) => (s.toLowerCase() === from.toLowerCase() ? to : s)).concat(to));
   const lists = await db.getLists();
   let count = 0;
   for (const l of lists) {
@@ -310,8 +400,16 @@ async function renameStorageLoc(oldName, newName) {
   }
   return count;
 }
-function removeStorageLoc(name) {
-  saveStorageLocs(loadStorageLocs().filter((s) => s.toLowerCase() !== (name || '').trim().toLowerCase()));
+// Removing one place deletes one row — so the removal reaches the other device
+// without this screen's copy of the rest of the list being written over it.
+async function removeStorageLoc(name) {
+  const t = (name || '').trim();
+  if (!t) return;
+  if (!sharedStored('places')) {
+    await saveStorageLocs(loadStorageLocs().filter((s) => s.toLowerCase() !== t.toLowerCase()));
+    return;
+  }
+  await deleteShared([sharedRowId('places', t)]);
 }
 function collectStorages(lists) {
   const seen = new Map(); // lowercase key -> display spelling
@@ -653,7 +751,7 @@ async function renderItemsGrid() {
         rebuild();                                        // every row's picker, and any moved names
         return;
       }
-      const name = addOwnerByName('');
+      const name = await addOwnerByName('');
       if (!name) { el.value = it.ownedBy || ''; return; } // cancelled — put the picker back
       it.ownedBy = name;
       await saveGuard(db.saveList(l));
@@ -2032,7 +2130,7 @@ async function renderEvent(eventId) {
       if (!name) return;
       if (loadPresets().some((p) => p.name.toLowerCase() === name.toLowerCase())
         && !confirm(`A preset called “${name}” already exists. Replace it?`)) return;
-      addPreset(name, ev);
+      await addPreset(name, ev);
       alert(`Saved “${name}” as a preset.\n\nStart a new trip from it on the Home screen — look for “Start from a preset”.`);
     } else if (act === 'review') { location.assign(`#/event/${ev.id}/review`); }
     else if (act === 'share') { shareTrip(ev); }
@@ -4078,7 +4176,7 @@ function itemEditor(list, it, setOpen, draw) {
       const sel = e.target;
       const before = sel.dataset.was || '';
       if (sel.value === '__new__') {
-        const keep = addOwnerByName('') || before;
+        const keep = (await addOwnerByName('')) || before;
         sel.innerHTML = ownerOptsHTML(keep);
         sel.value = keep;
       } else if (sel.value === '__manage__') {
@@ -4192,7 +4290,7 @@ function itemEditor(list, it, setOpen, draw) {
       it.storage = storageSel === '__new__'
         ? ($('input[name=storage-new]', ed).value || '').trim()
         : storageSel;
-      if (it.storage) rememberStorageLoc(it.storage); // a new place joins the saved set
+      if (it.storage) await rememberStorageLoc(it.storage); // a new place joins the saved set
       // Commit photos: anything new is written to the photos store and becomes an
       // id, existing ones keep theirs. The item then holds only ids, plus a small
       // thumbnail of the first for list rows.
@@ -4923,11 +5021,16 @@ function howtoCard() {
         <h3>Syncing your devices</h3>
         <p>Your catalogue can be kept in step across every device you use. Open <b>Settings \u2192 Sync your devices</b> and tap <b>Sign in to sync</b>: you type your e-mail, a <b>one-time code</b> arrives, and that's it \u2014 there is no password. Do the same on your other device and from then on the two match each other automatically.</p>
         <ul>
-          <li><b>What travels:</b> your templates, items, trips, to-dos and kits \u2014 everything that makes up the catalogue.</li>
-          <li><b>What stays on the device:</b> your <b>photos</b> and the <b>automatic backups</b> (see below).</li>
+          <li><b>What travels:</b> your templates, items, trips, to-dos and kits \u2014 everything that makes up the catalogue \u2014 plus the <b>lists you make in Settings</b>: your <b>When</b> timeline, <b>Conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>.</li>
+          <li><b>What stays on the device:</b> your <b>photos</b>, the <b>automatic backups</b> (both below) \u2014 and how each device <b>looks and behaves</b>: the theme, the view you last used, which Settings sections you left open, and this device's own backup dates. You may well want dark on the phone and light on the Mac.</li>
           <li><b>Offline is fine.</b> Changes you make with no signal are queued and sent the moment you're back online.</li>
           <li><b>You are never locked out.</b> The app works fully without signing in \u2014 signing in only starts the sharing. Signing out on a device stops it syncing but leaves everything on it untouched.</li>
         </ul>
+
+        <h4>The lists you make in Settings</h4>
+        <p>The rule is <b>lists you author travel; how a device looks does not</b>. Six lists travel: the <b>When</b> timeline, <b>Conditions</b>, <b>Trip presets</b>, <b>People</b> (names <em>and</em> their colours), <b>Owners</b> and <b>Storage places</b>. Change any of them anywhere and every signed-in device follows.</p>
+        <p><b>The first time each device runs this version</b> it offers up the lists you had already made on it, and they are <b>merged</b> \u2014 an entry your account already has is left exactly as it is, and anything only one device had is added. So the first time round you may see the combined set. <b>Go through the six lists once afterwards and remove anything you don't want</b>: from then on a removal travels too.</p>
+        <p>Two things are deliberately never written into your shared data: the <b>standard</b> versions of these lists (the four conditions, Martin &amp; Anna, the standard storage places) live in the app itself, so no device can ever plant them over yours \u2014 and a device <b>waits until it has actually seen your account's copy</b> before offering anything up.</p>
 
         <h4>Photos stay on the device that took them \u2014 on purpose</h4>
         <p>This is a deliberate decision, not a limitation, and it is worth understanding because it is the one place where your two devices are <em>meant</em> to differ.</p>
@@ -5066,7 +5169,7 @@ function howtoCard() {
         <p>Every item carries a <b>When</b>: the stage of the pack it belongs to. It is what your packing list is grouped by, and what <b>Packing Mode</b> walks you through one step at a time. The app starts with seven — <b>Preparations</b>, <b>≥1 week ahead</b>, <b>Day before</b>, <b>Morning list</b>, <b>At the front door</b>, <b>Wear / carry on the day</b> and <b>After / recovery</b> — but the list is <b>yours</b>, in <b>Settings → When</b>. Rename them by typing straight over the name, give each one an <b>emoji</b> and a <b>colour</b>, move them up and down the timeline with <b>▲ ▼</b>, remove ones you never use, or add your own — “Load the car”, “Night before the flight”.</p>
         <p><b>Days ahead</b> is when that stage starts nudging you: set it to 7 and the app begins asking you to pack it a week before you leave. <b>-1</b> means after the trip, which is what <b>After / recovery</b> uses. The <b>to-dos</b> tick marks a stage that holds things to <em>do</em> rather than things to pack — that is what makes <b>Preparations</b> behave differently from the rest.</p>
         <p><b>Nothing can be lost by any of this.</b> Renaming keeps every item exactly where it was — the app remembers a phase by a hidden name that never changes, so only the words you read are different. Removing a stage that things are filed under makes you say <b>when those things get packed instead</b>, and tells you how many there are — counting your items, the lines on trips you have already built, and your to-dos. There is a <b>Reset to the standard seven</b> if you want the original timeline back.</p>
-        <p><b>This list syncs between your devices</b> — and it is the only one of these lists that does. Your People, Owners, Conditions and Storage places each live on their own device, but a stage is stamped on every item, so a stage that existed on only one device would make the same item read as a different “When” there. Change the timeline on the Mac and the iPhone follows. While one device is still on an older version, anything it doesn't recognise is shown as-is and <b>never quietly moved</b>.</p>
+        <p><b>This list syncs between your devices</b> — it was the first of the Settings lists to do so, and since v120 your Conditions, Trip presets, People, Owners and Storage places travel with it. A stage is stamped on every item, so one that existed on only a single device would make the same item read as a different “When” there. Change the timeline on the Mac and the iPhone follows. While one device is still on an older version, anything it doesn't recognise is shown as-is and <b>never quietly moved</b>.</p>
 
         <h3>Whose things are whose</h3>
         <p><b>Owner</b> — on an item, under <b>Details &amp; ownership</b> — is a dropdown of a list you keep in <b>Settings → Owners</b>. <b>Add</b> a name, <b>rename</b> one (every item that is theirs follows, in one go) or <b>remove</b> one — and if things are theirs, the app asks <b>who they go to</b> first, so an item is never left pointing at somebody who no longer exists. Each name shows how many items are theirs. You never have to go to Settings to do it: the same two choices, <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b>, sit at the bottom of the Owner dropdown itself — in the item editor and in <b>Care → All items · table</b>, where you can assign owners down a whole column.</p>
@@ -5100,7 +5203,7 @@ function howtoCard() {
  <li><b>Needs replacing</b> — tick this and the condition means “this wants replacing”: items on it get the replace prompt and are <b>offered on the shopping list</b>. It starts on <b>Needs replacing</b>, but it isn’t tied to that name — tick it on a condition you invented and that one feeds the shopping list too. Tick it on more than one if that’s what you mean.</li>
         </ul>
  <p><b>Renaming is always safe</b> — your items keep their rating, they just call it something new. <b>Removing</b> one asks first: if any items are using it, the app tells you how many and makes you say what they become (another condition, or unrated) before it removes anything. Nothing is ever silently unrated. <b>Reset to the standard four</b> puts the original list back.</p>
- <p>One thing to know if you use both your Mac and your iPhone: the <b>condition list</b> lives <b>on each device</b> — like your People and your Storage places — while the condition <b>on an item</b> travels with your data. So a condition you invent on the Mac reaches the iPhone as a rating it has no name for, and shows the raw name until you set it up there too (or carry it over with a backup file). The app deliberately <b>never rewrites a rating it doesn’t recognise</b>, so nothing is lost either way.</p>
+ <p>If you use both your Mac and your iPhone: <b>since v120 the condition list travels between them</b>, so a condition you invent on the Mac is on the iPhone with its proper name. Before that it did not, and this was the list it hurt most — an item carries the condition’s internal name and that always travelled, but only the list holds the readable one, so “Failing” arrived as unreadable text. Even then nothing was ever lost: the app deliberately <b>never rewrites a rating it doesn’t recognise</b>, which is also what lets a device still on an older version sit alongside one that isn’t.</p>
 
         <h3>Finding your way round Settings</h3>
         <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
@@ -5133,6 +5236,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v120', '2026-08-25 · 14:00 UTC', false, 'The lists you make now belong to you, not to one device',
+      'Five lists in Settings were only ever kept on the device you made them on: <b>Conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>. They now live in your account and reach every device you are signed in on — make a change on the Mac and the iPhone has it, and the other way round. <b>What that fixes, list by list.</b> A <b>condition</b> you invented was genuinely broken across devices: an item carries the condition\'s internal name and that always travelled, but only the list holds the readable one — so “Failing”, set on the Mac, arrived on the iPhone as unreadable text. A <b>trip preset</b> could not repair itself at all: nothing else in your data refers to one, so a preset saved on the Mac simply did not exist on the iPhone, with nothing to hint that it was missing. <b>People</b> travelled by name but not by <b>colour</b>, so Anna could be blue on one device and green on the other. <b>Owners</b> and <b>storage places</b> already healed themselves — both are written on the item as plain words — but “Bedroom wardrobe” describes one house, not one device. <b>What deliberately does NOT sync:</b> how a device looks and behaves. The <b>theme</b>, the view you last used, which Settings sections you left open, and each device\'s own backup dates all stay put — you may well want dark on the phone and light on the Mac. <b>Your existing lists are not disturbed.</b> The first time each device runs this version it offers up the lists you had made there, and they are <b>merged</b>: an entry that already exists in your account is left exactly as it is, and anything only one device had is added. So expect the combined set on both devices the first time round — <b>have a look through the five lists afterwards and remove anything you don\'t want</b>, because from then on a removal reaches both devices too. Two safeguards learned from the v118 mishap are built in: <b>nothing standard is ever written into your data</b> (the four standard conditions, Martin &amp; Anna, and the standard storage places live in the app, so a device can never plant them over yours), and a device <b>waits until it has actually seen your account\'s copy</b> before offering anything up. Adding or removing one entry now writes just that entry, so a screen you left open cannot delete something added on the other device.',
+      'Set a condition, a preset, a person, an owner or a storage place once — on whichever device you happen to be holding — and both devices have it.'),
     v('v119', '2026-08-25 · 09:00 UTC', false, 'Fixes the bug that reset your When list',
       '<b>What went wrong.</b> You edited the timeline — names, emoji, colours — and later found the seven built-in stages back at their factory settings, with only the stage you had <b>added</b> still as you left it. Here is why. v118 wrote the seven standard stages into your shared data the first time a device found none. Each has a fixed internal name, which was meant to stop two devices creating two separate lists — and it did. What it also meant was that writing a standard stage landed <b>exactly on top of</b> the same stage on the other device and replaced it. Your second device found its own newly-created (therefore empty) timeline, waited for your account\'s copy, and gave up a moment too early: the app reports “in sync” about the database as a whole, and a table created seconds earlier can still be empty at that point. So it concluded the account had no timeline and wrote seven factory stages over your edited ones. The stage you had added survived because its name collided with nothing. <b>The fix.</b> The standard seven are <b>no longer written into your data at all</b> — they now live only in the app, exactly as the standard conditions do. An account that has never edited the timeline stores nothing, both devices show the same seven from the code, and <b>the first change you make is what creates the stored list</b>. There is no longer any moment at which one device can write over another\'s. Two smaller repairs came with it: the app now <b>re-reads the timeline before showing or changing it</b> (and when you switch back to the app), so a device left open can\'t save an out-of-date list back over a newer one; and when two stages end up sharing a position, both devices now settle on the <b>same</b> order instead of each picking their own.',
       'Your timeline stays the way you set it. Worth re-doing your names and colours now — this time they will hold.'),
@@ -5889,8 +5995,8 @@ async function syncCard() {
   const st = await db.syncStatus().catch(() => ({ enabled: true, signedIn: false, user: '', state: 'error' }));
   const body = st.signedIn
     ? `<p class="data-status">${ic('check', 'sm')}<b>Syncing as ${esc(accountName(st.user))}</b></p>
-       <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on. Changes made offline are sent as soon as you're back online.</p>
-       <p class="muted sync-note">Photos and the automatic backups deliberately stay on the device that made them.</p>`
+       <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on — and so are the lists you make here: <b>When</b>, <b>Conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>. Changes made offline are sent as soon as you're back online.</p>
+       <p class="muted sync-note">Photos, the automatic backups, and how each device looks — theme, view, which sections are open — deliberately stay on the device they belong to.</p>`
     : `<p class="data-status">${ic('warn', 'sm')}<b>Not syncing on this device</b></p>
        <p class="muted">Sign in with your e-mail to keep this device in step with your others. You'll get a one-time code by e-mail — there's no password. Everything here keeps working offline either way.</p>`;
   const el = h(`<div class="card block sync-card">
@@ -6055,9 +6161,12 @@ async function renderSettings() {
   // screen has run — and the Owners section needs the catalogue to say how many
   // items each owner has, and to offer a name given on the other device.
   ALL_LISTS = bLists;
-  // The timeline is shared between devices, so re-read it rather than drawing the
-  // copy this session started with — the other device may have changed it since.
+  // The timeline and the five author-made lists are shared between devices, so
+  // re-read them rather than drawing the copy this session started with — the
+  // other device may have changed them since. This is also what stops an edit made
+  // here from writing a stale list back over a newer one.
   await db.refreshPhases().catch(() => {});
+  await refreshShared();
   const dsb = daysSinceBackup();
   const bstate = currentBackupState(bEvents, bLists, bActions);
   // Say plainly whether the saved file still matches what's in the app — "3 days
@@ -6138,7 +6247,7 @@ async function renderSettings() {
       if (!confirm(warn)) return;
       try {
         const res = await db.restoreSnapshot(id);
-        if (res.prefs) applyPrefs(res.prefs);
+        if (res.prefs) await applyPrefs(res.prefs);
         alert(`Restored: ${countsSummary(res.counts)}.`);
         render();
       } catch (err) { alert(err.message || 'Could not restore that backup.'); }
@@ -6182,11 +6291,17 @@ async function renderSettings() {
     const add = e.target.closest('[data-place="add"]');
     const edit = e.target.closest('[data-place-edit]');
     const del = e.target.closest('[data-place-del]');
+    if (!add && !edit && !del) return;
+      // Re-read before changing anything. A list is shared, so this screen may have
+      // been open while the other device added to it — and an edit that started
+      // from a stale copy would write that copy back and delete what it never saw.
+    await refreshShared();
+    drawPlaces();
     if (add) {
       const name = (prompt('Name of the new storage place:', '') || '').trim();
       if (!name) return;
       if (loadStorageLocs().some((s) => s.toLowerCase() === name.toLowerCase())) { alert(`“${name}” is already in the list.`); return; }
-      rememberStorageLoc(name);
+      await rememberStorageLoc(name);
       drawPlaces();
     } else if (edit) {
       const old = edit.dataset.placeEdit;
@@ -6199,7 +6314,7 @@ async function renderSettings() {
     } else if (del) {
       const name = del.dataset.placeDel;
       if (!confirm(`Remove “${name}” from the list of places?\n\nItems already stored there keep their label; this just takes it off the standard list.`)) return;
-      removeStorageLoc(name);
+      await removeStorageLoc(name);
       drawPlaces();
     }
   });
@@ -6222,12 +6337,12 @@ async function renderSettings() {
       : '<p class="muted">No presets yet — open a trip and tap Save as preset to make your first.</p>';
   };
   drawPresets();
-  presetCard.addEventListener('click', (e) => {
+  presetCard.addEventListener('click', async (e) => {
     const del = e.target.closest('[data-preset-del]');
     if (!del) return;
     const p = loadPresets().find((x) => x.id === del.dataset.presetDel);
     if (p && confirm(`Delete the preset “${p.name}”? This won’t affect any trips you already made from it.`)) {
-      deletePreset(p.id);
+      await deletePreset(p.id);
       drawPresets();
     }
   });
@@ -6294,17 +6409,24 @@ async function renderSettings() {
       : '<p class="muted">No people yet — add one to start splitting who packs what.</p>';
   };
   drawPeople();
-  peopleCard.addEventListener('change', (e) => {
+  peopleCard.addEventListener('change', async (e) => {
     const col = e.target.closest('[data-person-color]');
     if (!col) return;
+    await refreshShared();
     const people = loadPeople();
     const p = people.find((x) => x.id === col.dataset.personColor);
-    if (p) { p.color = col.value; savePeople(people); }
+    if (p) { p.color = col.value; await savePeople(people); }
   });
   peopleCard.addEventListener('click', async (e) => {
     const add = e.target.closest('[data-person="add"]');
     const edit = e.target.closest('[data-person-edit]');
     const del = e.target.closest('[data-person-del]');
+    if (!add && !edit && !del) return;
+      // Re-read before changing anything. A list is shared, so this screen may have
+      // been open while the other device added to it — and an edit that started
+      // from a stale copy would write that copy back and delete what it never saw.
+    await refreshShared();
+    drawPeople();
     if (add) {
       const name = (prompt('Name of the person:', '') || '').trim();
       if (!name) return;
@@ -6312,7 +6434,7 @@ async function renderSettings() {
       if (people.some((p) => p.name.toLowerCase() === name.toLowerCase())) { alert(`“${name}” is already on the list.`); return; }
       const color = PERSON_COLORS[people.length % PERSON_COLORS.length];
       people.push(newPerson({ name, color }));
-      savePeople(people);
+      await savePeople(people);
       drawPeople();
     } else if (edit) {
       const people = loadPeople();
@@ -6323,7 +6445,9 @@ async function renderSettings() {
       if (people.some((x) => x.id !== p.id && x.name.toLowerCase() === name.toLowerCase())) { alert(`“${name}” is already on the list.`); return; }
       const old = p.name;
       p.name = name;
-      savePeople(people);
+      // The roster is keyed by the NAME, so a rename really is a whole-list write:
+      // the old row goes and the new one takes its place, carrying the colour.
+      await savePeople(people);
       // Carry the new name onto every trip entry assigned to the old name.
       const moved = await renamePackerEverywhere(old, name);
       drawPeople();
@@ -6333,7 +6457,8 @@ async function renderSettings() {
       const p = people.find((x) => x.id === del.dataset.personDel);
       if (!p) return;
       if (!confirm(`Remove “${p.name}” from the People list?\n\nItems already assigned to them on a trip keep the name; this just takes them off the roster.`)) return;
-      savePeople(people.filter((x) => x.id !== p.id));
+      if (sharedStored('people')) await deleteShared([p.id]);
+      else await savePeople(people.filter((x) => x.id !== p.id));
       drawPeople();
     }
   });
@@ -6521,10 +6646,11 @@ async function renderSettings() {
   };
   drawConds();
 
-  condCard.addEventListener('change', (e) => {
+  condCard.addEventListener('change', async (e) => {
     const tone = e.target.closest('[data-cond-tone]');
     const rep = e.target.closest('[data-cond-replace]');
     if (!tone && !rep) return;
+    await refreshShared();
     const list = ITEM_CONDITIONS.map((c) => ({ ...c }));
     if (tone) {
       const c = list.find((x) => x.id === tone.dataset.condTone);
@@ -6533,13 +6659,17 @@ async function renderSettings() {
       const c = list.find((x) => x.id === rep.dataset.condReplace);
       if (c) c.replace = rep.checked;
     }
-    saveConditions(list);
+    await saveConditions(list);
     drawConds();
   });
 
   condCard.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-cond], [data-cond-up], [data-cond-down], [data-cond-edit], [data-cond-del]');
     if (!btn) return;
+      // Re-read before changing anything. A list is shared, so this screen may have
+      // been open while the other device added to it — and an edit that started
+      // from a stale copy would write that copy back and delete what it never saw.
+    await refreshShared();
     const list = ITEM_CONDITIONS.map((c) => ({ ...c }));
     const act = btn.dataset.cond;
 
@@ -6548,17 +6678,17 @@ async function renderSettings() {
       if (!label) return;
       if (list.some((c) => c.label.toLowerCase() === label.toLowerCase())) { alert(`“${label}” is already on the list.`); return; }
       list.push(newCondition(label, list.map((c) => c.id)));
-      saveConditions(list); drawConds(); return;
+      await saveConditions(list); drawConds(); return;
     }
     if (act === 'reset') {
       if (!confirm('Put the conditions back to New / Good / Worn / Needs replacing?\n\nAnything you added is removed from the list. Items already set to one of them keep it — they just show the raw name until you add it back.')) return;
-      resetConditions(); drawConds(); render(); return;
+      await resetConditions(); drawConds(); render(); return;
     }
 
     const idOf = (k) => btn.dataset[k];
-    const move = (from, to) => { const [row] = list.splice(from, 1); list.splice(to, 0, row); saveConditions(list); drawConds(); };
-    if (idOf('condUp')) { const i = list.findIndex((c) => c.id === idOf('condUp')); if (i > 0) move(i, i - 1); return; }
-    if (idOf('condDown')) { const i = list.findIndex((c) => c.id === idOf('condDown')); if (i >= 0 && i < list.length - 1) move(i, i + 1); return; }
+    const move = async (from, to) => { const [row] = list.splice(from, 1); list.splice(to, 0, row); await saveConditions(list); drawConds(); };
+    if (idOf('condUp')) { const i = list.findIndex((c) => c.id === idOf('condUp')); if (i > 0) await move(i, i - 1); return; }
+    if (idOf('condDown')) { const i = list.findIndex((c) => c.id === idOf('condDown')); if (i >= 0 && i < list.length - 1) await move(i, i + 1); return; }
 
     if (idOf('condEdit')) {
       const c = list.find((x) => x.id === idOf('condEdit'));
@@ -6567,7 +6697,7 @@ async function renderSettings() {
       if (!label || label === c.label) return;
       if (list.some((x) => x.id !== c.id && x.label.toLowerCase() === label.toLowerCase())) { alert(`“${label}” is already on the list.`); return; }
       c.label = label;                    // the id is untouched, so every item keeps its rating
-      saveConditions(list); drawConds(); render(); return;
+      await saveConditions(list); drawConds(); render(); return;
     }
 
     if (idOf('condDel')) {
@@ -6588,7 +6718,7 @@ async function renderSettings() {
           ? `Removed “${c.label}” — ${n} item${n === 1 ? '' : 's'} moved to “${itemConditionLabel(moveTo) || moveTo}”`
           : `Removed “${c.label}” — ${n} item${n === 1 ? '' : 's'} are now unrated`);
       }
-      saveConditions(remaining);
+      await saveConditions(remaining);
       ALL_LISTS = await db.getLists();
       drawConds(); render();
     }
@@ -6674,7 +6804,7 @@ async function renderSettings() {
         }
       }
       const res = await db.importJSON(text, { merge });
-      if (res.prefs) applyPrefs(res.prefs); // restore storage places / theme / view too
+      if (res.prefs) await applyPrefs(res.prefs); // restore the five shared lists / theme / view too
       alert(`Imported ${res.lists} template(s) and ${res.events} trip(s)${res.actions ? ` and ${res.actions} to-do(s)` : ''}.`
         + (merge ? '' : '\n\nYour previous data was saved under Settings → Automatic backups, in case you want it back.'));
       render();
@@ -7021,61 +7151,62 @@ function setTheme(v) {
 // export is a truly complete restore point. Operational keys (last-backup date,
 // reminder snooze, seed version) are intentionally excluded — they describe this
 // device's state, not your data, and shouldn't travel to another device.
-// --- Trip presets (saved event recipes) — kept in localStorage and folded into
-// `prefs`, so they travel in every JSON backup and automatic snapshot for free. ---
-const PRESET_KEY = 'ams-trip-presets';
-function loadPresets() {
-  try {
-    const raw = localStorage.getItem(PRESET_KEY);
-    if (raw) { const a = JSON.parse(raw); if (Array.isArray(a)) return a.filter((p) => p && p.id && p.name && p.config); }
-  } catch { /* ignore */ }
-  return [];
-}
-function savePresets(arr) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(arr)); } catch { /* ignore */ } return arr; }
+// --- Trip presets (saved event recipes) — shared between your devices since
+// v120, and still folded into `prefs` so they travel in every JSON backup and
+// automatic snapshot too.
+//
+// A preset is the one list here that CANNOT heal itself: nothing else in your data
+// refers to a preset, so one saved on the Mac simply did not exist on the iPhone,
+// with nothing to hint that it was missing. (What is inside one — the activities —
+// are template ids, which have always synced.)
+function loadPresets() { return presetsFromRows(SHARED_ROWS); }
+async function savePresets(arr) { await writeSharedKind('presets', arr); return arr; }
 // Save the current event's setup as a named preset (replacing any same-name one).
-function addPreset(name, ev) {
-  const preset = { id: id(), name: String(name).trim(), createdAt: new Date().toISOString(), config: presetConfigFromEvent(ev) };
-  const arr = loadPresets().filter((p) => p.name.toLowerCase() !== preset.name.toLowerCase());
-  arr.push(preset);
-  savePresets(arr);
+// One row: the name IS the key, so re-saving under a name you have used lands on
+// the same row and replaces it, exactly as it always did.
+async function addPreset(name, ev) {
+  const preset = {
+    id: sharedRowId('presets', name), name: String(name).trim(),
+    createdAt: new Date().toISOString(), config: presetConfigFromEvent(ev),
+  };
+  if (!sharedStored('presets')) await savePresets([...loadPresets().filter((p) => p.id !== preset.id), preset]);
+  else await putShared(presetsToRows([preset]));
   return preset;
 }
-function deletePreset(pid) { savePresets(loadPresets().filter((p) => p.id !== pid)); }
+async function deletePreset(pid) {
+  if (!sharedStored('presets')) { await savePresets(loadPresets().filter((p) => p.id !== pid)); return; }
+  await deleteShared([pid]);
+}
 
 // Condition list (New / Good / Worn / Needs replacing, and anything you add).
-// Stored on-device like the People roster and the storage places, and carried in
-// backups via collectPrefs. Nothing is stored until you actually change something,
-// so an untouched app runs on the factory four.
+// SHARED between your devices since v120; nothing is stored until you actually
+// change something, so an untouched app runs on the factory four from the code.
 //
-// IMPORTANT: an item's condition is an ID stored on the item, which DOES sync. A
-// condition you invent on one device therefore reaches the other as an id it has no
-// name for — the app shows it as-is and never rewrites it (see coerceItem), so the
-// worst case is an unlabelled condition until you carry the list over in a backup.
-const CONDITIONS_KEY = 'ams-conditions';
+// This is the list that was ACTUALLY BROKEN before it synced: an item's condition
+// is an ID stored on the item, and the item does sync — but only the list holds
+// the readable name. A condition invented on the Mac therefore arrived on the
+// iPhone as a raw id it had no name for. (It was at least never rewritten — see
+// coerceItem — so nothing was ever lost, it just read as gibberish.)
+//
+// It is also the one list here where ORDER is something you set, which is why its
+// edits write the list whole rather than a row at a time.
 function loadConditions() {
-  try {
-    const raw = localStorage.getItem(CONDITIONS_KEY);
-    if (raw != null) {
-      const a = JSON.parse(raw);
-      if (Array.isArray(a) && a.length) return a.map(coerceCondition).filter((c) => c.id && c.label);
-    }
-  } catch { /* ignore */ }
-  return DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c }));
+  const list = conditionsFromRows(SHARED_ROWS);
+  return list.length ? list : DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c }));
 }
-function saveConditions(arr) {
-  const applied = setItemConditions(arr);          // the live list every screen reads
-  try { localStorage.setItem(CONDITIONS_KEY, JSON.stringify(applied)); } catch { /* ignore */ }
+async function saveConditions(arr) {
+  const applied = setItemConditions(arr);          // the live list every screen reads, immediately
+  await writeSharedKind('conditions', applied);
   return applied;
 }
-// Back to the factory four, forgetting anything customised.
-function resetConditions() {
-  try { localStorage.removeItem(CONDITIONS_KEY); } catch { /* ignore */ }
+// Back to the factory four, forgetting anything customised. Storing NO rows is
+// what "the standard four" means, so the reset is a removal, not a re-seed.
+async function resetConditions() {
+  await writeSharedKind('conditions', []);
   return setItemConditions(DEFAULT_ITEM_CONDITIONS.map((c) => ({ ...c })));
 }
 // Have the conditions been customised at all? (Drives the Settings summary line.)
-function conditionsCustomised() {
-  try { return localStorage.getItem(CONDITIONS_KEY) != null; } catch { return false; }
-}
+function conditionsCustomised() { return sharedCustomised('conditions'); }
 
 // How many catalogue items currently carry this condition? Counted by the stable
 // item id, so an item in five templates counts once.
@@ -7136,24 +7267,29 @@ function pickReplacementCondition(cond, used, others) {
   });
 }
 
-// People roster (who packs what). Stored on-device; seeded with Martin & Anna on
-// the very first run, and included in backups via collectPrefs.
-const PEOPLE_KEY = 'ams-people';
+// People roster (who packs what). SHARED between your devices since v120, and
+// included in backups via collectPrefs.
+//
+// Why it had to move: an assignment stores the packer's NAME on the trip line, and
+// that syncs — but the roster holds the COLOUR, so `personColor()` fell back to a
+// hash of the name on the device without the roster and the same person could be
+// blue here and green there.
+//
+// Martin & Anna are the starter roster and they live in the CODE. They are never
+// written into shared data: an account that has never edited People stores no rows
+// at all, and both devices read the same two from `DEFAULT_PEOPLE`. Seeding them
+// would give the second device two rows to land on top of the first device's.
 function loadPeople() {
-  try {
-    const raw = localStorage.getItem(PEOPLE_KEY);
-    if (raw != null) { const a = JSON.parse(raw); if (Array.isArray(a)) return a.map(coercePerson).filter((p) => p.name); }
-    // First ever run (key absent): seed a starter roster.
-    const seed = [newPerson({ name: 'Martin', color: PERSON_COLORS[0] }), newPerson({ name: 'Anna', color: PERSON_COLORS[1] })];
-    savePeople(seed);
-    return seed;
-  } catch { /* ignore */ }
-  return [];
+  const list = peopleFromRows(SHARED_ROWS);
+  if (list.length) return list;
+  return DEFAULT_PEOPLE.map((p) => coercePerson({ id: sharedRowId('people', p.name), name: p.name, color: p.color }));
 }
-function savePeople(arr) {
-  try { localStorage.setItem(PEOPLE_KEY, JSON.stringify(asPeople(arr))); } catch { /* ignore */ }
+async function savePeople(arr) {
+  await writeSharedKind('people', asPeople(arr));
   return arr;
 }
+// Has the roster been edited, or is it still the two the app ships with?
+function peopleCustomised() { return sharedCustomised('people'); }
 // ---------- Owners: the "whose is it" roster ----------
 //
 // A real, editable list — like People, Storage places and Conditions — rather than
@@ -7165,10 +7301,10 @@ function savePeople(arr) {
 // "Shared" or "The kids" should own things without turning up in every "Packed by"
 // picker. Naming an owner therefore never creates a person, and vice versa.
 //
-// Stored on this device (like People and the storage places) and carried in
-// backups; the owner ON an item travels with your data, so a name given on the
-// other device is always offered even if this device's roster hasn't got it yet.
-const OWNERS_KEY = 'ams-owners';
+// SHARED between your devices since v120, and carried in backups. The owner ON an
+// item has always travelled with your data — which is why this list, unlike the
+// conditions, could heal itself — so a name given on the other device is offered
+// even before the roster itself has caught up.
 
 // Trim, drop blanks, de-duplicate case-insensitively (first spelling wins) and
 // sort A–Z, which is the order every Owner dropdown and the manager both use.
@@ -7180,22 +7316,19 @@ function tidyOwnerNames(arr) {
   }
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
-// The roster. On a device that has never touched it there is nothing stored, so it
-// is derived — your People plus every owner already given to something — and then
-// written down once there is a catalogue to derive it from, so from that moment on
-// it is a list you own rather than a by-product of what you happened to type.
+// The roster. With nothing stored it is DERIVED — your People plus every owner
+// already given to something — and writes nothing down: both devices work that out
+// identically from data that does sync, so there is no reason to plant it. The
+// first real edit is what turns it into a list you own.
 function loadOwners() {
-  try {
-    const raw = localStorage.getItem(OWNERS_KEY);
-    if (raw != null) { const a = JSON.parse(raw); if (Array.isArray(a)) return tidyOwnerNames(a); }
-  } catch { /* ignore */ }
-  const seed = tidyOwnerNames([...loadPeople().map((p) => p.name), ...collectItemValues('ownedBy')]);
-  if ((ALL_LISTS || []).length) saveOwners(seed);
-  return seed;
+  const names = namesFromRows(SHARED_ROWS, 'owners');
+  if (names.length) return names;
+  return tidyOwnerNames([...loadPeople().map((p) => p.name), ...collectItemValues('ownedBy')]);
 }
-function saveOwners(names) {
+// The whole list at once — for a rename or a removal, where the point IS the list.
+async function saveOwners(names) {
   const clean = tidyOwnerNames(names);
-  try { localStorage.setItem(OWNERS_KEY, JSON.stringify(clean)); } catch { /* ignore */ }
+  await writeSharedKind('owners', clean);
   return clean;
 }
 // The one-line state for the When fold: the timeline, in order.
@@ -7206,10 +7339,8 @@ function phasesSummary() {
   return `${PHASES.length} phases · ${shown}${names.length > 3 ? ' → …' : ''}${phasesCustomised() ? '' : ' (standard)'}`;
 }
 
-// Is the roster a real list on this device yet, or still being derived?
-function ownersCustomised() {
-  try { return localStorage.getItem(OWNERS_KEY) != null; } catch { return false; }
-}
+// Is the roster a real list yet, or still being derived from what's in use?
+function ownersCustomised() { return sharedCustomised('owners'); }
 // The one-line state for the Settings fold: who is on the list.
 function ownersSummary() {
   const names = ownerNames();
@@ -7236,12 +7367,13 @@ function ownerOptsHTML(cur = '', { empty = '— not set —' } = {}) {
 // Ask for a new owner's name and put it on the roster. Returns the name to select,
 // or '' if cancelled. A name that is already there simply wins — same spelling,
 // no duplicate.
-function addOwnerByName(suggest = '') {
+async function addOwnerByName(suggest = '') {
   const name = (prompt('Whose is it? Type the owner’s name — e.g. Martin · Anna · Shared:', suggest) || '').trim();
   if (!name) return '';
   const existing = ownerNames().find((n) => normName(n) === normName(name));
   if (existing) return existing;
-  saveOwners([...loadOwners(), name]);
+  if (!sharedStored('owners')) await saveOwners([...loadOwners(), name]);
+  else await putShared(namesToRows('owners', [name]));
   return name;
 }
 // How many items each owner has, counted by the stable item id so an item in five
@@ -7449,8 +7581,13 @@ function buildOwnersEditor({ onChanged } = {}) {
   el.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-owner], [data-owner-edit], [data-owner-del]');
     if (!btn) return;
+      // Re-read before changing anything. A list is shared, so this screen may have
+      // been open while the other device added to it — and an edit that started
+      // from a stale copy would write that copy back and delete what it never saw.
+    await refreshShared();
+    draw();
     if (btn.dataset.owner === 'add') {
-      const name = addOwnerByName('');
+      const name = await addOwnerByName('');
       if (name) { draw(); onChanged?.(changes); }
       return;
     }
@@ -7464,7 +7601,7 @@ function buildOwnersEditor({ onChanged } = {}) {
         alert(`“${name}” is already on the list. To merge the two, remove this one and give its things to “${name}”.`);
         return;
       }
-      saveOwners([...loadOwners().filter((n) => normName(n) !== normName(old)), name]);
+      await saveOwners([...loadOwners().filter((n) => normName(n) !== normName(old)), name]);
       const moved = await setOwnerEverywhere(old, name);
       changed(old, name);
       if (moved) showToast(`Renamed to “${name}” — ${moved} item${moved === 1 ? '' : 's'} updated`);
@@ -7478,7 +7615,7 @@ function buildOwnersEditor({ onChanged } = {}) {
       moveTo = await pickReplacementOwner(old, used, ownerNames().filter((n) => normName(n) !== normName(old)));
       if (moveTo === null) return;                       // cancelled
     } else if (!confirm(`Remove “${old}” from the Owners list?\n\nNothing is theirs, so nothing else changes.`)) return;
-    saveOwners(loadOwners().filter((n) => normName(n) !== normName(old)));
+    await saveOwners(loadOwners().filter((n) => normName(n) !== normName(old)));
     if (used) {
       const n = await setOwnerEverywhere(old, moveTo);
       showToast(moveTo
@@ -7583,53 +7720,55 @@ function applyPresetToForm(form, config) {
 }
 
 function collectPrefs() {
-  const prefs = { storageLocations: loadStorageLocs(), theme: currentTheme() };
+  const prefs = { theme: currentTheme() };
   try { const v = localStorage.getItem(VIEW_KEY); if (v) prefs.view = v; } catch { /* ignore */ }
-  const presets = loadPresets();
-  if (presets.length) prefs.presets = presets;
-  const people = loadPeople();
-  if (people.length) prefs.people = people;
-  // Only carried once the roster is a real list on this device — otherwise it is
-  // just "People plus whatever is in use", which the other device derives itself.
+  // Each of the five is carried only once it is a list you actually authored. An
+  // untouched app runs on the code's defaults, and a backup must never plant those
+  // defaults as data on the device it is restored onto — that is the whole lesson
+  // of v118, and it applies to a restore exactly as it applies to a seed.
+  if (sharedCustomised('places')) prefs.storageLocations = loadStorageLocs();
+  if (sharedCustomised('presets')) prefs.presets = loadPresets();
+  if (peopleCustomised()) prefs.people = loadPeople();
   if (ownersCustomised()) prefs.owners = loadOwners();
-  // Only carried once they've actually been customised, so restoring an old backup
-  // onto a fresh app can't pin it to a stale copy of the standard four.
   if (conditionsCustomised()) prefs.conditions = ITEM_CONDITIONS.map((c) => ({ ...c }));
   return prefs;
 }
-// Apply prefs from an imported backup. Storage places are UNIONed with what's
-// already here, so an import never drops a place you already had.
-function applyPrefs(prefs) {
+// Apply prefs from an imported backup or a restored snapshot.
+//
+// Four of the five UNION with what is already here — rows the store hasn't got are
+// added, rows it has are left exactly as they are — so a restore can never quietly
+// take away a place, a person or an owner this device is still using. Conditions
+// are the exception and come across whole: they are an ordered list and the order
+// is the point.
+//
+// The `meaningful` guard stops a backup taken before v120 — which always carried
+// the storage places and the roster, customised or not — from writing the factory
+// defaults into shared data as if they were something you had authored.
+async function applyPrefs(prefs) {
   if (!prefs || typeof prefs !== 'object') return;
-  if (Array.isArray(prefs.storageLocations)) {
-    saveStorageLocs([...loadStorageLocs(), ...prefs.storageLocations]);
-    STORAGES = loadStorageLocs();
-  }
+  const meaningful = (kind, list) => Array.isArray(list) && list.length
+    && !(isFactoryList(kind, list) && !sharedCustomised(kind));
+
   if (typeof prefs.theme === 'string') setTheme(prefs.theme);
   try { if (typeof prefs.view === 'string' && VIEW_MODES.includes(prefs.view)) localStorage.setItem(VIEW_KEY, prefs.view); } catch { /* ignore */ }
-  if (Array.isArray(prefs.presets)) {
-    // Merge by id, keeping any presets already on this device.
-    const have = new Map(loadPresets().map((p) => [p.id, p]));
-    for (const p of prefs.presets) if (p && p.id && p.name && p.config && !have.has(p.id)) have.set(p.id, p);
-    savePresets([...have.values()]);
+
+  if (meaningful('places', prefs.storageLocations)) {
+    adoptSharedRows(await db.addSharedRowsIfAbsent(namesToRows('places', prefs.storageLocations)));
+    STORAGES = loadStorageLocs();
   }
-  if (Array.isArray(prefs.people)) {
-    // Merge people by normalised name, keeping any already on this device.
-    const have = new Map(loadPeople().map((p) => [normName(p.name), p]));
-    for (const p of prefs.people.map(coercePerson)) if (p.name && !have.has(normName(p.name))) have.set(normName(p.name), p);
-    savePeople([...have.values()]);
+  if (meaningful('presets', prefs.presets)) {
+    adoptSharedRows(await db.addSharedRowsIfAbsent(presetsToRows(prefs.presets)));
   }
-  // Owners are UNIONed like the storage places: an import must never take away a
-  // name this device is already using on its items.
-  if (Array.isArray(prefs.owners) && prefs.owners.length) {
-    saveOwners([...loadOwners(), ...prefs.owners]);
+  if (meaningful('people', prefs.people)) {
+    adoptSharedRows(await db.addSharedRowsIfAbsent(sharedRowsFrom('people', prefs.people.map((p) => coercePerson({ ...p })))));
   }
-  // Conditions come across whole rather than merged: they are an ordered list, and
-  // the order is the point. A backup that predates editable conditions has none, so
-  // whatever this device already uses is left alone.
-  if (Array.isArray(prefs.conditions) && prefs.conditions.length) {
-    saveConditions(prefs.conditions);
+  if (meaningful('owners', prefs.owners)) {
+    adoptSharedRows(await db.addSharedRowsIfAbsent(namesToRows('owners', prefs.owners)));
   }
+  if (meaningful('conditions', prefs.conditions)) {
+    await saveConditions(prefs.conditions);
+  }
+  await refreshShared();
 }
 
 // ---------- utilities ----------
@@ -7694,6 +7833,7 @@ async function render() {
   try {
     await refreshActions();     // fresh action data for badges, the editor buffer & the Actions screen
     await refreshKits();        // fresh kits for the add-a-kit pickers & packing-list clusters
+    await refreshShared();      // the five lists you author — the other device may have changed them
     const node = await renderRoute();
     app.innerHTML = '';
     app.appendChild(node);
@@ -7736,16 +7876,17 @@ function applyMode() {
 
 window.addEventListener('hashchange', render);
 
-// The timeline is the one user-editable list that lives in shared data, so a
-// device left open can fall behind the other one. Re-read it whenever the app
-// comes back to the fore, and redraw if it actually changed — otherwise this
-// device would keep showing an old timeline, and its next save would write that
-// old list back over the new one.
+// The timeline and the five lists you author all live in shared data, so a device
+// left open can fall behind the other one. Re-read them whenever the app comes
+// back to the fore, and redraw if anything actually changed — otherwise this
+// device would keep showing an old list, and its next save would write that old
+// list back over the new one.
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') return;
-  const before = JSON.stringify(PHASES);
+  const before = JSON.stringify([PHASES, SHARED_ROWS]);
   await db.refreshPhases().catch(() => {});
-  if (JSON.stringify(PHASES) !== before) render();
+  await refreshShared();
+  if (JSON.stringify([PHASES, SHARED_ROWS]) !== before) render();
 });
 
 // When a newer published version installs in the background, offer a one-tap
@@ -7803,10 +7944,12 @@ function watchForUpdate(reg) {
   // apply saved theme (also handled inline in index.html to avoid a flash)
   const t = currentTheme();
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
-  // Install the saved condition list BEFORE anything reads or coerces an item, so
-  // every screen and every save works from the same list all the way through.
-  setItemConditions(loadConditions());
   await db.ensureSeeded();
+  // Read the five lists you author, and install the condition list, before the
+  // first render. (An item's condition no longer has to be on the list to survive
+  // a save — coerceItem keeps any id it doesn't recognise — so this can happily
+  // come after the catalogue is open.)
+  await refreshShared();
   ensurePersistentStorage(); // ask the browser to protect our data (non-blocking)
   // Move any still-inline item photos into the photos store (one-time, resumable).
   // Awaited BEFORE the first render so lists draw with their thumbnails already in
@@ -7822,6 +7965,20 @@ function watchForUpdate(reg) {
   // or accidental delete is always recoverable. Non-blocking and self-guarded.
   db.maybeAutoSnapshot(collectPrefs()).catch(() => {});
   await render();
+  // Move this device's own pre-v120 lists into the account — once, in the
+  // background. Deliberately AFTER the first render: on a signed-in device it
+  // waits until the account's copy has actually arrived before writing anything
+  // (never migrate blind), and that wait must not sit in front of the app opening.
+  // Meanwhile the screens still show this device's lists — `withLegacyLists` keeps
+  // them in the read-only cache until the real adoption lands.
+  db.migrateSharedLists()
+    .then(async (r) => {
+      if (!r || !r.added) return;
+      logDiag('shared-lists', { adopted: r.kinds, rows: r.added });
+      await refreshShared();
+      render();
+    })
+    .catch((err) => logDiag('shared-lists', err));
   // Item editors open via partial re-renders (not the router), so watch the
   // app subtree and re-evaluate the accent mode whenever the DOM changes.
   new MutationObserver(applyMode).observe(app, { childList: true, subtree: true });
