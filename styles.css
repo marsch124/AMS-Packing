@@ -5903,3 +5903,40 @@ table.grid {
 .nudge.sync.urgent .nudge-body > b { color: var(--check-danger); }
 .nudge.sync .nudge-acts .btn { white-space: nowrap; }
 
+
+/* The self-check's working, shown (v131). "Nothing is missing" is only believable
+   if you can see what was compared against what. */
+.chk-wrap {
+  overflow-x: auto;
+  margin: 10px 0 2px;
+}
+
+.chk-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .84rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chk-tbl th,
+.chk-tbl td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.chk-tbl th {
+  font-size: .74rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--muted);
+  border-bottom-color: var(--ink);
+}
+
+.chk-tbl .num { text-align: right; }
+.chk-tbl tbody tr:last-child td { border-bottom: none; }
+.chk-tbl tr[data-gap] td { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.chk-tbl tr[data-gap] td:last-child { color: var(--check-warn); }
+.sync-check[data-level="broken"] .chk-tbl tr[data-gap] td:last-child { color: var(--check-danger); }
+.chk-note { font-size: .8rem; }

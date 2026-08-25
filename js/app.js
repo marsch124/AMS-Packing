@@ -23,7 +23,7 @@ import {
   PERSON_COLORS, coercePerson, newPerson, personColor, assignedPeople, DEFAULT_PEOPLE,
   SHARED_KINDS, sharedRowId, sharedRowsOfKind, sharedRowsFrom, isFactoryList,
   AUDITABLE_KINDS, AUDIT_LABELS, referencedListValues, auditDeviceLists,
-  conditionsFromRows, peopleFromRows, namesFromRows, orderedNamesFromRows, ownersByUsage, namesToRows, presetsFromRows, presetsToRows,
+  conditionsFromRows, conditionsToRows, peopleFromRows, namesFromRows, orderedNamesFromRows, ownersByUsage, namesToRows, presetsFromRows, presetsToRows,
   monthKey, shiftMonth, monthGrid, rangeCellState, orderRange,
   catalogRows, duplicateGroups, duplicateIds,
   backupCounts, backupShrinks, presetConfigFromEvent, applyPresetConfig,
@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v130';
+const APP_VERSION = 'v131';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -5821,6 +5821,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v131', '2026-08-27 · 00:30 UTC', false, 'Getting a deleted list entry back — and the check now shows its working',
+      '<b>Two things you ran into within minutes of each other, and they turn out to be the same problem.</b><br><br><b>(1) “It does not work.”</b> You removed six storage places and the check still said <b>“This device has everything”</b> — and, annoyingly, it was <em>right</em>. The check finds a missing entry by noticing that your <em>gear</em> points at something your <em>list</em> has never heard of. A place with <b>nothing currently stored in it</b> leaves nothing pointing at it, so removing it leaves no gap to find. Perfectly correct, completely unhelpful, because the app told you none of that — it just said all was well and left you to wonder which of you was wrong.<br><br>So the check now <b>shows its working</b>. Underneath the verdict is a short table: for each of the five lists, <b>how many different answers your gear actually uses</b>, <b>how many entries are on your list</b>, and <b>how many are unaccounted for</b>. Only the last column is a problem. Your list holding <em>more</em> than your gear uses is completely normal — a place you are keeping for later is not a fault — and now you can see that at a glance instead of taking the green tick on trust.<br><br><b>(2) “I have six places I want back.”</b> Anything still stored on an item was always recoverable: that is precisely what the check reads, and it names them. But a place with <b>nothing</b> in it is a harder case — once the entry is gone it is gone from this device <em>and</em> from your account, because a removal syncs like every other change. The only surviving copy was inside this device’s <b>automatic backups</b>, and the only way to reach one was to restore the <b>whole</b> snapshot — rolling back every item and every trip along with it. That is a wildly disproportionate hammer for “I deleted a name I wanted”.<br><br>There is now a button for exactly that job: <b>Settings → Sync your devices → Recover entries from this device’s backups</b>. It reads <b>every</b> automatic backup on the device and puts back any list entry — place, owner, person, trip preset or item condition — that is missing from your lists today. It is <b>purely additive</b>: it can only ever put things back. It never removes, renames or reorders anything, so it is safe to press when you are not sure, which is the entire point of offering it. Recovered entries join at the <b>end</b> of their list; use the <b>▲</b> arrows in Storage places to put them where you want them.',
+      'A list entry you deleted by mistake takes one button to get back, instead of a full restore that would undo everything else you have done since — and the check now proves it looked, rather than just asserting that all is well.'),
     v('v130', '2026-08-26 · 23:15 UTC', false, 'The self-check was answering from memory — you caught it within the hour',
       '<b>You found this on check 3.3 of the field sheet, and it is the worst possible bug for this particular feature.</b> You removed three storage places on purpose, went back to <b>Is this device missing anything?</b>, and it carried on saying <b>“This device has everything”</b>. A check that reports all-clear while looking at a list it has not read is worse than no check at all, because it invites you to trust it.<br><br><b>What was wrong.</b> Working out what your gear points at means walking every item in every template — 545 rows — plus every trip entry, so v129 worked it out once and remembered the answer. Fine in itself. The mistake was that the <em>verdict</em> was remembered too, and only the Home screen ever refreshed it. Meanwhile the Settings list editors <b>deliberately redraw only their own list</b> and never the whole screen — that is on purpose, so that renaming something doesn\u2019t throw away your scroll position halfway down a long page. Put the two together and nothing on earth was going to tell the check that three places had just gone. It was reporting an answer from whenever you last looked at the Home screen.<br><br><b>What it does now.</b> The check re-runs <b>every time it is drawn</b>, and it re-runs <b>the moment any of the six lists changes</b> — remove a place and the verdict underneath updates on the spot, without the screen jumping. It stays fast because the two halves are now separated properly: what your <em>gear</em> refers to is the expensive half and only changes when you edit an <em>item</em>; comparing that against your <em>lists</em> is instant, and that is the half a list edit re-runs. <b>Check again</b> now re-reads both halves, so it is the belt-and-braces option if you ever doubt what you are looking at.<br><br><b>And the line above it was stale too.</b> The <b>Storage places</b> summary — “17 places · Bedroom wardrobe, …” — was written when the screen was drawn and never updated, so after removing three it still claimed seventeen. Same cause, same fix: it now keeps count as you edit.<br><br>My verification missed it for an embarrassing reason worth writing down: while testing I kept hopping to the Home screen between steps, and Home was the one screen that refreshed the answer. So I only ever saw the check <em>after</em> something had quietly fixed it. You went straight from the edit to the check — the obvious thing to do — and it fell over immediately.',
       'The check now tells you what is true at the moment you look at it, rather than what was true the last time you were on the Home screen.'),
@@ -6614,6 +6617,30 @@ function accountName(user) {
 // looked short. Now the device says so itself, and names exactly what it can't
 // account for — and the fix is written as TWO numbered steps, because giving it as
 // one is what left him staring at an empty app.
+function countsTable(a) {
+  const rows = a.lists.map((r) => `<tr${r.missing.length ? ' data-gap="1"' : ''}>
+      <td>${esc(AUDIT_LABELS[r.kind])}</td>
+      <td class="num">${r.used}</td>
+      <td class="num">${r.listed}</td>
+      <td class="num">${r.missing.length ? `<b>${r.missing.length}</b>` : '—'}</td>
+    </tr>`).join('');
+  return `<div class="chk-wrap"><table class="chk-tbl">
+    <thead><tr><th>List</th><th class="num">In use</th><th class="num">On your list</th><th class="num">In use, not listed</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table></div>
+  <p class="muted chk-note"><b>In use</b> is how many different answers your items and trips actually name. The last column is <em>part</em> of that — the ones your list has never heard of — so it is the only column that can indicate a problem, and the three do not add up to each other. Your list holding <b>more</b> than is in use is perfectly normal: a place you are keeping for later is not a fault. And removing a place that had <b>nothing</b> stored in it leaves nothing pointing at it, so it can never show up here — which is why the check can quite correctly stay green after you have deleted something you wanted.</p>`;
+}
+
+// Both buttons, in every state: the recovery is most needed precisely when the
+// check is green, because a list entry nothing points at is the one kind that
+// leaves no trace to find.
+function checkActions() {
+  return `<div class="btnrow">
+    <button class="btn ghost sm" data-sync="check">Check again</button>
+    <button class="btn ghost sm" data-sync="recover">Recover entries from this device’s backups</button>
+  </div>`;
+}
+
 function listCheckBlock(a) {
   if (!a) return '';
   if (a.level === 'off') {
@@ -6626,7 +6653,8 @@ function listCheckBlock(a) {
     return `<div class="sync-check" data-level="ok">
       <p class="data-status">${ic('check', 'sm')}<b>This device has everything</b></p>
       <p class="muted">Every storage place, owner, item condition, person and stage your gear refers to is on the lists here — so nothing has gone missing on the way down.</p>
-      <div class="btnrow"><button class="btn ghost sm" data-sync="check">Check again</button></div>
+      ${countsTable(a)}
+      ${checkActions()}
     </div>`;
   }
   const rows = a.gappy.map((r) => `<li><b>${esc(AUDIT_LABELS[r.kind])}</b> — this device lists ${r.listed}, and your gear names ${r.missing.length} more it has never heard of:
@@ -6638,13 +6666,14 @@ function listCheckBlock(a) {
       ? 'This is what it looks like when a list is added in a new version while a device is <em>already</em> syncing: that device downloads the empty list once, decides it is done, and afterwards only ever receives brand-new entries — never the ones that were already there.'
       : 'A gap or two is normal — remove a storage place you no longer use and the things still standing in it keep the old name on purpose. Worth a glance rather than an alarm.'}</p>
     <ul class="muted sync-gaps">${rows}</ul>
+    ${countsTable(a)}
     ${hard ? `<p class="muted"><b>How to put it right — two steps, and the second is the one everyone forgets:</b></p>
     <ol class="muted sync-fix">
       <li>Press <b>Replace this device with the account copy</b> below. It asks twice, then the app reloads.</li>
       <li><b>Sign in again.</b> Nothing downloads until you do — the reset signs this device out on purpose, so the erase can’t be mistaken for you deleting everything everywhere.</li>
     </ol>
     <p class="muted sync-note">Do this on <em>this</em> device — the one with the gaps. It throws away what is here and takes the account’s copy, which is the only thing that has ever fixed this.</p>` : ''}
-    <div class="btnrow"><button class="btn ghost sm" data-sync="check">Check again</button></div>
+    ${checkActions()}
   </div>`;
 }
 
@@ -6694,6 +6723,29 @@ async function syncCard(loaded = {}) {
         // saying it until he has (see the "Sign in to finish the swap" nudge in renderHome).
         alert('Step 1 of 2 done — this device has been cleared.\n\nThe app will reload, and it will be EMPTY.\n\nStep 2: sign in again. Nothing downloads until you do.');
         location.reload();
+        return;
+      }
+      if (act === 'recover') {
+        const btn = e.target.closest('[data-sync]');
+        btn.disabled = true;
+        const r = await recoverListsFromBackups().catch((err) => { logDiag('list-recover', err); return null; });
+        btn.disabled = false;
+        if (!r) { alert('Could not read this device’s backups just now. Nothing was changed.'); return; }
+        if (!r.snapshots) {
+          alert('This device has no automatic backups yet, so there is nothing to recover from.\n\nThey build up as you use the app — see Settings → Your data → Automatic backups.');
+          return;
+        }
+        if (!r.total) {
+          alert(`Nothing to put back.\n\nAll ${r.snapshots} backup${r.snapshots === 1 ? '' : 's'} on this device were checked, and every entry in them is already on your lists.`);
+          return;
+        }
+        // Phrased as "N entries in <List>" so the list names can stay plural —
+        // "1 item conditions" is the sort of thing that makes an app feel unfinished.
+        const what = Object.entries(r.added)
+          .map(([k, n]) => `${n} ${n === 1 ? 'entry' : 'entries'} in ${AUDIT_LABELS[k]}`)
+          .join('\n');
+        alert(`Put back:\n\n${what}\n\nThey were added to the END of their lists — nothing was removed, renamed or reordered. Use the ▲ arrows in Storage places to move them where you want them.`);
+        render();
         return;
       }
       if (act === 'check') {
@@ -8501,6 +8553,55 @@ async function applyPrefs(prefs) {
     await saveConditions(prefs.conditions);
   }
   await refreshShared();
+}
+
+// Put back list entries that were removed, from this device's own automatic backups.
+//
+// 🚨 WHY THIS EXISTS. Martin removed six storage places while field-testing the
+// self-check, and wanted them back. Anything still stored ON an item is recoverable
+// from the items themselves — that is exactly what the check reads. But a place with
+// nothing currently in it leaves no trace at all once its row is gone: not on the
+// device, and not in the account either, because a removal syncs like everything
+// else. The automatic on-device backups were the only surviving copy — and the only
+// way to reach one was to restore the WHOLE snapshot, rolling back every item and
+// trip with it. That is far too big a hammer for "I deleted a name I wanted back",
+// and it is exactly the sort of all-or-nothing choice that has cost him data before.
+//
+// Purely ADDITIVE, across every snapshot on the device. It can only put entries
+// back: it never removes, renames or reorders anything, so it is safe to press when
+// you are not sure — which is the whole point of offering it.
+async function recoverListsFromBackups() {
+  const snaps = await db.listSnapshots().catch(() => []);
+  const added = {};
+  if (!snaps.length) return { added, total: 0, snapshots: 0 };
+  // Oldest first, so the earliest spelling of a name wins if two disagree — later
+  // rows are skipped as already-present rather than overwriting.
+  const ordered = [...snaps].reverse();
+  const bump = (kind, n) => { if (n) added[kind] = (added[kind] || 0) + n; };
+  const put = async (kind, rows) => {
+    if (!rows.length) return;
+    const before = sharedRowsOfKind(SHARED_ROWS, kind).length;
+    adoptSharedRows(await db.addSharedRowsIfAbsent(rows));
+    bump(kind, sharedRowsOfKind(SHARED_ROWS, kind).length - before);
+  };
+  for (const s of ordered) {
+    const prefs = s && s.data && s.data.prefs;
+    if (!prefs || typeof prefs !== 'object') continue;
+    // The v120 guard: a backup from before the lists were shared always carried the
+    // standard places and roster, customised or not. Never plant those as data.
+    const meaningful = (kind, list) => Array.isArray(list) && list.length
+      && !(isFactoryList(kind, list) && !sharedCustomised(kind));
+    if (meaningful('places', prefs.storageLocations)) await put('places', namesToRows('places', prefs.storageLocations));
+    if (meaningful('owners', prefs.owners)) await put('owners', namesToRows('owners', prefs.owners));
+    if (meaningful('people', prefs.people)) await put('people', sharedRowsFrom('people', prefs.people.map((p) => coercePerson({ ...p }))));
+    if (meaningful('presets', prefs.presets)) await put('presets', presetsToRows(prefs.presets));
+    // Conditions are added one row at a time here, NOT replaced wholesale as a full
+    // restore does — recovering a name must never reorder the list you have now.
+    if (meaningful('conditions', prefs.conditions)) await put('conditions', conditionsToRows(prefs.conditions));
+  }
+  await refreshShared();
+  STORAGES = collectStorages(ALL_LISTS);
+  return { added, total: Object.values(added).reduce((n, v) => n + v, 0), snapshots: snaps.length };
 }
 
 // ---------- utilities ----------
