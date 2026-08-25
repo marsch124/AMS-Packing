@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v129b';
+const APP_VERSION = 'v130';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -133,6 +133,12 @@ let SHARED_STORED = new Set();
 function adoptSharedRows(stored) {
   SHARED_STORED = new Set(stored.map((r) => r.kind));
   SHARED_ROWS = withLegacyLists(stored);
+  // Every write to every shared list arrives here (rule 6), which makes this the
+  // one place that always knows a list just moved — so it is where the self-check
+  // is told its answer is out of date. Without it the check happily went on
+  // insisting "This device has everything" after three places had been removed.
+  LAST_LIST_CHECK = null;
+  if (typeof document !== 'undefined' && document.getElementById('sync-check-slot')) recheckListsInPlace();
   return SHARED_ROWS;
 }
 // 🚨 NEVER RE-RENDER OVER SOMEONE'S TYPING.
@@ -207,6 +213,17 @@ const sharedStored = (kind) => SHARED_STORED.has(kind);
 const SYNC_GEN = 2;                              // 1 = phases (v118) · 2 = shared (v120)
 const AUDIT_HUSH_KEY = 'ams-list-check-hushed';  // the one verdict he has already seen and waved away
 let LAST_LIST_CHECK = null;
+// What this device's GEAR points at, kept separately from the verdict.
+//
+// The split matters for a real reason. Working out what the gear refers to means
+// walking every item in every template (545 rows here) plus every trip entry —
+// too much to redo each time a screen redraws. Comparing that against the lists is
+// free. And the two change for different reasons: only editing an ITEM changes
+// what is referenced, while editing a LIST changes only the comparison. So a
+// screen that hands over fresh data refreshes both, and a list edit re-runs just
+// the cheap half — which is what makes it affordable to re-check after every edit
+// rather than leaving a stale answer on screen.
+let REFERENCED = null;
 
 // Every list as the app is really showing it — stored rows where there are any,
 // the code's defaults where there are none. An entry that comes from the defaults
@@ -222,22 +239,45 @@ function listsInForce() {
   };
 }
 
-// Pass the screen's own data in where it already has it; only the Settings button
-// pays for a re-read.
+// Hand over the screen's own data wherever it already has it — Home and Settings
+// both load lists/events/actions anyway, so a fresh check costs them nothing.
 async function runListCheck(loaded = {}) {
-  const [lists, events, actions] = await Promise.all([
-    loaded.lists || db.getLists(),
-    loaded.events || db.getEvents(),
-    loaded.actions || db.getActions(),
-  ]);
+  if (loaded.lists || !REFERENCED) {
+    const [lists, events, actions] = await Promise.all([
+      loaded.lists || db.getLists(),
+      loaded.events || db.getEvents(),
+      loaded.actions || db.getActions(),
+    ]);
+    REFERENCED = { ref: referencedListValues({ lists, events, actions }), hasCatalogue: lists.length > 0 };
+  }
   const st = await db.syncStatus().catch(() => ({ signedIn: false }));
   LAST_LIST_CHECK = auditDeviceLists({
-    referenced: referencedListValues({ lists, events, actions }),
+    referenced: REFERENCED.ref,
     inForce: listsInForce(),
     signedIn: !!st.signedIn,
-    hasCatalogue: lists.length > 0,
+    hasCatalogue: REFERENCED.hasCatalogue,
   });
   return LAST_LIST_CHECK;
+}
+
+// Re-run the check and redraw it where it stands.
+//
+// 🚨 WHY THIS EXISTS. v129 shipped with the check reading from a cache that only
+// Home ever refreshed, and the Settings list editors deliberately redraw just their
+// own list — never the whole screen, so your scroll position survives a rename. Put
+// those two together and removing three storage places left the check sitting there
+// saying "This device has everything", which is the one thing it must never say
+// wrongly. Martin found it within an hour of publishing, on check 3.3 of the field
+// sheet: the FIRST thing he did was the thing my own verification had skipped,
+// because I had bounced via Home in between and refreshed the cache by accident.
+//
+// Cheap by construction: the gear has not changed, so only the comparison re-runs.
+// Replaces one subtree, so it can never take an open editor with it (rule 7).
+async function recheckListsInPlace() {
+  const slot = document.getElementById('sync-check-slot');
+  if (!slot) return;                       // not on screen — the next render will do it
+  const a = await runListCheck().catch(() => null);
+  slot.innerHTML = listCheckBlock(a);
 }
 
 // Hush ONE verdict, not the feature. If a different list goes short later — or a
@@ -5781,6 +5821,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v130', '2026-08-26 · 23:15 UTC', false, 'The self-check was answering from memory — you caught it within the hour',
+      '<b>You found this on check 3.3 of the field sheet, and it is the worst possible bug for this particular feature.</b> You removed three storage places on purpose, went back to <b>Is this device missing anything?</b>, and it carried on saying <b>“This device has everything”</b>. A check that reports all-clear while looking at a list it has not read is worse than no check at all, because it invites you to trust it.<br><br><b>What was wrong.</b> Working out what your gear points at means walking every item in every template — 545 rows — plus every trip entry, so v129 worked it out once and remembered the answer. Fine in itself. The mistake was that the <em>verdict</em> was remembered too, and only the Home screen ever refreshed it. Meanwhile the Settings list editors <b>deliberately redraw only their own list</b> and never the whole screen — that is on purpose, so that renaming something doesn\u2019t throw away your scroll position halfway down a long page. Put the two together and nothing on earth was going to tell the check that three places had just gone. It was reporting an answer from whenever you last looked at the Home screen.<br><br><b>What it does now.</b> The check re-runs <b>every time it is drawn</b>, and it re-runs <b>the moment any of the six lists changes</b> — remove a place and the verdict underneath updates on the spot, without the screen jumping. It stays fast because the two halves are now separated properly: what your <em>gear</em> refers to is the expensive half and only changes when you edit an <em>item</em>; comparing that against your <em>lists</em> is instant, and that is the half a list edit re-runs. <b>Check again</b> now re-reads both halves, so it is the belt-and-braces option if you ever doubt what you are looking at.<br><br><b>And the line above it was stale too.</b> The <b>Storage places</b> summary — “17 places · Bedroom wardrobe, …” — was written when the screen was drawn and never updated, so after removing three it still claimed seventeen. Same cause, same fix: it now keeps count as you edit.<br><br>My verification missed it for an embarrassing reason worth writing down: while testing I kept hopping to the Home screen between steps, and Home was the one screen that refreshed the answer. So I only ever saw the check <em>after</em> something had quietly fixed it. You went straight from the edit to the check — the obvious thing to do — and it fell over immediately.',
+      'The check now tells you what is true at the moment you look at it, rather than what was true the last time you were on the Home screen.'),
     v('v129b', '2026-08-26 · 22:30 UTC', false, 'The small grey line under every reminder is readable now',
       'A measurement, not an opinion — and a follow-on from v129, where the same check was run on the two new sync warnings. Every Home-screen reminder carries a <b>small grey sub-line</b> under its message: <em>“One tap saves a dated file to your Downloads folder”</em>, <em>“Tap to open your Actions list”</em>, and so on. That grey was the grey meant for <b>plain white cards</b> — but these reminders sit on a <b>coloured tint</b>, and grey-on-tint is not the same thing as grey-on-white. Measured properly in the light theme, the sub-line on the red <b>“Your data is not backed up”</b> warning came out at <b>4.34:1</b>, under the <b>4.5:1</b> minimum for readable text, at <b>12.8px</b> — the smallest text in the app, on the most important warning in it. The trip countdown and the to-do reminder sat at <b>4.53:1</b>: technically passing, with nothing at all to spare on a phone in daylight. All of them now measure between <b>8.3:1 and 9.7:1</b>, in both themes. Nothing moved and no colour changed hue; the line simply stopped being faint. It is deliberately <b>one rule for the whole family</b> rather than a patch on the one that failed, so the greys cannot drift apart again as reminders get added.',
       'The line that tells you what a warning actually wants you to do is now legible on every reminder, in both themes — including the backup warning, where it was measurably too faint.'),
@@ -6605,9 +6648,12 @@ function listCheckBlock(a) {
   </div>`;
 }
 
-async function syncCard() {
+async function syncCard(loaded = {}) {
   const st = await db.syncStatus().catch(() => ({ enabled: true, signedIn: false, user: '', state: 'error' }));
-  const audit = LAST_LIST_CHECK || await runListCheck().catch(() => null);
+  // Always recomputed, never read from the cache: renderSettings has already loaded
+  // the lists this needs, so a fresh answer is free — and a stale one here is the
+  // whole bug that got past v129.
+  const audit = await runListCheck(loaded).catch(() => null);
   const body = st.signedIn
     ? `<p class="data-status">${ic('check', 'sm')}<b>Syncing as ${esc(accountName(st.user))}</b></p>
        <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on — and so are the lists you make here: <b>When</b>, <b>Item conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>. Changes made offline are sent as soon as you're back online.</p>
@@ -6627,7 +6673,7 @@ async function syncCard() {
     ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Item conditions, Trip presets, People, Owners or Storage places look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
     <p class="muted sync-note">Use <b>Replace this device</b> only on a device holding the <em>wrong</em> catalogue — it erases what is on this one and takes the account's copy instead. The device with your real catalogue should <b>sign in</b>, not this. It is <b>two steps</b>: it erases and reloads, and then you have to <b>sign in again</b> before anything downloads.</p>
     <h3 class="sync-check-h">Is this device missing anything?</h3>
-    ${listCheckBlock(audit)}
+    <div id="sync-check-slot">${listCheckBlock(audit)}</div>
   </div>`);
   el.addEventListener('click', async (e) => {
     const act = e.target.closest('[data-sync]')?.dataset.sync;
@@ -6651,7 +6697,7 @@ async function syncCard() {
         return;
       }
       if (act === 'check') {
-        LAST_LIST_CHECK = null;
+        REFERENCED = null;                  // re-read the gear too, not just the lists
         const a = await runListCheck();
         showToast(a.level === 'ok'
           ? 'Checked — this device has everything.'
@@ -6740,6 +6786,14 @@ const toneOf = (t) => SETTINGS_TONES[t] || t || '#64748b';
 
 // The summary line shared by every fold: coloured icon chip, title + one-line
 // state, and a chevron that turns as it opens.
+// Update one fold's summary line where it stands. The editors below a fold redraw
+// only their own list, on purpose, so anything the summary states has to be told
+// separately — otherwise the line keeps advertising the count from page load.
+function setFoldSummary(id, text) {
+  const el = document.querySelector(`details[data-sset="${id}"] .howto-sum`);
+  if (el) el.textContent = text || '';
+}
+
 function foldSummary(title, summaryText, icon) {
   return `<summary>
     <span class="sset-ic">${ic(icon || 'dot', 'md')}</span>
@@ -6831,7 +6885,7 @@ async function renderSettings() {
   const syncSt = db.cloudConfigured()
     ? await db.syncStatus().catch(() => ({ signedIn: false, user: '' }))
     : null;
-  const syncEl = db.cloudConfigured() ? await syncCard() : null;
+  const syncEl = db.cloudConfigured() ? await syncCard({ lists: bLists, events: bEvents, actions: bActions }) : null;
 
   const card = h(`<div class="card block">
     <h2>Backup &amp; restore</h2>
@@ -6918,6 +6972,7 @@ async function renderSettings() {
     const box = places.querySelector('[data-places]');
     // In YOUR order, not A–Z: the arrows below are what sets it.
     const locs = loadStorageLocs();
+    setFoldSummary('places', placesSummary(locs));
     box.innerHTML = locs.length
       ? locs.map((s, i) => `<div class="place-row">
           <span class="place-name">${esc(s)}</span>
@@ -7511,9 +7566,7 @@ async function renderSettings() {
     { icon: 'person' }));
   wrap.appendChild(foldCard('owners', ownerCard, ownersSummary(), { icon: 'person' }));
   wrap.appendChild(foldCard('phases', phaseCard, phasesSummary(), { icon: 'clock' }));
-  wrap.appendChild(foldCard('places', places, places2.length
-    ? `${nOf(places2.length, 'place', 'places')} · ${places2.slice(0, 3).join(', ')}${places2.length > 3 ? '…' : ''}`
-    : 'None yet', { icon: 'box' }));
+  wrap.appendChild(foldCard('places', places, placesSummary(places2), { icon: 'box' }));
   wrap.appendChild(foldCard('conditions', condCard,
     `${nOf(ITEM_CONDITIONS.length, 'condition', 'conditions')} · ${ITEM_CONDITIONS.map((c) => c.label).join(', ')}${conditionsCustomised() ? '' : ' (standard)'}`,
     { icon: 'swap' }));
@@ -8000,6 +8053,16 @@ function phasesSummary() {
   if (!names.length) return 'None yet';
   const shown = names.slice(0, 3).join(' → ');
   return `${PHASES.length} phases · ${shown}${names.length > 3 ? ' → …' : ''}${phasesCustomised() ? '' : ' (standard)'}`;
+}
+
+// The one-line state for the Storage places fold. Shared by the first render and
+// by every redraw after an edit, so the two can't disagree.
+function placesSummary(list = loadStorageLocs()) {
+  // Pluralised here rather than with renderSettings' `nOf`, which is local to it —
+  // this is called from the redraw path too, long after that scope has gone.
+  return list.length
+    ? `${list.length} ${list.length === 1 ? 'place' : 'places'} · ${list.slice(0, 3).join(', ')}${list.length > 3 ? '…' : ''}`
+    : 'None yet';
 }
 
 // Is the roster a real list yet, or still being derived from what's in use?
