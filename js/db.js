@@ -17,7 +17,7 @@ import {
   coerceList, coerceEvent, coerceItem, coerceMembership, coerceAction, coerceKit, normName,
   resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
-  id as newId, isPhotoRef, inlinePhotos,
+  id as newId, isPhotoRef, inlinePhotos, looksLikeEmail, ownerNameFromEmail,
   templateDefaults, containerDefaultsFrom, planContainerMigration,
 } from './model.js';
 import { seedLists } from './seed.js';
@@ -658,7 +658,54 @@ export async function ensureSeeded() {
   try { localStorage.setItem(SEED_KEY, String(SEED_VERSION)); } catch { /* ignore */ }
   await migrateContainerModel();
   await migrateTemplateNames();
+  await migrateOwnerField();
   return getLists();
+}
+
+// Move "whose it is" off the reserved `owner` property and onto `ownedBy` (v117).
+//
+// THE BUG THIS REPAIRS. `owner` is reserved by the sync addon: on every write it
+// does `row.owner || (row.owner = <signed-in account>)`, because it uses that
+// field for access control. The app was using the same name for its own "whose
+// item is this", so the moment this database started syncing, every item that
+// had no owner set was quietly stamped with the account's e-mail address — and
+// that address is what then showed on the item rows, in the Care list, in the
+// All-items table and in the "Whose it is" grouping. On Martin's catalogue that
+// was 422 of 431 items.
+//
+// What this does, once per device:
+//   • an address the sync stamped there becomes the person's NAME
+//     ("martin.schabbauer@icloud.com" → "Martin"), which is what he actually
+//     means by it;
+//   • a real name he typed ("Anna", "Shared") is carried across untouched;
+//   • `owner` itself is LEFT ALONE — it belongs to the sync addon now, which
+//     will keep re-stamping it. Nothing in the app reads it any more.
+//
+// Idempotent: once `ownedBy` is set, re-running changes nothing.
+const OWNER_FIELD_KEY = 'ams-owner-field';
+const OWNER_FIELD_VERSION = 1;
+
+export async function migrateOwnerField() {
+  let done = 0;
+  try { done = Number(localStorage.getItem(OWNER_FIELD_KEY)) || 0; } catch { /* ignore */ }
+  if (done >= OWNER_FIELD_VERSION) return { skipped: true };
+  const rows = (await getAllRaw(ITEMS).catch(() => [])) || [];
+  const puts = [];
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    // The presence of the key at all means this row has already been written by
+    // v117 or later, so leave it — including a deliberately EMPTY one, which is
+    // an owner the user has since cleared and must not be resurrected.
+    if (typeof r.ownedBy === 'string') continue;
+    const legacy = typeof r.owner === 'string' ? r.owner.trim() : '';
+    if (!legacy) continue;
+    const name = looksLikeEmail(legacy) ? ownerNameFromEmail(legacy) : legacy;
+    if (!name) continue;
+    puts.push({ store: ITEMS, value: { ...r, ownedBy: name } });
+  }
+  if (puts.length) await writeBatch(puts, []);
+  try { localStorage.setItem(OWNER_FIELD_KEY, String(OWNER_FIELD_VERSION)); } catch { /* ignore */ }
+  return { moved: puts.length };
 }
 
 // One-time repair of the container model (v108).

@@ -331,6 +331,34 @@ export function hasInlinePhotos(items) {
 // how large an exported/shared trip bundle can grow.
 export const MAX_PHOTOS = 5;
 
+// --- "Whose it is" ---------------------------------------------------------
+// The field is `ownedBy`, NOT `owner`, and that is load-bearing.
+//
+// `owner` is a RESERVED property on every synced row: the sync addon stamps the
+// signed-in account's address onto it (`K.owner || (K.owner = userId)`) on every
+// single write, and uses it for access control. The app used `owner` for its own
+// "whose thing is this" answer, so the two collided and every item in the
+// catalogue silently came back owned by an e-mail address — which is then what
+// showed on every item row, in the Care list and in the All-items table.
+//
+// Moving the app's answer to `ownedBy` ends the collision for good: the sync
+// addon keeps `owner` to itself, the app never reads it again, and nothing the
+// app writes can be overwritten. See migrateOwnerField() in db.js, which carries
+// the old values across.
+export const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v ?? '').trim());
+
+// Turn a sign-in address into the name a person would actually use:
+// "martin.schabbauer@icloud.com" → "Martin". Takes the part before the @, then
+// its first word (splitting on . _ + -), and capitalises it. Falls back to the
+// whole local part when that first word is too short to be a name ("m.s@…").
+export function ownerNameFromEmail(addr) {
+  const local = String(addr ?? '').trim().split('@')[0] || '';
+  if (!local) return '';
+  const first = local.split(/[._+-]+/).filter(Boolean)[0] || local;
+  const word = first.length >= 2 ? first : local;
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
 export function coerceItem(it) {
   if (!it || typeof it !== 'object') return it;
   it.seasons = asArray(it.seasons);
@@ -388,7 +416,13 @@ export function coerceItem(it) {
   it.size = typeof it.size === 'string' ? it.size : '';
   it.manufacturer = typeof it.manufacturer === 'string' ? it.manufacturer : '';
   it.model = typeof it.model === 'string' ? it.model : '';         // product / model name
-  it.owner = typeof it.owner === 'string' ? it.owner : '';         // whose item it is
+  // Whose item it is. Deliberately NOT called `owner` — see the note above
+  // looksLikeEmail(). A legacy `owner` written before v117 is adopted here so an
+  // old backup file still carries its owners across, but an address the sync
+  // stamped there is ignored: it was never a name anyone typed.
+  it.ownedBy = typeof it.ownedBy === 'string'
+    ? it.ownedBy
+    : (typeof it.owner === 'string' && !looksLikeEmail(it.owner) ? it.owner : '');
   it.acquired = isYMD(it.acquired) ? it.acquired : '';             // date acquired (YYYY-MM-DD)
   it.price = Number.isFinite(it.price) && it.price >= 0 ? it.price : 0; // 0 = unset
   it.currency = typeof it.currency === 'string' ? it.currency : '';
@@ -745,7 +779,7 @@ export function newItem(partial = {}) {
     thumb: '',       // small inline thumbnail of the first photo, for list rows
     maintenance: null, // care record (notes/link/schedule/log) — see normalizeMaintenance
     // Optional descriptive / ownership metadata (all intrinsic to the item):
-    color: '', size: '', manufacturer: '', model: '', owner: '',
+    color: '', size: '', manufacturer: '', model: '', ownedBy: '',
     acquired: '', price: 0, currency: '', purchaseLink: '',
     expiry: '', condition: '', retired: false, retiredReason: '', serial: '', qtyOwned: 0, warranty: '',
     capacityL: 0,    // packing capacity in litres (used by containers; 0 = unset)
@@ -1855,7 +1889,7 @@ export const INTRINSIC_FIELDS = [
   'name', 'swedish', 'category', 'charging', 'chargeType', 'liquid', 'restricted',
   'perNight', 'consumable', 'shortList', 'weight', 'storage', 'sub',
   'photos', 'thumb', 'maintenance', 'stats',
-  'color', 'size', 'manufacturer', 'model', 'owner', 'acquired', 'price', 'currency',
+  'color', 'size', 'manufacturer', 'model', 'ownedBy', 'acquired', 'price', 'currency',
   'purchaseLink', 'expiry', 'condition', 'retired', 'retiredReason', 'serial',
   'qtyOwned', 'warranty', 'capacityL', 'maxKg',
 ];
@@ -2180,7 +2214,7 @@ function buildCatalogItem(copies) {
     size: _firstNonEmpty(copies.map((c) => c.size)),
     manufacturer: _firstNonEmpty(copies.map((c) => c.manufacturer)),
     model: _firstNonEmpty(copies.map((c) => c.model)),
-    owner: _firstNonEmpty(copies.map((c) => c.owner)),
+    ownedBy: _firstNonEmpty(copies.map((c) => c.ownedBy)),
     acquired: _firstNonEmpty(copies.map((c) => c.acquired)),
     price: (copies.map((c) => Number(c.price)).find((p) => p > 0)) || 0,
     currency: _firstNonEmpty(copies.map((c) => c.currency)),

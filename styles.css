@@ -5180,6 +5180,23 @@ table.grid {
 .person-acts { flex: none; display: flex; gap: 2px; }
 .person-row [data-person-del]:hover { color: var(--danger); }
 
+/* Owners manager — used in TWO places from one implementation: the Settings card,
+   and the "⚙ Manage owners…" modal that every Owner dropdown can open. Each row is
+   the name, how many items are theirs, and rename / remove. */
+.owner-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; }
+.owner-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px 7px 10px; border: 1px solid var(--line); border-radius: 10px;
+}
+.owner-ic { flex: none; display: inline-flex; color: var(--muted); }
+.owner-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.owner-name { font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owner-sub { color: var(--muted); font-size: .8rem; }
+.owner-acts { flex: none; display: flex; gap: 2px; }
+.owner-row [data-owner-del]:hover { color: var(--danger); }
+.owners-modal { max-width: 420px; width: min(420px, 92vw); }
+.owners-modal .owner-list { max-height: min(52vh, 420px); overflow-y: auto; }
+
 /* Conditions manager (Settings → Your packing setup). Each row is the condition's
    name plus the two things that decide how it behaves, then its own controls. */
 .cond-list { display: flex; flex-direction: column; gap: 8px; margin: 4px 0 12px; }

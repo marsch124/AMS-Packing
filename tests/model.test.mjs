@@ -29,6 +29,7 @@ import {
   sortRowsBy, groupRowsBy, itemConditionLabel, ITEM_CONDITIONS,
   DEFAULT_ITEM_CONDITIONS, ITEM_CONDITION_IDS, coerceCondition, newCondition, setItemConditions,
   itemCondition, conditionTone, conditionReplaces, careSections, MAINTENANCE_UPCOMING_DAYS,
+  looksLikeEmail, ownerNameFromEmail,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
 
@@ -1063,7 +1064,7 @@ test('resolveTemplateItems: respects membership order', () => {
 
 test('coerceItem: defaults and validates the new metadata fields', () => {
   const empty = coerceItem({ name: 'Thing' });
-  for (const f of ['color', 'size', 'manufacturer', 'model', 'owner', 'acquired', 'currency', 'purchaseLink', 'expiry', 'condition', 'serial']) {
+  for (const f of ['color', 'size', 'manufacturer', 'model', 'ownedBy', 'acquired', 'currency', 'purchaseLink', 'expiry', 'condition', 'serial']) {
     assert.equal(empty[f], '', `${f} should default to ''`);
   }
   assert.equal(empty.price, 0);
@@ -1106,7 +1107,7 @@ test('applyIntrinsic: metadata edits propagate to the shared catalog item', () =
   const cat = newItem({ name: 'Jacket' });
   const edited = resolveMembership(cat, newMembership({ itemId: cat.id, templateId: 't1' }));
   Object.assign(edited, {
-    color: 'Navy', size: 'M', manufacturer: 'Patagonia', model: 'Nano Puff', owner: 'Martin',
+    color: 'Navy', size: 'M', manufacturer: 'Patagonia', model: 'Nano Puff', ownedBy: 'Martin',
     acquired: '2025-12-01', price: 199.95, currency: 'EUR', purchaseLink: 'https://x.example',
     expiry: '2030-01-01', condition: 'good', retired: true, retiredReason: 'replaced',
     serial: 'SN-42', qtyOwned: 2, warranty: '2027-01-01',
@@ -1114,7 +1115,7 @@ test('applyIntrinsic: metadata edits propagate to the shared catalog item', () =
   applyIntrinsic(cat, edited);
   assert.equal(cat.color, 'Navy');
   assert.equal(cat.manufacturer, 'Patagonia');
-  assert.equal(cat.owner, 'Martin');
+  assert.equal(cat.ownedBy, 'Martin');
   assert.equal(cat.price, 199.95);
   assert.equal(cat.currency, 'EUR');
   assert.equal(cat.condition, 'good');
@@ -2349,4 +2350,58 @@ test('careSections: rows keep the order they arrived in (the urgency sort still 
   const row = (name, days) => ({ name, status: { state: 'ok', days } });
   const secs = careSections([row('a', 5), row('b', 1), row('c', 9)], 60);
   assert.deepEqual(secs.find((s) => s.key === 'upcoming').rows.map((r) => r.name), ['a', 'b', 'c']);
+});
+
+// ---- "Whose it is" moved off the reserved `owner` property (v117) -----------
+
+test('looksLikeEmail: tells a sign-in address from a person’s name', () => {
+  assert.equal(looksLikeEmail('martin.schabbauer@icloud.com'), true);
+  assert.equal(looksLikeEmail('  a@b.co  '), true);
+  assert.equal(looksLikeEmail('Martin'), false);
+  assert.equal(looksLikeEmail('Anna & Martin'), false);
+  assert.equal(looksLikeEmail('Shared'), false);
+  assert.equal(looksLikeEmail(''), false);
+  assert.equal(looksLikeEmail(null), false);
+  assert.equal(looksLikeEmail('no-at-sign.com'), false);
+});
+
+test('ownerNameFromEmail: an address becomes the name a person would use', () => {
+  assert.equal(ownerNameFromEmail('martin.schabbauer@icloud.com'), 'Martin');
+  assert.equal(ownerNameFromEmail('anna@example.com'), 'Anna');
+  assert.equal(ownerNameFromEmail('anna_b+tag@example.com'), 'Anna');
+  // Too short to be a name on its own — keep the whole local part rather than "M".
+  assert.equal(ownerNameFromEmail('m.schabbauer@icloud.com'), 'M.schabbauer');
+  assert.equal(ownerNameFromEmail(''), '');
+});
+
+test('coerceItem: adopts a legacy owner name, but never the address sync stamped there', () => {
+  // A real name typed before v117 is carried across.
+  assert.equal(coerceItem({ name: 'Tent', owner: 'Anna' }).ownedBy, 'Anna');
+  // The sync addon's own stamp is not a name and must not become one here — the
+  // one-time migration in db.js is what turns it into "Martin".
+  assert.equal(coerceItem({ name: 'Tent', owner: 'martin.schabbauer@icloud.com' }).ownedBy, '');
+  // Once ownedBy exists it wins, including when deliberately empty.
+  assert.equal(coerceItem({ name: 'Tent', owner: 'Anna', ownedBy: 'Martin' }).ownedBy, 'Martin');
+  assert.equal(coerceItem({ name: 'Tent', owner: 'Anna', ownedBy: '' }).ownedBy, '');
+});
+
+test('INTRINSIC_FIELDS carries ownedBy and no longer the reserved owner', () => {
+  assert.ok(INTRINSIC_FIELDS.includes('ownedBy'));
+  assert.ok(!INTRINSIC_FIELDS.includes('owner'));
+});
+
+test('buildCatalog: the owner survives being rebuilt from a backup', () => {
+  // Two copies of one item, as a pre-relational backup file holds them: the owner
+  // is on one copy only and must not be lost when they are merged back into one.
+  const list = coerceList({
+    id: 'l1', name: 'Travel',
+    items: [newItem({ name: 'Jacket', ownedBy: '' })],
+  });
+  const other = coerceList({
+    id: 'l2', name: 'Hiking',
+    items: [newItem({ name: 'Jacket', ownedBy: 'Anna' })],
+  });
+  const cat = buildCatalog([list, other]);
+  const jacket = cat.items.find((i) => i.name === 'Jacket');
+  assert.equal(jacket.ownedBy, 'Anna');
 });

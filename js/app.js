@@ -33,7 +33,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v116';
+const APP_VERSION = 'v117';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -408,7 +408,7 @@ const GRID_ITEM_COLS = [
   { key: 'size', label: 'Size' },
   { key: 'manufacturer', label: 'Maker' },
   { key: 'model', label: 'Model' },
-  { key: 'owner', label: 'Owner' },
+  { key: 'ownedBy', label: 'Owner' },
 ];
 // The sort choices offered in the table's toolbar. `val` extracts the comparable
 // value from a row; `num` marks numeric fields (compared arithmetically).
@@ -437,7 +437,9 @@ function loadGridCols() {
   const all = GRID_ITEM_COLS.map((c) => c.key);
   try { const saved = JSON.parse(localStorage.getItem(GRID_COLS_KEY) || 'null');
     if (Array.isArray(saved)) {
-      const known = saved.filter((k) => all.includes(k));
+      // 'owner' was renamed to 'ownedBy' in v117 (see model.js) — honour a column
+      // order saved before that so the Owner column keeps its place.
+      const known = saved.map((k) => (k === 'owner' ? 'ownedBy' : k)).filter((k) => all.includes(k));
       return [...known, ...all.filter((k) => !known.includes(k))];
     }
   } catch { /* ignore */ }
@@ -534,10 +536,10 @@ async function renderItemsGrid() {
       if (single) return `<td><select class="g-sel" data-f="container" data-listid="${esc(single.listId)}">${containerOpts(single.container).map((c) => `<option value="${esc(c)}"${c === single.container ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select></td>`;
       return `<td><span class="g-multi">${esc(it.container || '')}</span></td>`;
     }
-    if (key === 'owner') {
-      // Same roster as the item editor's Owner picker, so the two agree — every
-      // owner already in use, plus your People, plus a way to name a new one.
-      return `<td><select class="g-sel g-owner" data-f="owner">${ownerOptsHTML(it.owner)}</select></td>`;
+    if (key === 'ownedBy') {
+      // The very same Owners list as the item editor's picker, so the two always
+      // agree — and it can be added to, renamed and pruned from right here.
+      return `<td><select class="g-sel g-owner" data-f="ownedBy">${ownerOptsHTML(it.ownedBy, { empty: '—' })}</select></td>`;
     }
     return `<td><input class="g-txt" data-f="${key}" value="${esc(it[key] || '')}" autocomplete="off"></td>`; // color / size / maker / model
   };
@@ -641,10 +643,17 @@ async function renderItemsGrid() {
     const f = el.dataset.f; if (!f) return;
     const { l, it } = findItem(el.dataset.listid || row.mems[0].listId, id);
     if (!it) return;
-    if (f === 'owner' && el.value === '__new__') {
-      const name = (prompt('Whose is it? Type a new owner’s name:', '') || '').trim();
-      if (!name) { el.value = it.owner || ''; return; }   // cancelled — put the picker back
-      it.owner = name;
+    if (f === 'ownedBy' && (el.value === '__new__' || el.value === '__manage__')) {
+      if (el.value === '__manage__') {
+        el.value = it.ownedBy || '';                      // put the picker back first
+        const changes = await openOwnersManager();
+        if (changes.size) { lists = await db.getLists(); ALL_LISTS = lists; }
+        rebuild();                                        // every row's picker, and any moved names
+        return;
+      }
+      const name = addOwnerByName('');
+      if (!name) { el.value = it.ownedBy || ''; return; } // cancelled — put the picker back
+      it.ownedBy = name;
       await saveGuard(db.saveList(l));
       lists = await db.getLists(); ALL_LISTS = lists;
       rebuild();                                          // so the new name joins every other row's picker
@@ -760,7 +769,7 @@ const AI_GROUPS = [
   { key: 'condition',    label: 'Condition',         of: (r) => itemConditionLabel(r.it.condition), order: () => ITEM_CONDITIONS.map((c) => c.label), empty: 'Not rated' },
   { key: 'template',     label: 'Template',          of: (r) => r.list.name || '',                                                   empty: 'No template' },
   { key: 'category',     label: 'Category',          of: (r) => r.it.category || '',     order: CATEGORIES,                          empty: 'No category' },
-  { key: 'owner',        label: 'Whose it is',       of: (r) => r.it.owner || '',                                                    empty: 'Nobody named' },
+  { key: 'owner',        label: 'Whose it is',       of: (r) => r.it.ownedBy || '',                                                  empty: 'Nobody named' },
   { key: 'care',         label: 'Care status',       of: (r) => aiCareLabel(r.it),       order: AI_CARE_ORDER,                       empty: 'No care record' },
   { key: 'letter',       label: 'First letter',      of: (r) => (r.it.name || '').trim().charAt(0).toUpperCase() || '',              empty: 'Unnamed' },
 ];
@@ -3649,7 +3658,7 @@ function actionChipsHtml(a) {
 }
 
 function listItemRow(list, it, getOpen, setOpen, draw) {
-  const tags = [it.owner ? `${it.owner}` : '', it.storage ? `${it.storage}` : '', it.container, ...(it.seasons || []), ...(it.contexts || []), ...(it.transports || [])].filter(Boolean);
+  const tags = [it.ownedBy ? `${it.ownedBy}` : '', it.storage ? `${it.storage}` : '', it.container, ...(it.seasons || []), ...(it.contexts || []), ...(it.transports || [])].filter(Boolean);
   const chShort = it.charging ? chargeTypeShort(it.chargeType) : '';
   const care = maintenanceStatus(it);
   const badges = `${isUnfiled(it.name) ? `<span class="badge unfiled" title="Not in any template yet — still a loose item">${ic('warn','xs')}No template</span>` : ''}`
@@ -3770,8 +3779,7 @@ function itemEditor(list, it, setOpen, draw) {
   // time because collectItemValues re-reads them from the items.
   const growField = (name, labelHtml, cur, addLabel, placeholder, seed = []) => {
     const vals = collectItemValues(name);
-    // Extra names worth offering even before anything has been given to them
-    // (Owner seeds itself from Settings → People, so Martin & Anna are there on day one).
+    // Extra values worth offering even before anything has been given them.
     for (const s of seed) if (s && !vals.some((v) => v.toLowerCase() === s.toLowerCase())) vals.push(s);
     vals.sort((a, b) => a.localeCompare(b));
     if (cur && !vals.some((v) => v.toLowerCase() === cur.toLowerCase())) vals.unshift(cur);
@@ -3784,7 +3792,7 @@ function itemEditor(list, it, setOpen, draw) {
   };
   // Open the details panel by default only when it already holds something — or
   // always for a container, whose colour & brand live there and are worth surfacing.
-  const detailsOpen = isContainer || !!(it.color || it.size || it.manufacturer || it.model || it.owner || it.acquired
+  const detailsOpen = isContainer || !!(it.color || it.size || it.manufacturer || it.model || it.ownedBy || it.acquired
     || it.price || it.currency || it.purchaseLink || it.expiry || it.condition || it.retired || it.serial || it.qtyOwned || it.warranty);
 
   // The three parts of "which bag", separated so the editor can show which one is
@@ -3878,7 +3886,8 @@ function itemEditor(list, it, setOpen, draw) {
             ${growField('manufacturer', 'Manufacturer', it.manufacturer, '＋ Add a manufacturer…', 'e.g. Patagonia · Apple')}
             <label class="field"><span>Model <em>product name</em></span><input name="model" value="${esc(it.model)}" placeholder="e.g. Atmos AG 65" autocomplete="off"></label>
           </div>
-          ${growField('owner', 'Owner <em>whose it is</em>', it.owner, '＋ Add an owner…', 'e.g. Martin · Anna · Shared', ownerSeedNames())}
+          <label class="field"><span>Owner <em>whose it is</em></span>
+            <select name="ownedBy-sel" data-was="${esc(it.ownedBy || '')}">${ownerOptsHTML(it.ownedBy)}</select></label>
           <div class="row2">
             <label class="field"><span>Condition</span>${selectHtml('condition', conditionOpts(it.condition), it.condition)}</label>
             <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
@@ -4037,7 +4046,34 @@ function itemEditor(list, it, setOpen, draw) {
       $('.care-newstorage', ed)?.classList.toggle('hidden', !isNew);
       if (isNew) $('input[name=storage-new]', ed)?.focus();
     }
-    if (['color-sel', 'size-sel', 'manufacturer-sel', 'owner-sel'].includes(e.target.name)) {
+    // Owner is a managed list, not a "growing" free-text field: ＋ names one on the
+    // spot, ⚙ opens the manager, and either way the picker is rebuilt in place so
+    // the change is there immediately, without losing anything else being edited.
+    if (e.target.name === 'ownedBy-sel') {
+      const sel = e.target;
+      const before = sel.dataset.was || '';
+      if (sel.value === '__new__') {
+        const keep = addOwnerByName('') || before;
+        sel.innerHTML = ownerOptsHTML(keep);
+        sel.value = keep;
+      } else if (sel.value === '__manage__') {
+        const changes = await openOwnersManager();
+        // CRITICAL. This editor holds the whole template in memory and writes all of
+        // it back on Save. The manager has just changed the owner of items in the
+        // database — quite possibly OTHER items in this very template — so carry
+        // those changes into the copy being edited. Without this, saving one item
+        // silently puts the old owner back on every other item in the template.
+        applyOwnerChanges(list, changes);
+        // Follow what the manager did to the name this item was showing: renamed,
+        // it keeps up; removed and re-assigned, it moves with its things.
+        const keep = changes.has(normName(before)) ? changes.get(normName(before)) : before;
+        sel.innerHTML = ownerOptsHTML(keep);
+        sel.value = keep;
+      }
+      sel.dataset.was = sel.value;
+      return;
+    }
+    if (['color-sel', 'size-sel', 'manufacturer-sel'].includes(e.target.name)) {
       const key = e.target.name.replace('-sel', '');
       const isNew = e.target.value === '__new__';
       $(`.grow-new[data-grow-new="${key}"]`, ed)?.classList.toggle('hidden', !isNew);
@@ -4162,7 +4198,7 @@ function itemEditor(list, it, setOpen, draw) {
       it.size = growVal('size');
       it.manufacturer = growVal('manufacturer');
       it.model = ($('input[name=model]', ed).value || '').trim();
-      it.owner = growVal('owner');
+      it.ownedBy = ($('select[name="ownedBy-sel"]', ed)?.value || '').trim();
       it.condition = $('select[name=condition]', ed).value;
       it.retired = $('input[name=retired]', ed).checked;
       it.retiredReason = it.retired ? $('select[name=retiredReason]', ed).value : '';
@@ -4589,7 +4625,7 @@ function aiRow(it, list) {
     ? `<span class="ai-thumb"><img src="${esc(it.thumb)}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
     : `<span class="ai-thumb ph">${IC.wrench}</span>`;
   const bits = [esc(list.name)];
-  if (it.owner) bits.push(`${ic('person','xs')}${esc(it.owner)}`);
+  if (it.ownedBy) bits.push(`${ic('person','xs')}${esc(it.ownedBy)}`);
   if (it.storage) bits.push(`${ic('pin','xs')}${esc(it.storage)}`);
   const unfiledBadge = isUnfiled(it.name) ? `<span class="ai-badge unfiled" title="Not in any template yet — still a loose item">${ic('warn','xs')}</span>` : '';
   const badge = care
@@ -4825,7 +4861,7 @@ function howtoCard() {
  <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
 
         <h3>All items · table (the spreadsheet)</h3>
-        <p>For fast bulk edits, the <b>Care</b> tab → <b>All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour, <b>owner</b>…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. <b>Owner</b> is the same dropdown as in the item editor, so you can go down the column assigning things without typing a name twice. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
+        <p>For fast bulk edits, the <b>Care</b> tab → <b>All items · table</b> shows every item as a row in a wide, editable grid, with columns grouped like an item’s editor: <b>the item itself</b> (weight, storage, flags, colour, <b>owner</b>…), <b>in this list</b> (qty/section), and a <b>tick-box per template</b>. <b>Owner</b> is the same dropdown as in the item editor — the one <b>Owners</b> list — so you can go down the column assigning things without typing a name twice, and <b>⚙ Manage owners…</b> in the dropdown lets you add, rename or remove one without leaving the table. Edit a cell and the item updates <b>everywhere</b>; tick a template box to file the item in or out. Qty/Section are editable when an item is in one template. The name column stays pinned as you swipe sideways; a search box narrows the rows. Great on a bigger screen.</p>
         <p>A toolbar above the grid bends the table to how you work: <b>Sort</b> the whole thing by <b>Name</b>, <b>Weight</b>, <b>Storage</b>, <b>Container</b> or <b>how many lists</b> an item is in, with a <b>▲/▼</b> button to flip the direction; and a <b>Columns</b> button opens a panel to <b>reorder the “item itself” columns</b> into the order you like. Both your <b>sort choice</b> and your <b>column order</b> are remembered on this device, so the table opens just how you left it.</p>
 
         <h3>Places visited (the world map)</h3>
@@ -4967,7 +5003,7 @@ function howtoCard() {
  <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b> or remove places — under <b>Storage places</b> in <b>Settings</b>.</li>
  <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one. Pictures are kept in their own place and the item just points at them, so your lists and backups stay quick; if you ever want to reclaim space, <b>Settings → Your data → Tidy up photos</b> frees any picture nothing uses any more.</li>
           <li><b>Maintenance</b> — how and how often to look after it: a <b>maintenance cadence</b> (monthly … every 2 years, or a custom number of days), when it was <b>last done</b>, free-text <b>how-to notes</b> (steps, products, settings), and a <b>how-to link</b>. Tap <b>Log done today</b> to record a service — it resets the schedule and adds a dated entry to the item's maintenance history.</li>
-          <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b> (a dropdown too — it lists every owner you've used so far plus everyone on your <b>Settings → People</b> list, with <b>＋ Add an owner…</b> for a new name, which then joins the list; a name you add here is <em>not</em> turned into a Person, so “Shared” or “The kids” can own things without appearing in every “Packed by” picker), <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
+          <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b> (a dropdown of your <b>Owners</b> list — see <b>Settings → Owners</b> — with <b>＋ Add an owner…</b> to name a new one on the spot and <b>⚙ Manage owners…</b> to rename or remove one without leaving the item; an owner is <em>not</em> a Person, so “Shared” or “The kids” can own things without appearing in every “Packed by” picker), <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
  <li><b>Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>Not in use</b> tag, and the new <b>Not in use</b> filter chip rounds them all up. (This is different from <b>Condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
         </ul>
         <p>The <b>Care</b> tab then gathers everything with care info across all your lists, under the heading <b>Maintenance list</b> (below the Containers / All items / Shopping links at the top, and above the <b>All items</b> browser at the bottom). It shows two ways:</p>
@@ -5001,6 +5037,11 @@ function howtoCard() {
         <h3>Who packs what</h3>
         <p>Packing with someone? First set up your <b>People</b> in <b>Settings → People</b> — each with a name and a colour (Martin &amp; Anna are there to start; add, rename or recolour anyone). Then on a trip, open an item and choose <b>Packed by</b>. Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row appears at the top of the packing list so you can show <b>Everyone</b>, just one person, or the still-<b>Unassigned</b> items (each with a count). The same filter sits atop <b>Packing Mode</b>, so each of you can pack only your own things. It’s per-trip, and it <b>travels inside a shared trip</b> — send the trip to someone and the items you gave them arrive marked as theirs (a name that isn’t on their People list still shows, just with an auto-picked colour). Renaming a person carries the new name onto every trip they’re already on.</p>
 
+        <h3>Whose things are whose</h3>
+        <p><b>Owner</b> — on an item, under <b>Details &amp; ownership</b> — is a dropdown of a list you keep in <b>Settings → Owners</b>. <b>Add</b> a name, <b>rename</b> one (every item that is theirs follows, in one go) or <b>remove</b> one — and if things are theirs, the app asks <b>who they go to</b> first, so an item is never left pointing at somebody who no longer exists. Each name shows how many items are theirs. You never have to go to Settings to do it: the same two choices, <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b>, sit at the bottom of the Owner dropdown itself — in the item editor and in <b>Care → All items · table</b>, where you can assign owners down a whole column.</p>
+        <p><b>Owners are not People.</b> <b>People</b> is who <em>packs</em> on a trip; <b>Owners</b> is who <em>owns</em> the thing at home. Keeping them apart means “Shared”, “The kids” or “The RV” can own gear without ever appearing in a “Packed by” picker. Your People are offered as owners to start with, but naming an owner never creates a person.</p>
+        <p>Like People, Storage places and Conditions, the Owners <em>list</em> lives on each device, while the owner <em>on an item</em> travels with your data — so a name given on the Mac reaches the iPhone on its items, and joins that device's dropdown as a name in use, but set it up on both (or carry it over in a backup file) if you want it offered on an item that hasn't got it yet.</p>
+
         <h3>Weather (optional, per trip)</h3>
         <p>Add a <b>destination</b> to a trip, then tap <b>Get forecast</b>. The forecast comes from Open-Meteo (free, no account), is cached on the trip so it still shows offline, and only fetches when you ask and you're online.</p>
         <ul>
@@ -5033,7 +5074,7 @@ function howtoCard() {
         <h3>Finding your way round Settings</h3>
         <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
         <p>Each section has its <b>own colour and icon</b>, fixed for good, so you come to know them by sight rather than by reading. Closed, the colour sits in the little icon tile; <b>open, it takes over the panel</b> — the tile fills in, and the heading, the edge and a faint wash of the background all follow — so you always know which section you are inside. The colour is an <em>identity</em>, not a warning light: it never changes to tell you something is wrong. When something does need attention, the app says so in words, and on the Home screen.</p>
-        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Storage places</b>, <b>Conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
+        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Owners</b>, <b>Storage places</b>, <b>Conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
@@ -5061,6 +5102,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v117', '2026-08-25 · 00:30 UTC', false, 'Owners are a proper list — and your e-mail address is off every item',
+      '<b>(1) The e-mail address is gone.</b> Nearly every item in the catalogue was showing <b>martin.schabbauer@icloud.com</b> as its owner — on the item rows, in the Care list, in the All-items table and in the “Whose it is” grouping. It was never typed: <b>the syncing system reserves a hidden field called “owner”</b> for its own bookkeeping and stamps the signed-in account into it on every save, and the app happened to use the very same name for <b>whose thing it is</b>. The two collided, and the address won — on <b>422 of 431 items</b>. The app’s own answer now lives under a <b>different name entirely</b>, so the two can never collide again, and a one-time repair on first launch turns that stamped address into <b>Martin</b> while leaving every name you actually typed (<b>Anna</b>, <b>Shared</b>) exactly as it was. Your sign-in address still shows in <b>Settings → Sync your devices</b>, where it belongs — that is genuinely which account this device is on. <b>(2) Owner is a list you manage.</b> <b>Settings → Owners</b> is a new section beside People: <b>add</b> an owner, <b>rename</b> one — every item that is theirs follows, in one go — and <b>remove</b> one, which first asks <b>who its things go to</b> (or nobody), so nothing is ever orphaned. Each name shows how many items are theirs. The same list is the dropdown <b>everywhere Owner appears</b> — the item editor and the <b>All items · table</b> — and both offer <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b> right in the dropdown, so you never have to go to Settings to fix a name. Owners stay deliberately <b>separate from People</b>: People is who <em>packs</em>, so “Shared” can own things without turning up in every “Packed by” picker.',
+      'Whose things are whose is now something you set from a short list you control — instead of a free-text box holding an e-mail address you never typed.'),
     v('v116b', '2026-08-24 · 22:00 UTC', false, 'Every word in the app measured for readability',
       'Rather than keep fixing faint text one complaint at a time, <b>every piece of text on every screen was measured</b> — its size, and its contrast against the exact colour behind it — in <b>both</b> the light and dark themes. Nearly <b>60,000 elements</b> were checked against the standard readability threshold (4.5:1 for ordinary text). <b>Fifty-one</b> things failed. They are all fixed. The worst were not small print: the <b>trip name</b> on an event card, the <b>page title</b> at the top of every tab, the <b>label under the active tab</b>, the <b>“1 due soon” counts</b> on Care, the <b>due dates</b> on every care row, the chips on <b>Shopping</b> and <b>Actions</b>, and — in dark mode — <b>every grey chip in the app</b>, which had been left with a colour only ever defined for the light theme and was sitting at <b>2:1</b>. Nothing changed shape, moved, or was recoloured beyond recognition: red still reads red and amber still reads amber. Two general rules now hold everywhere. <b>Nothing is smaller than 12.5 pixels</b> — thirty-odd labels were below that, some as small as 8. And a colour used as <b>text</b> is now mixed toward the page’s own ink, which <b>darkens it on white and lightens it on black</b>, so one setting stays readable in both themes instead of working in one and failing in the other. The guide’s list of section colours now shows each colour as a <b>dot</b> beside ordinary text, rather than setting the words themselves in a tint that only worked on white.',
       'The app can be read — at arm’s length, in either theme — without hunting for the thing you were told to look at.'),
@@ -5878,6 +5922,7 @@ const SETTINGS_TONES = {
   kits:        '#7c5cd6',  // violet
   people:      '#2f6fe0',  // blue
   places:      '#0a92a6',  // teal (the app's brand)
+  owners:      '#5b7f2a',  // olive — whose the gear is (distinct from People's blue beside it)
   conditions:  '#b45309',  // burnt amber — wear and lifecycle
   presets:     '#c9821a',  // amber
   sharedtrips: '#2f9e63',  // green
@@ -5951,6 +5996,10 @@ async function renderSettings() {
     db.currentCounts(), storageUsedLabel(), db.listSnapshots(),
     db.getEvents(), db.getLists(), db.getActions(),
   ]);
+  // Settings can be opened as the very first screen of a session, before any list
+  // screen has run — and the Owners section needs the catalogue to say how many
+  // items each owner has, and to offer a name given on the other device.
+  ALL_LISTS = bLists;
   const dsb = daysSinceBackup();
   const bstate = currentBackupState(bEvents, bLists, bActions);
   // Say plainly whether the saved file still matches what's in the app — "3 days
@@ -6231,6 +6280,20 @@ async function renderSettings() {
     }
   });
 
+  // ---- Owners: whose each thing is ----
+  const ownerCard = h(`<div class="card block">
+    <h2>Owners</h2>
+    <p class="muted">Whose things are whose — set on an item under <b>Details &amp; ownership</b>, and shown as a tag on its row. This is the same list every <b>Owner</b> dropdown offers, so a name is spelled once and picked everywhere. <b>Rename</b> one and every item that is theirs follows; <b>remove</b> one and you say who its things go to first. Separate from <b>People</b> on purpose: People is who <em>packs</em>, so “Shared” can own things without joining every “Packed by” picker.</p>
+  </div>`);
+  const ownersEditor = buildOwnersEditor({
+    onChanged: () => {
+      // Keep the fold's own summary line honest without re-rendering all of Settings.
+      const sum = ownerCard.closest('.sset')?.querySelector('.howto-sum');
+      if (sum) sum.textContent = ownersSummary();
+    },
+  });
+  ownerCard.appendChild(ownersEditor.el);
+
   // ---- Conditions: the wear/lifecycle ratings an item can carry ----
   const condCard = h(`<div class="card block">
     <h2>Conditions</h2>
@@ -6465,6 +6528,7 @@ async function renderSettings() {
   wrap.appendChild(foldCard('people', peopleCard,
     people.length ? people.map((p) => p.name).join(', ') : 'None yet — for splitting who packs what',
     { icon: 'person' }));
+  wrap.appendChild(foldCard('owners', ownerCard, ownersSummary(), { icon: 'person' }));
   wrap.appendChild(foldCard('places', places, places2.length
     ? `${nOf(places2.length, 'place', 'places')} · ${places2.slice(0, 3).join(', ')}${places2.length > 3 ? '…' : ''}`
     : 'None yet', { icon: 'box' }));
@@ -6902,26 +6966,269 @@ function savePeople(arr) {
   try { localStorage.setItem(PEOPLE_KEY, JSON.stringify(asPeople(arr))); } catch { /* ignore */ }
   return arr;
 }
-// Names to offer in the Owner dropdown besides the owners already in use: everyone
-// on the People roster. Deliberately one-way — typing a new owner does NOT create a
-// person, so "Shared" or "The kids" can own things without turning up in every
-// "Packed by" picker and person filter.
-function ownerSeedNames() { return loadPeople().map((p) => p.name).filter(Boolean); }
-// Every owner the app can offer: those already given something, plus your People.
-// `cur` is always included, so a name nobody else uses can never be dropped silently.
-function ownerNames(cur = '') {
+// ---------- Owners: the "whose is it" roster ----------
+//
+// A real, editable list — like People, Storage places and Conditions — rather than
+// a set of names scraped from whatever had been typed before. It is the SAME list
+// everywhere Owner appears (the item editor, the All-items table), and it can be
+// added to, renamed and pruned from any of them.
+//
+// Deliberately separate from People: People is who PACKS, Owners is who OWNS, and
+// "Shared" or "The kids" should own things without turning up in every "Packed by"
+// picker. Naming an owner therefore never creates a person, and vice versa.
+//
+// Stored on this device (like People and the storage places) and carried in
+// backups; the owner ON an item travels with your data, so a name given on the
+// other device is always offered even if this device's roster hasn't got it yet.
+const OWNERS_KEY = 'ams-owners';
+
+// Trim, drop blanks, de-duplicate case-insensitively (first spelling wins) and
+// sort A–Z, which is the order every Owner dropdown and the manager both use.
+function tidyOwnerNames(arr) {
   const seen = new Map();
-  for (const v of [...collectItemValues('owner'), ...ownerSeedNames(), (cur || '').trim()]) {
-    const k = v.toLowerCase();
-    if (v && !seen.has(k)) seen.set(k, v);
+  for (const v of (Array.isArray(arr) ? arr : [])) {
+    const name = String(typeof v === 'string' ? v : (v && v.name) || '').trim();
+    if (name && !seen.has(normName(name))) seen.set(normName(name), name);
   }
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
-// The Owner picker's <option>s, for the All-items table (the item editor builds its
-// own through growField, from the same names).
-function ownerOptsHTML(cur = '') {
-  const opts = [{ value: '', label: '—' }, ...ownerNames(cur).map((n) => ({ value: n, label: n })), { value: '__new__', label: '＋ Add an owner…' }];
+// The roster. On a device that has never touched it there is nothing stored, so it
+// is derived — your People plus every owner already given to something — and then
+// written down once there is a catalogue to derive it from, so from that moment on
+// it is a list you own rather than a by-product of what you happened to type.
+function loadOwners() {
+  try {
+    const raw = localStorage.getItem(OWNERS_KEY);
+    if (raw != null) { const a = JSON.parse(raw); if (Array.isArray(a)) return tidyOwnerNames(a); }
+  } catch { /* ignore */ }
+  const seed = tidyOwnerNames([...loadPeople().map((p) => p.name), ...collectItemValues('ownedBy')]);
+  if ((ALL_LISTS || []).length) saveOwners(seed);
+  return seed;
+}
+function saveOwners(names) {
+  const clean = tidyOwnerNames(names);
+  try { localStorage.setItem(OWNERS_KEY, JSON.stringify(clean)); } catch { /* ignore */ }
+  return clean;
+}
+// Is the roster a real list on this device yet, or still being derived?
+function ownersCustomised() {
+  try { return localStorage.getItem(OWNERS_KEY) != null; } catch { return false; }
+}
+// The one-line state for the Settings fold: who is on the list.
+function ownersSummary() {
+  const names = ownerNames();
+  if (!names.length) return 'None yet — whose each thing is';
+  const shown = names.slice(0, 4).join(', ');
+  return names.length > 4 ? `${names.length} owners · ${shown}…` : shown;
+}
+// Every name the pickers offer: the roster, plus any owner actually in use that
+// this device's roster hasn't got (a name added on the other device — the owner on
+// an item syncs, the roster doesn't), plus `cur`, so a picker can never silently
+// drop the value it was opened with.
+function ownerNames(cur = '') {
+  return tidyOwnerNames([...loadOwners(), ...collectItemValues('ownedBy'), (cur || '').trim()]);
+}
+// The Owner picker's <option>s — the same list, and the same two actions at the
+// bottom, wherever Owner is editable.
+function ownerOptsHTML(cur = '', { empty = '— not set —' } = {}) {
+  const opts = [{ value: '', label: empty },
+    ...ownerNames(cur).map((n) => ({ value: n, label: n })),
+    { value: '__new__', label: '＋ Add an owner…' },
+    { value: '__manage__', label: '⚙ Manage owners…' }];
   return opts.map((o) => `<option value="${esc(o.value)}"${o.value === (cur || '') ? ' selected' : ''}>${esc(o.label)}</option>`).join('');
+}
+// Ask for a new owner's name and put it on the roster. Returns the name to select,
+// or '' if cancelled. A name that is already there simply wins — same spelling,
+// no duplicate.
+function addOwnerByName(suggest = '') {
+  const name = (prompt('Whose is it? Type the owner’s name — e.g. Martin · Anna · Shared:', suggest) || '').trim();
+  if (!name) return '';
+  const existing = ownerNames().find((n) => normName(n) === normName(name));
+  if (existing) return existing;
+  saveOwners([...loadOwners(), name]);
+  return name;
+}
+// How many items each owner has, counted by the stable item id so an item in five
+// templates counts once. Read from the loaded catalogue, so it is instant.
+function ownerUsage(lists = ALL_LISTS) {
+  const seen = new Map();                     // normalised name → Set of item ids
+  for (const l of (lists || [])) for (const it of (l.items || [])) {
+    const key = normName(it.ownedBy);
+    if (!key) continue;
+    if (!seen.has(key)) seen.set(key, new Set());
+    seen.get(key).add(it._itemId || it.id);
+  }
+  return new Map([...seen].map(([k, set]) => [k, set.size]));
+}
+// Move every item owned by `fromName` to `toName` ('' = nobody). `ownedBy` is an
+// intrinsic field, so writing it on any one template propagates to the shared item;
+// we still walk every template so nothing is missed. Returns how many items moved.
+async function setOwnerEverywhere(fromName, toName) {
+  const key = normName(fromName);
+  if (!key) return 0;
+  const lists = await db.getLists();
+  const moved = new Set();
+  for (const l of lists) {
+    let touched = false;
+    for (const it of (l.items || [])) {
+      if (normName(it.ownedBy) !== key) continue;
+      it.ownedBy = toName || '';
+      moved.add(it._itemId || it.id);
+      touched = true;
+    }
+    if (touched) await saveGuard(db.saveList(l));
+  }
+  if (moved.size) ALL_LISTS = await db.getLists();
+  return moved.size;
+}
+// Ask what happens to the items owned by an owner being removed. Resolves with the
+// name to move them to, '' for "nobody owns them", or null if cancelled.
+function pickReplacementOwner(name, used, others) {
+  return new Promise((resolve) => {
+    const opts = [...others.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`),
+      '<option value="">— nobody owns them —</option>'].join('');
+    const body = h(`<div class="modal">
+      <h2>Remove “${esc(name)}”?</h2>
+      <p class="modal-sub"><b>${used}</b> item${used === 1 ? ' is' : 's are'} theirs. Choose who ${used === 1 ? 'it goes' : 'they go'} to — nothing is deleted, only re-assigned.</p>
+      <label class="field"><span>Give ${used === 1 ? 'it' : 'them'} to</span><select name="owner-move">${opts}</select></label>
+      <div class="modal-actions">
+        <button class="btn danger lg" data-c="ok">${IC.trash}<span>Remove and move</span></button>
+        <button class="btn ghost lg" data-c="cancel">Keep them</button>
+      </div>
+    </div>`);
+    const overlay = h('<div class="overlay"></div>');
+    overlay.appendChild(body);
+    document.body.appendChild(overlay);
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; overlay.remove(); document.removeEventListener('keydown', onKey, true); resolve(v); };
+    // Capture phase + stopPropagation: this can open ON TOP of the Owners manager,
+    // and Escape must close only the top one.
+    const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); finish(null); } };
+    document.addEventListener('keydown', onKey, true);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+    body.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-c]')?.dataset.c;
+      if (!c) return;
+      finish(c === 'ok' ? ($('select[name=owner-move]', body).value || '') : null);
+    });
+  });
+}
+// The Owners editor itself — one implementation, used in two places: the Settings
+// card and the ⚙ Manage owners… modal that every Owner dropdown can open.
+//
+// `changes` records what happened (old name → what it is now, '' when the items
+// were left ownerless) so a caller holding an open item editor can follow a rename
+// instead of losing the value.
+function buildOwnersEditor({ onChanged } = {}) {
+  const el = h(`<div class="owner-mgr">
+    <div class="owner-list" data-owners></div>
+    <div class="btnrow"><button class="btn" data-owner="add">${IC.plus}<span>Add owner</span></button></div>
+  </div>`);
+  const changes = new Map();
+  const box = el.querySelector('[data-owners]');
+  const draw = () => {
+    const names = ownerNames();
+    const use = ownerUsage();
+    box.innerHTML = names.length ? names.map((n) => {
+      const c = use.get(normName(n)) || 0;
+      return `<div class="owner-row" data-owner-name="${esc(n)}">
+        <span class="owner-ic" aria-hidden="true">${ic('person', 'sm')}</span>
+        <span class="owner-info"><b class="owner-name">${esc(n)}</b><span class="owner-sub">${c ? `${c} item${c === 1 ? '' : 's'}` : 'nothing yet'}</span></span>
+        <span class="owner-acts">
+          <button type="button" class="iconbtn sm" data-owner-edit="${esc(n)}" aria-label="Rename ${esc(n)}" title="Rename">${IC.edit}</button>
+          <button type="button" class="iconbtn sm" data-owner-del="${esc(n)}" aria-label="Remove ${esc(n)}" title="Remove">${IC.trash}</button>
+        </span></div>`;
+    }).join('') : '<p class="muted">No owners yet — add one to start recording whose things are whose.</p>';
+  };
+  draw();
+  // Record what happened to a name. Chains collapse — rename A→B and then B→C in
+  // one sitting and A is recorded as C, so a caller replaying this map never lands
+  // on the intermediate name.
+  const changed = (from, to) => {
+    const key = normName(from);
+    for (const [k, v] of changes) if (normName(v) === key) changes.set(k, to);
+    changes.set(key, to);
+    draw();
+    onChanged?.(changes);
+  };
+
+  el.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-owner], [data-owner-edit], [data-owner-del]');
+    if (!btn) return;
+    if (btn.dataset.owner === 'add') {
+      const name = addOwnerByName('');
+      if (name) { draw(); onChanged?.(changes); }
+      return;
+    }
+    const old = btn.dataset.ownerEdit || btn.dataset.ownerDel;
+    if (!old) return;
+
+    if (btn.dataset.ownerEdit) {
+      const name = (prompt('Rename this owner:', old) || '').trim();
+      if (!name || name === old) return;
+      if (ownerNames().some((n) => normName(n) !== normName(old) && normName(n) === normName(name))) {
+        alert(`“${name}” is already on the list. To merge the two, remove this one and give its things to “${name}”.`);
+        return;
+      }
+      saveOwners([...loadOwners().filter((n) => normName(n) !== normName(old)), name]);
+      const moved = await setOwnerEverywhere(old, name);
+      changed(old, name);
+      if (moved) showToast(`Renamed to “${name}” — ${moved} item${moved === 1 ? '' : 's'} updated`);
+      return;
+    }
+
+    // Remove. Nothing may be orphaned: if things are theirs, say whose they become.
+    const used = ownerUsage().get(normName(old)) || 0;
+    let moveTo = '';
+    if (used) {
+      moveTo = await pickReplacementOwner(old, used, ownerNames().filter((n) => normName(n) !== normName(old)));
+      if (moveTo === null) return;                       // cancelled
+    } else if (!confirm(`Remove “${old}” from the Owners list?\n\nNothing is theirs, so nothing else changes.`)) return;
+    saveOwners(loadOwners().filter((n) => normName(n) !== normName(old)));
+    if (used) {
+      const n = await setOwnerEverywhere(old, moveTo);
+      showToast(moveTo
+        ? `Removed “${old}” — ${n} item${n === 1 ? '' : 's'} now ${moveTo}’s`
+        : `Removed “${old}” — ${n} item${n === 1 ? '' : 's'} have no owner`);
+    }
+    changed(old, moveTo || '');
+  });
+
+  return { el, draw, changes };
+}
+// Replay the manager's changes onto a template held in memory by an open editor,
+// so what that editor writes back agrees with what the manager put in the
+// database. See the call site in the item editor for why this matters.
+function applyOwnerChanges(list, changes) {
+  if (!changes || !changes.size) return 0;
+  let n = 0;
+  for (const it of ((list && list.items) || [])) {
+    const key = normName(it.ownedBy);
+    if (key && changes.has(key)) { it.ownedBy = changes.get(key); n++; }
+  }
+  return n;
+}
+// The ⚙ Manage owners… modal, openable from any Owner dropdown. Resolves with the
+// map of what changed (empty when nothing did), so the caller can follow a rename.
+function openOwnersManager() {
+  return new Promise((resolve) => {
+    const mgr = buildOwnersEditor();
+    const body = h(`<div class="modal owners-modal">
+      <h2>Owners</h2>
+      <p class="modal-sub">Whose things are whose. This is the same list every <b>Owner</b> dropdown offers — rename one and every item follows.</p>
+      <div class="modal-actions"><button class="btn primary lg" data-c="done">Done</button></div>
+    </div>`);
+    body.insertBefore(mgr.el, body.querySelector('.modal-actions'));
+    const overlay = h('<div class="overlay"></div>');
+    overlay.appendChild(body);
+    document.body.appendChild(overlay);
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; overlay.remove(); document.removeEventListener('keydown', onKey); resolve(mgr.changes); };
+    const onKey = (e) => { if (e.key === 'Escape') finish(); };
+    document.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(); });
+    body.addEventListener('click', (e) => { if (e.target.closest('[data-c="done"]')) finish(); });
+  });
 }
 const asPeople = (arr) => (Array.isArray(arr) ? arr.map(coercePerson).filter((p) => p.name) : []);
 // The display colour for a packer name, honouring the roster (hash fallback for
@@ -6988,6 +7295,9 @@ function collectPrefs() {
   if (presets.length) prefs.presets = presets;
   const people = loadPeople();
   if (people.length) prefs.people = people;
+  // Only carried once the roster is a real list on this device — otherwise it is
+  // just "People plus whatever is in use", which the other device derives itself.
+  if (ownersCustomised()) prefs.owners = loadOwners();
   // Only carried once they've actually been customised, so restoring an old backup
   // onto a fresh app can't pin it to a stale copy of the standard four.
   if (conditionsCustomised()) prefs.conditions = ITEM_CONDITIONS.map((c) => ({ ...c }));
@@ -7014,6 +7324,11 @@ function applyPrefs(prefs) {
     const have = new Map(loadPeople().map((p) => [normName(p.name), p]));
     for (const p of prefs.people.map(coercePerson)) if (p.name && !have.has(normName(p.name))) have.set(normName(p.name), p);
     savePeople([...have.values()]);
+  }
+  // Owners are UNIONed like the storage places: an import must never take away a
+  // name this device is already using on its items.
+  if (Array.isArray(prefs.owners) && prefs.owners.length) {
+    saveOwners([...loadOwners(), ...prefs.owners]);
   }
   // Conditions come across whole rather than merged: they are an ordered list, and
   // the order is the point. A backup that predates editable conditions has none, so
