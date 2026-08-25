@@ -144,9 +144,9 @@ export async function resetFromCloud() {
   // catalogue we just deleted, ready to be pushed up as duplicates the moment
   // they sign in. The flag says: this emptiness is deliberate, wait for the sync.
   try { localStorage.setItem(AWAITING_CLOUD_KEY, '1'); } catch { /* ignore */ }
-  // The phases table is cleared below with everything else, so this device must be
-  // allowed to seed the timeline again if the account turns out not to have one.
-  try { localStorage.removeItem(PHASES_SEEDED_KEY); } catch { /* ignore */ }
+  // (The phases table is cleared below with everything else. Nothing to reset for
+  // it: since v119 the timeline is never seeded into the database — an empty table
+  // simply means "the factory seven", read from the code.)
   const db = await open();
   // Signing out must never be able to strand the reset. `logout()` can hang
   // (offline, or already signed out), and an un-awaited hang here would leave the
@@ -546,9 +546,17 @@ export function deleteKit(id) { return delOne(KITS, id); }
 //
 // NOTE the field names: `owner` and `realmId` are reserved by the sync addon and
 // must never be used here — see model.js, and what that collision cost in v117.
+// The timeline in force: what is stored, or — when nothing is stored, which is the
+// normal state until the first edit — the factory seven from the code.
+//
+// The fallback is not a nicety. Callers edit the list they get back and write it
+// whole, so returning [] on an untouched account would mean the first change you
+// ever made found no phase to change and silently did nothing.
 export async function getPhases() {
   const raw = (await getAllRaw(PHASES_STORE).catch(() => [])) || [];
-  return raw.map((p, i) => coercePhase(p, i)).filter((p) => p.id && p.label).sort((a, b) => a.order - b.order);
+  const stored = raw.map((p, i) => coercePhase(p, i)).filter((p) => p.id && p.label)
+    .sort((a, b) => (a.order - b.order) || a.id.localeCompare(b.id));
+  return stored.length ? stored : DEFAULT_PHASES.map((p, i) => coercePhase(p, i));
 }
 // Write the list whole: every phase is put, and any row no longer in the list is
 // deleted, so a removal actually propagates to the other device instead of the
@@ -565,43 +573,38 @@ export async function savePhases(list) {
   });
   return clean;
 }
-// Put the factory seven in place on a database that has never had them.
+// Adopt the timeline into the live list. READS ONLY — it must never write.
 //
-// Safe to run on two devices at once: the built-in ids are STABLE, so both write
-// the same seven primary keys and the rows merge instead of doubling. The
-// localStorage marker then stops this device ever seeding again — otherwise a
-// phase deliberately removed would come back on the next launch.
-const PHASES_SEEDED_KEY = 'ams-phases-seeded';
+// ⚠️ THIS COST MARTIN HIS CUSTOMISED TIMELINE IN v118, so the reasoning matters.
+//
+// v118 seeded the factory seven into this table on a device that had none. The
+// built-in ids are stable, which was meant to stop two devices doubling the list
+// — and it did. What it also did was let a seed land exactly on top of a
+// customised row and REPLACE it: `bulkPut` on an existing primary key overwrites
+// the record whole. His second device found its own (brand-new, therefore empty)
+// phases table, waited for the account's copy, gave up too early — "in sync"
+// describes the database, and a table created seconds ago can still be empty at
+// that moment — and wrote seven factory rows straight over his renamed,
+// recoloured ones. The phase he had ADDED survived, because its id collided with
+// nothing. Seven reverted, one survived: exactly what he saw.
+//
+// The fix is to stop seeding into shared data at all. The factory seven now live
+// ONLY in memory, exactly as the condition list does: an account that has never
+// edited the timeline stores no phase rows anywhere, both devices show the same
+// seven straight from the code, and the FIRST EDIT is what writes a real list.
+// There is no longer any moment where one device can write over another's.
 export async function ensurePhases() {
   const have = (await getAllRaw(PHASES_STORE).catch(() => [])) || [];
-  if (have.length) { setPhases(have.map((p, i) => coercePhase(p, i))); return PHASES; }
-  let seeded = false;
-  try { seeded = localStorage.getItem(PHASES_SEEDED_KEY) === '1'; } catch { /* ignore */ }
-  if (seeded) {
-    // Seeded once already and now empty: the user removed them, or the account's
-    // copy is still on its way. Either way, run on the factory seven in memory
-    // WITHOUT writing anything, so nothing is resurrected behind their back.
-    setPhases(DEFAULT_PHASES.map((p) => ({ ...p })));
-    return PHASES;
-  }
-  // A signed-in device should let the account's list land before seeding its own,
-  // exactly as the catalogue does — same reasoning, same trap.
-  if (syncEnabled() && (await isSignedIn())) {
-    await awaitFirstSync(8000);
-    const arrived = (await getAllRaw(PHASES_STORE).catch(() => [])) || [];
-    if (arrived.length) {
-      setPhases(arrived.map((p, i) => coercePhase(p, i)));
-      try { localStorage.setItem(PHASES_SEEDED_KEY, '1'); } catch { /* ignore */ }
-      return PHASES;
-    }
-  }
-  const seed = DEFAULT_PHASES.map((p, i) => coercePhase(p, i));
-  const db = await open();
-  await db.table(PHASES_STORE).bulkPut(seed);
-  try { localStorage.setItem(PHASES_SEEDED_KEY, '1'); } catch { /* ignore */ }
-  setPhases(seed);
+  setPhases(have.length
+    ? have.map((p, i) => coercePhase(p, i))
+    : DEFAULT_PHASES.map((p) => ({ ...p })));
   return PHASES;
 }
+// Re-read the timeline from the database into the live list. Call before showing
+// or editing it, so a device that has had the app open while the OTHER device
+// changed the list is never working from a stale copy — writing one back would
+// delete rows this device had simply never seen.
+export async function refreshPhases() { return ensurePhases(); }
 
 // The raw catalog items (the shared "thing itself" records), for screens that
 // need every item once — e.g. the central Actions list resolving item names,

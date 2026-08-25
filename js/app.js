@@ -35,7 +35,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v118b';
+const APP_VERSION = 'v119';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -5133,6 +5133,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v119', '2026-08-25 · 09:00 UTC', false, 'Fixes the bug that reset your When list',
+      '<b>What went wrong.</b> You edited the timeline — names, emoji, colours — and later found the seven built-in stages back at their factory settings, with only the stage you had <b>added</b> still as you left it. Here is why. v118 wrote the seven standard stages into your shared data the first time a device found none. Each has a fixed internal name, which was meant to stop two devices creating two separate lists — and it did. What it also meant was that writing a standard stage landed <b>exactly on top of</b> the same stage on the other device and replaced it. Your second device found its own newly-created (therefore empty) timeline, waited for your account\'s copy, and gave up a moment too early: the app reports “in sync” about the database as a whole, and a table created seconds earlier can still be empty at that point. So it concluded the account had no timeline and wrote seven factory stages over your edited ones. The stage you had added survived because its name collided with nothing. <b>The fix.</b> The standard seven are <b>no longer written into your data at all</b> — they now live only in the app, exactly as the standard conditions do. An account that has never edited the timeline stores nothing, both devices show the same seven from the code, and <b>the first change you make is what creates the stored list</b>. There is no longer any moment at which one device can write over another\'s. Two smaller repairs came with it: the app now <b>re-reads the timeline before showing or changing it</b> (and when you switch back to the app), so a device left open can\'t save an out-of-date list back over a newer one; and when two stages end up sharing a position, both devices now settle on the <b>same</b> order instead of each picking their own.',
+      'Your timeline stays the way you set it. Worth re-doing your names and colours now — this time they will hold.'),
     v('v118b', '2026-08-25 · 08:00 UTC', false, 'You can actually see which stage you are in',
       'From your v118 field check: in <b>Packing Mode</b>, the stage\'s colour was there but you couldn\'t see it. Fair — it was a <b>6% tint</b> of the card and an edge that had itself been mixed most of the way to grey, which on a white background is close to nothing. The colour is now spent on <b>solid blocks instead of a wash</b>: a <b>full-width band across the top</b> of the phase bar, and a ringed <b>disc behind the emoji</b> that travels with you as you step through the pack. The background tint is stronger too. The <b>words</b> deliberately did <em>not</em> get more colourful — at the stronger tint two of the seven stage colours (amber and green) dropped to <b>4.2:1</b> against the card in the light theme, under the 4.5:1 readable minimum, so the band and the disc carry the colour and the text just stays readable. All seven colours were re-measured in both themes; the worst is now <b>4.54:1</b>.',
       'A glance at the top of the screen tells you which stage you are packing, without reading a word.'),
@@ -6052,6 +6055,9 @@ async function renderSettings() {
   // screen has run — and the Owners section needs the catalogue to say how many
   // items each owner has, and to offer a name given on the other device.
   ALL_LISTS = bLists;
+  // The timeline is shared between devices, so re-read it rather than drawing the
+  // copy this session started with — the other device may have changed it since.
+  await db.refreshPhases().catch(() => {});
   const dsb = daysSinceBackup();
   const bstate = currentBackupState(bEvents, bLists, bActions);
   // Say plainly whether the saved file still matches what's in the app — "3 days
@@ -6385,14 +6391,19 @@ async function renderSettings() {
   };
   drawPhases();
 
-  // The three things you can change without a dialog: emoji, colour, lead time
-  // and the to-do switch. Each writes the whole list, which is what syncs.
+  // The things you can change without a dialog: name, emoji, colour, lead time and
+  // the to-do switch. Each writes the whole list, which is what syncs.
+  //
+  // EVERY handler starts from a FRESH read of the database, never from the copy in
+  // memory. This list is shared between devices: if the other one added a phase
+  // while this screen was open, writing a stale copy back would delete it, because
+  // a save is "here is the whole list" — the only way a removal can propagate.
   phaseCard.addEventListener('change', async (e) => {
     const el = e.target;
     const id = el.dataset.phaseEmoji || el.dataset.phaseColor || el.dataset.phaseLead
       || el.dataset.phaseTask || el.dataset.phaseName;
     if (!id) return;
-    const list = PHASES.map((p) => ({ ...p }));
+    const list = await db.getPhases();
     const p = list.find((x) => x.id === id);
     if (!p) return;
     if (el.dataset.phaseName) {
@@ -6414,7 +6425,7 @@ async function renderSettings() {
   phaseCard.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-phase], [data-phase-up], [data-phase-down], [data-phase-del]');
     if (!btn) return;
-    const list = PHASES.map((p) => ({ ...p }));
+    const list = await db.getPhases();     // fresh, for the reason above
     const act = btn.dataset.phase;
 
     if (act === 'add') {
@@ -6429,10 +6440,10 @@ async function renderSettings() {
       if (!confirm('Put the timeline back to the standard seven?\n\nAnything you added is removed from the list — but nothing filed under it is deleted, and you will be asked where those things go. Items on a standard phase are untouched.')) return;
       // Removing the added phases one at a time, so each still asks where its
       // things go — a reset must not be able to strand anything either.
-      for (const p of PHASES.filter((x) => !DEFAULT_PHASES.some((d) => d.id === x.id))) {
+      for (const p of list.filter((x) => !DEFAULT_PHASES.some((d) => d.id === x.id))) {
         const used = await countPhaseUsers(p.id);
         if (used.total) {
-          const to = await pickReplacementPhase(p, used, PHASES.filter((x) => x.id !== p.id));
+          const to = await pickReplacementPhase(p, used, list.filter((x) => x.id !== p.id));
           if (to === null) return;                       // cancelled — leave the whole reset alone
           await movePhaseEverywhere(p.id, to);
         }
@@ -7724,6 +7735,18 @@ function applyMode() {
 }
 
 window.addEventListener('hashchange', render);
+
+// The timeline is the one user-editable list that lives in shared data, so a
+// device left open can fall behind the other one. Re-read it whenever the app
+// comes back to the fore, and redraw if it actually changed — otherwise this
+// device would keep showing an old timeline, and its next save would write that
+// old list back over the new one.
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible') return;
+  const before = JSON.stringify(PHASES);
+  await db.refreshPhases().catch(() => {});
+  if (JSON.stringify(PHASES) !== before) render();
+});
 
 // When a newer published version installs in the background, offer a one-tap
 // refresh instead of silently leaving the app on the old copy. We only prompt on

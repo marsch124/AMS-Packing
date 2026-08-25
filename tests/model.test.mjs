@@ -2518,3 +2518,17 @@ test('phasesCustomised: true only once the list really differs from the standard
     assert.equal(phasesCustomised(), true);
   });
 });
+
+test('setPhases: a tie on order is broken deterministically, so two devices agree', () => {
+  // Two phases sharing an order is not hypothetical — an added phase is appended
+  // at the end, and both devices may append. Without a stable second key each
+  // device would renumber them in whatever order it read them, then write that
+  // back and fight the other one.
+  const a = [{ id: 'zulu', label: 'Z', order: 6 }, { id: 'alpha', label: 'A', order: 6 }];
+  const b = [{ id: 'alpha', label: 'A', order: 6 }, { id: 'zulu', label: 'Z', order: 6 }];
+  const orderOf = (list) => { setPhases(list); return PHASES.map((p) => p.id); };
+  try {
+    assert.deepEqual(orderOf(a), orderOf(b));
+    assert.deepEqual(orderOf(a), ['alpha', 'zulu']);
+  } finally { setPhases(DEFAULT_PHASES.map((p) => ({ ...p }))); }
+});

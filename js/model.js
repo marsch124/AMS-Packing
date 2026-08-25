@@ -138,8 +138,13 @@ export function setPhases(list) {
     seen.add(p.id);
     return true;
   });
+  // Sort by order, then by ID as a tiebreak. The tiebreak is load-bearing, not
+  // tidiness: two phases can genuinely end up sharing an order (an added one is
+  // appended at the end, and the other device may append too), and without a
+  // deterministic second key each device would renumber them in whatever order it
+  // happened to read them — then write that back and fight the other device.
   const next = (clean.length ? clean : DEFAULT_PHASES.map((p, i) => coercePhase(p, i)))
-    .sort((a, b) => a.order - b.order)
+    .sort((a, b) => (a.order - b.order) || a.id.localeCompare(b.id))
     .map((p, i) => ({ ...p, order: i }));
   PHASES.length = 0;
   PHASES.push(...next);
