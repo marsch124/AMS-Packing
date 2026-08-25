@@ -2154,11 +2154,37 @@ a.rd-stat.rd-link::after {
 /* Each phase carries its own colour (Settings → When), passed in as --phase. It
    tints the frame rather than filling it, so the step is recognisable at a glance
    without the words losing contrast against the card behind them. */
+/* The phase's colour (Settings → When) arrives as --phase. It has to be READ as a
+   colour at a glance, so it is spent on solid blocks — a full-width band and a
+   filled disc behind the emoji — rather than on a tint of the card, which at the
+   6% it started life as was invisible. Text keeps its own contrast: the band and
+   the disc carry the colour, so the words never have to. */
 .pack-stepper {
-  border-left: 4px solid color-mix(in srgb, var(--phase, var(--brand)) 70%, var(--line));
-  background: color-mix(in srgb, var(--phase, var(--brand)) 6%, var(--card));
+  border-top: 6px solid var(--phase, var(--brand));
+  background: color-mix(in srgb, var(--phase, var(--brand)) 10%, var(--card));
+  padding-top: 10px;
 }
 
+/* The emoji sits in a solid disc of the phase colour — the single most obvious
+   piece of colour on the screen, and it moves with you as you step through. */
+.pack-stepper .pack-phase-t .grp-ic {
+  display: inline-grid;
+  place-items: center;
+  width: 1.9em;
+  height: 1.9em;
+  margin-right: .35em;
+  border-radius: 999px;
+  /* A tinted disc with a solid ring, not a solid fill: an emoji on a saturated
+     circle goes muddy, and the band above is already carrying the solid colour. */
+  background: color-mix(in srgb, var(--phase, var(--brand)) 20%, var(--card));
+  border: 2px solid var(--phase, var(--brand));
+  vertical-align: -.45em;
+  font-size: .8em;
+}
+
+/* 45%, not more: at 60% the two brightest phase colours (amber, green) fell to
+   4.2:1 against the tinted card in the light theme. The band and the disc are
+   what say "this is the green one" — the words only have to stay readable. */
 .pack-stepper .pack-phase-t {
   color: color-mix(in srgb, var(--phase, var(--brand)) 45%, var(--ink));
 }
