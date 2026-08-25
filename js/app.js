@@ -38,7 +38,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v125';
+const APP_VERSION = 'v126';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2024,18 +2024,21 @@ function eventForm(ev, lists, isEdit) {
   </div>` : '';
   form.innerHTML = `
     ${presetBar}
-    <fieldset class="mode-pick"><legend>List type</legend>${radioRow('mode', [
-    { value: 'trip', label: 'Full trip' },
-    { value: 'quick', label: '⏱️ Quick activity' },
-  ], ev.mode || 'trip')}
-      <p class="grp-hint" data-mode-hint></p></fieldset>
-
+    <!-- Name first (v126): what the trip IS comes before how it is built. The
+         List-type radio used to open the form, which asked you to classify a trip
+         you hadn't named yet. -->
     <label class="field"><span>Event name</span>
       <input name="name" value="${esc(ev.name)}" placeholder="e.g. Dolomites road trip" autocomplete="off"></label>
     <div data-dates-slot></div>
     <p class="nights-hint muted" data-nights-hint></p>
     <label class="field"><span>Destination <em>(optional — for weather)</em></span>
       <input name="destination" value="${esc(ev.destination)}" placeholder="e.g. Chamonix" autocomplete="off"></label>
+
+    <fieldset class="mode-pick"><legend>List type</legend>${radioRow('mode', [
+    { value: 'trip', label: 'Full trip' },
+    { value: 'quick', label: '⏱️ Quick activity' },
+  ], ev.mode || 'trip')}
+      <p class="grp-hint" data-mode-hint></p></fieldset>
 
     <fieldset data-trip-only><legend>Way of transport</legend>${radioRow('transport', TRANSPORTS, ev.transport)}
       ${baseHint || transportHint ? `<p class="grp-hint">${baseHint}${transportHint}</p>` : ''}</fieldset>
@@ -2848,7 +2851,13 @@ function entryRow(ev, entry, body, showWeight = false) {
   if (entry.packer) subBits.push(personChipHTML(entry.packer));
   if (entry.note) subBits.push(esc(entry.note));
   if (entry.custom) subBits.push('added');
-  const subLine = entry.swedish ? `<span class="e-sv">${esc(entry.swedish)}</span> · ` : '';
+  // 🇸🇪 THE SWEDISH/IMPORT ALIAS IS NOT DRAWN ANYWHERE (v126). It is DATA, not a
+  // label: it arrived with the original imported lists, there has never been a
+  // field to edit it, and beside the English name it read as noise — sometimes
+  // literally the same words ("Tooth pickers" / "Tooth pickers"). It is still
+  // stored on every item and is still a SEARCH KEY, so typing "Kroppslotion"
+  // still finds Body lotion. Six places used to print it: here, packRow,
+  // renderReview, renderSearch, renderOverview and the kit picker.
   const chShort = entry.charging ? chargeTypeShort(entry.chargeType) : '';
   const chTitle = entry.charging ? `Needs charging${chShort ? ` — ${chargeTypeLabel(entry.chargeType)}` : ''}` : '';
   const badges = `${entry.charging ? `<span class="badge charge" title="${esc(chTitle)}">${ic('bolt','xs')}${chShort ? esc(chShort) : ''}</span>` : ''}`
@@ -2869,7 +2878,7 @@ function entryRow(ev, entry, body, showWeight = false) {
     <label class="ck"><input type="checkbox"${entry.checked ? ' checked' : ''}><span class="box"></span></label>
     <button class="entry-main" type="button">
       <span class="e-name">${isRem ? '' : `<span class="e-cat" style="background:${categoryColor(entry.category)}" title="${esc(entry.category || '')}"></span>`}${esc(entry.name)}${qtyLabel} ${badges}</span>
-      <span class="e-sub">${subLine}${subBits.join(' · ')}</span>
+      <span class="e-sub">${subBits.join(' · ')}</span>
       ${subItems}
     </button>
     ${weightPill}
@@ -3310,7 +3319,8 @@ async function openKitEditor(existing, onSaved) {
   const resultsBox = modal.querySelector('[data-results]');
   const search = modal.querySelector('.kit-search');
 
-  const itemLabel = (it) => `${esc(it.name)}${it.swedish ? ` · <span class="kit-sv">${esc(it.swedish)}</span>` : ''}`;
+  // Name only — the alias stays a search key below, but is not shown. See entryRow.
+  const itemLabel = (it) => esc(it.name);
   const drawChosen = () => {
     chosenBox.innerHTML = chosen.length
       ? chosen.map((iid) => {
@@ -3568,7 +3578,7 @@ async function renderPackMode(eventId) {
 // Packing Mode — so editing gets its own small pen beside it, opening the same
 // quick editor the packing list uses, right here in place.
 function packRow(ev, entry, redraw) {
-  const meta = [entry.swedish, entry.storage ? entry.storage : '', entry.container, entry.note].filter(Boolean).map(esc).join(' · ');
+  const meta = [entry.storage ? entry.storage : '', entry.container, entry.note].filter(Boolean).map(esc).join(' · ');
   const editing = packState.editId === entry.id;
   const row = h(`<div class="pack-row${editing ? ' editing' : ''}">
     <button class="pack-item${entry.checked ? ' done' : ''}" type="button">
@@ -3642,7 +3652,7 @@ async function renderReview(eventId) {
     body.appendChild(h(`<div class="sub">${esc(cg.category)}</div>`));
     for (const e of cg.entries) {
       const row = h(`<button class="rev-item${used.get(e.id) ? '' : ' unused'}" type="button" data-id="${e.id}">
-        <span class="rev-name">${esc(e.name)}${e.swedish ? ` <span class="e-sv">${esc(e.swedish)}</span>` : ''}</span>
+        <span class="rev-name">${esc(e.name)}</span>
         <span class="rev-tag">${used.get(e.id) ? 'Used' : 'Didn’t use'}</span>
       </button>`);
       row.addEventListener('click', () => {
@@ -5246,7 +5256,7 @@ function howtoCard() {
           <li><b>OE — Other Events:</b> small nice things (a coffee, a winter bath, a walk).</li>
         </ul>
         <p><b>Covers.</b> Each template shows as a <b>cover card</b> in the grid — a coloured tile with an emoji — so you can pick out Golf, Diving or Travel by look alone. Every template gets a distinct colour automatically; to choose your own, open a template and tap the <b>Cover</b> button in its toolbar, then set an <b>emoji</b> and a <b>colour</b> (or leave the colour on <b>Auto</b>). A live preview shows the card before you save. It’s purely visual — it doesn’t change what the template holds.</p>
- <p>Open a template to add or edit its items. Each item carries a Swedish alias shown as a subtitle, so your original wording is never lost. At the top of a template’s item list sit <b>quick-filter chips</b> — <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
+ <p>Open a template to add or edit its items. (Items imported from your original Swedish lists still carry that wording underneath — it is <b>no longer shown</b> anywhere, since it only repeated what the English name already said, but it is kept, and <b>search still finds an item by it</b>.) At the top of a template’s item list sit <b>quick-filter chips</b> — <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
         <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. When you <b>add an item to another template</b>, its section comes along <b>by name</b> — if that template has a section called the same thing the item lands in it, otherwise it arrives under <b>Ungrouped</b> for you to file (it never creates a section in a list you’ve arranged yourself). Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
 
         <h3>Which bag an item goes in</h3>
@@ -5296,7 +5306,7 @@ function howtoCard() {
           <li><b>Actions</b> — your to-do list (the red tab): everything you need to <em>do</em>, not just pack, whether it belongs to a specific item or stands on its own (see <b>Actions — your to-do list</b> below).</li>
           <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip import, this guide and the version history.</li>
         </ul>
- <p><b>Search.</b> A <b></b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name or Swedish), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
+ <p><b>Search.</b> A <b></b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name, <em>and</em> by the original Swedish wording even though that is no longer displayed), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
 
         <h3>Colour tells you where you are</h3>
         <p>Each of the six tabs has its <b>own colour</b>, and that colour flows through the whole screen — the page heading, the buttons, the chips and progress bars, the back/edit icons, and the tab itself. In the bottom bar <b>every tab always shows its colour</b>, and the one you're currently on fills in solid and goes bold — so a single glance tells you which part of the app you're in:</p>
@@ -5528,7 +5538,7 @@ function howtoCard() {
         <p><b>Automatic backups.</b> On top of the file backups, the app quietly keeps recent <b>copies of your data on this device</b> — about one a day, and always one <b>just before any restore</b> — so a mistaken edit, an accidental delete or a wrong import is easy to undo. They’re in <b>Settings → Your data → Automatic backups</b>, each labelled with when it was taken and what it holds; tap <b>Restore</b> on any copy, or <b>Save a copy now</b> whenever you like. This safety net is careful never to record an empty database over real data and never to clear your richest copy. And when you tap <b>Import backup</b>, the app now <b>shows exactly what’s in the file</b> — items, templates, trips, photos and the date — before changing anything, warning you first if a Replace would wipe most of your data. These on-device copies protect against mistakes; a saved backup <b>file</b> is still your insurance against losing the device itself.</p>
 
         <h3>Maintenance mode — the whole-database overview</h3>
- <p>At the top of <b>Settings</b>, <b>Maintenance mode — database overview</b> opens a single <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the quickest way to keep everything current without hopping between templates. Each row shows the <b>item</b> (with its category and any Swedish wording), <b>which templates it belongs to</b> (tap a template name to jump there), its <b>flags</b> — <b></b> charging (and the plug type), <b></b> liquid, <b></b> restricted, <b></b> per-night, <b></b> short list, <b></b> care, <b></b> photo, <b></b> not in use — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. <b>Search</b> by item, template or storage; use the same <b>category chips</b> from the Care tab to narrow; and <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. The page also <b>finds probable duplicates</b> — same or very similar names (e.g. “Sunglasses” and “Sun glasses”) — listing them in a <b>Possible duplicates</b> panel and highlighting them in the table; it never merges anything for you, so you can open each and rename or remove as you see fit. <b>Export (Excel)</b> saves the whole overview as a spreadsheet for review on a computer.</p>
+ <p>At the top of <b>Settings</b>, <b>Maintenance mode — database overview</b> opens a single <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the quickest way to keep everything current without hopping between templates. Each row shows the <b>item</b> and its category, <b>which templates it belongs to</b> (tap a template name to jump there), its <b>flags</b> — <b></b> charging (and the plug type), <b></b> liquid, <b></b> restricted, <b></b> per-night, <b></b> short list, <b></b> care, <b></b> photo, <b></b> not in use — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. <b>Search</b> by item, template or storage; use the same <b>category chips</b> from the Care tab to narrow; and <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. The page also <b>finds probable duplicates</b> — same or very similar names (e.g. “Sunglasses” and “Sun glasses”) — listing them in a <b>Possible duplicates</b> panel and highlighting them in the table; it never merges anything for you, so you can open each and rename or remove as you see fit. <b>Export (Excel)</b> saves the whole overview as a spreadsheet for review on a computer.</p>
 
       </div>
     </details>
@@ -5546,6 +5556,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v126', '2026-08-26 · 14:00 UTC', false, 'The trip’s name comes first, and the Swedish import wording is off your lists',
+      '<b>(1) Event name is the first thing on the form.</b> Creating a trip used to open with <b>List type</b> — asking you to classify a trip before you had even said what it was. The form now runs in the order you actually think in: <b>name</b>, <b>dates</b>, <b>destination</b>, and only then <b>List type</b> and the rest of the settings. Nothing was added or removed; the same choices are all there, in a sensible order. <b>(2) The Swedish / import wording is no longer shown.</b> Every item imported from your original lists carried a second name underneath it — <b>Kroppslotion</b> under Body lotion, <b>Ansiktsprodukter</b> under Face products, and in a fair few cases the very same words twice (<b>Tooth pickers</b> under Tooth pickers). It was useful while the lists were being translated; now it is just a second line of noise on every row. It has been taken off <b>all six places it appeared</b>: your trip’s <b>Packing List</b>, <b>Packing Mode</b>, the <b>trip review</b>, <b>search results</b>, the <b>Maintenance-mode overview</b> and the <b>kit</b> member picker. <b>Nothing is deleted.</b> The wording is still stored on every item and is still a <b>search key</b> — type “Kroppslotion” into search and Body lotion still comes up — and it is still a column in the <b>Excel export</b>. It simply isn’t drawn on screen any more. (There was never a field to edit or clear it yourself, which is exactly why it needed doing in the app.)',
+      'The trip form asks the obvious question first, and every item list is one line shorter and easier to read.'),
     v('v125', '2026-08-26 · 09:30 UTC', false, 'One date picker for the whole trip — and four smaller things',
       '<b>(1) The dates are now one control.</b> A trip’s <b>start</b> and <b>end</b> were two separate date boxes, which meant two separate calendars that knew nothing about each other: you picked a departure in one, closed it, opened the other, and had to find the same month all over again with no sight of where the trip began or how long it had got. A date range is <b>one idea</b>, so it is now <b>one dropdown</b>. Tap <b>Trip dates</b>, tap the day you leave, tap the day you come back — and it closes itself, having counted the nights. <b>Two months are shown side by side</b> (stacked on the phone) so a trip that crosses a month boundary needs no paging at all, the <b>whole range fills in as you move the mouse</b> so you can see the length before you commit, and picking a day <em>earlier</em> than your start simply starts the range again there rather than refusing. The closed field reads properly too — <b>“12 – 19 Sept 2026 · 8 days · 7 nights”</b> instead of two grey dd/mm/yyyy boxes. <b>Clear</b> empties both ends and <b>Today</b> jumps the calendar back to this month. Same day twice = a <b>0-night day trip</b>. <b>(2) Your Owners list is ordered by who owns most.</b> <b>Settings → Owners</b> used to be alphabetical, which told you nothing; it now puts <b>whoever owns the most items at the top</b>, counts still beside each name, ties settled A–Z. The Owner <em>dropdowns</em> stay alphabetical on purpose — you go there knowing the name you want. <b>(3) Storage places can be put in your own order.</b> <b>Settings → Storage places</b> was locked to A–Z, so “Bedroom wardrobe” always came before the garage whether or not that is where your things are. Each place now has <b>▲▼ buttons</b>, and <b>the order you set is the order in every “Where it’s stored” dropdown</b> in the app — put the two or three you actually use at the top and stop scrolling past the loft. Anything an item mentions that isn’t on your list still follows underneath, alphabetically. <b>(4) “Conditions” is now “Item conditions”.</b> The app was using one word for two unrelated things: how <b>worn</b> a thing is (New / Good / Worn / Needs replacing), and an item’s <b>“only include this item when…”</b> rules that decide whether it comes on a trip at all. The grading one is now spelled out in full everywhere it appears — the Settings section, the field in an item’s editor, the filter row and the grouping on <b>All items</b> — and the guide has a short note on the difference. Nothing about how either works has changed; only what they are called. <b>(5) The guide explains Template vs Trip preset.</b> A new section spells out what has only ever been implied: <b>a Template holds your gear, a Trip preset holds your answers.</b> A preset contains no items at all — it is a saved fill-in of the Home form (transport, season, catering, weather, laundry and which activities are ticked), spent the moment you press Create Event, so changing or deleting one can never touch a trip or an item. Worked example included.',
       'Setting a trip’s dates is one gesture instead of two hunts through a calendar; the two Settings lists you use most are in an order that suits you rather than the alphabet; and two things that were easy to confuse now say plainly what they are.'),
@@ -6252,7 +6265,7 @@ async function renderSearch() {
         const tid = itemToList.get(it.id);
         const href = tid ? `#/list/${encodeURIComponent(tid)}/item/${encodeURIComponent(it.id)}` : '#/maintenance';
         const dot = `<span class="e-cat" style="background:${categoryColor(it.category)}"></span>`;
-        const sub = [it.category, it.swedish].filter(Boolean).map(esc).join(' · ');
+        const sub = [it.category].filter(Boolean).map(esc).join(' · ');
         html += row(href, CATEGORY_ICON[it.category] || '📦', dot + esc(it.name), sub);
       }
       html += '</div>';
@@ -7393,11 +7406,10 @@ async function renderOverview() {
       const it = r.item;
       const dup = dupIds.has(r.id);
       const cat = it.category ? `<span class="ov-cat">${esc(it.category)}</span>` : '';
-      const swed = it.swedish ? `<span class="ov-swed">${esc(it.swedish)}</span>` : '';
       const rowEl = h(`<div class="ov-row${dup ? ' dupe' : ''}${it.retired ? ' retired' : ''}" data-href="${ovEditHref(r)}">
         <span class="ov-cell ov-item">
           <span class="ov-name">${dup ? `<span class="ov-dupmark" title="Possible duplicate">${ic('warn','xs')}</span> ` : ''}${esc(it.name || '(unnamed)')}</span>
-          <span class="ov-meta">${cat}${swed}</span>
+          <span class="ov-meta">${cat}</span>
         </span>
         <span class="ov-cell ov-tpls">${ovTemplateChips(r)}</span>
         <span class="ov-cell ov-flags">${ovFlagBadges(it) || '<span class="ov-dash">—</span>'}</span>
