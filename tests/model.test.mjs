@@ -37,6 +37,7 @@ import {
   namesToRows, namesFromRows, presetsToRows, presetsFromRows,
   sharedRowsFrom, defaultListFor, isFactoryList,
   orderedNamesFromRows, ownersByUsage,
+  AUDITABLE_KINDS, AUDIT_LABELS, referencedListValues, auditList, auditDeviceLists, AUDIT_STRAY_TOLERANCE,
   monthKey, shiftMonth, monthGrid, rangeCellState, orderRange,
 } from '../js/model.js';
 import { seedLists } from '../js/seed.js';
@@ -2762,4 +2763,155 @@ test('ownersByUsage: the biggest owner comes first, ties settle A–Z', () => {
   assert.deepEqual(ownersByUsage([], counts), []);
   // A plain object works as well as a Map — the helper shouldn't care.
   assert.deepEqual(ownersByUsage(['Anna', 'Martin'], { martin: 5, anna: 1 }), ['Martin', 'Anna']);
+});
+
+// --- The "is this device missing anything?" self-check (v129) ----------------
+//
+// The shape being detected is the real one: Martin's iPhone held 2 storage places
+// out of 17 and 1 item condition out of 6, while every item that pointed at the
+// other 15 and the other 5 had synced down perfectly. See the write-up in model.js.
+
+const auditItem = (over = {}) => ({ storage: '', ownedBy: '', condition: '', phase: '', ...over });
+
+test('referencedListValues: gathers what the device data points at, normalised', () => {
+  const lists = [{
+    items: [
+      auditItem({ storage: 'Loft', ownedBy: 'Anna', condition: 'worn', phase: 'week' }),
+      auditItem({ storage: '  loft  ', ownedBy: 'anna', condition: 'worn', phase: 'door' }),
+      auditItem({ storage: 'Boat locker', ownedBy: '', condition: '', phase: 'week' }),
+    ],
+  }];
+  const events = [{ entries: [{ storage: 'Garage', packer: 'Martin', phase: 'after' }] }];
+  const actions = [{ phase: 'prep' }];
+  const r = referencedListValues({ lists, events, actions });
+  // Case and spacing collapse, so "Loft" and "  loft  " are one place.
+  assert.deepEqual([...r.places].sort(), ['boat locker', 'garage', 'loft']);
+  assert.deepEqual([...r.owners].sort(), ['anna']);
+  assert.deepEqual([...r.conditions].sort(), ['worn']);
+  assert.deepEqual([...r.people].sort(), ['martin']);
+  assert.deepEqual([...r.phases].sort(), ['after', 'door', 'prep', 'week']);
+  // Blanks are never referenced values.
+  assert.ok(![...r.owners].includes(''));
+  // The spelling as written is kept alongside, so what he is shown reads like his
+  // own data — "Loft", not the "loft" the comparison runs on. First seen wins.
+  assert.equal(r.display.places.get('loft'), 'Loft');
+  assert.equal(r.display.places.get('boat locker'), 'Boat locker');
+  assert.equal(r.display.people.get('martin'), 'Martin');
+});
+
+test('referencedListValues: survives junk without throwing', () => {
+  const r = referencedListValues({ lists: [null, { items: null }, { items: [null] }], events: [null], actions: [null] });
+  for (const k of AUDITABLE_KINDS) assert.equal(r[k].size, 0);
+  assert.deepEqual(Object.keys(referencedListValues()).sort(), [...AUDITABLE_KINDS, 'display'].sort());
+});
+
+test('auditList: names what the list has never heard of', () => {
+  const referenced = { places: new Set(['loft', 'garage', 'boat locker']) };
+  const r = auditList('places', referenced, ['Loft', 'Garage']);
+  assert.equal(r.listed, 2);
+  assert.equal(r.used, 3);
+  assert.deepEqual(r.missing, ['boat locker']);
+  // With no spellings supplied it falls back to the key rather than showing blanks.
+  assert.deepEqual(r.missingLabels, ['boat locker']);
+  const spelled = auditList('places',
+    { places: new Set(['boat locker']), display: { places: new Map([['boat locker', 'Boat locker']]) } },
+    []);
+  assert.deepEqual(spelled.missingLabels, ['Boat locker']);
+  // Nothing missing when the list covers everything, whatever the spelling.
+  assert.deepEqual(auditList('places', referenced, ['LOFT', ' garage ', 'Boat Locker']).missing, []);
+  // A list holding more than is in use is not a fault — that is the normal case.
+  assert.deepEqual(auditList('places', { places: new Set(['loft']) }, ['Loft', 'Shed', 'Attic']).missing, []);
+});
+
+test('auditList: conditions and phases are matched by ID, people and places by name', () => {
+  // Items store a condition's slug, not its label — so the comparison must too.
+  const byId = auditList('conditions', { conditions: new Set(['worn-out', 'new']) },
+    [{ id: 'new', label: 'New' }]);
+  assert.deepEqual(byId.missing, ['worn-out']);
+  // Matching on the LABEL instead would wrongly report "new" as missing here.
+  assert.deepEqual(auditList('conditions', { conditions: new Set(['new']) }, [{ id: 'new', label: 'Brand new' }]).missing, []);
+  assert.deepEqual(auditList('phases', { phases: new Set(['week', 'custom-1']) },
+    [{ id: 'week', label: 'The week before' }]).missing, ['custom-1']);
+  assert.deepEqual(auditList('people', { people: new Set(['anna']) }, [{ name: 'Anna' }]).missing, []);
+  // A kind nothing points at (trip presets) is never audited.
+  assert.ok(!AUDITABLE_KINDS.includes('presets'));
+  assert.deepEqual(auditList('presets', { presets: new Set(['x']) }, []).missing, []);
+});
+
+test('auditDeviceLists: the real iPhone — 2 places of 17, 1 condition of 6 — reads as broken', () => {
+  const places = Array.from({ length: 17 }, (_, i) => `Place ${i + 1}`);
+  const conds = Array.from({ length: 6 }, (_, i) => ({ id: `c${i + 1}`, label: `C${i + 1}` }));
+  const lists = [{ items: places.map((p, i) => auditItem({ storage: p, condition: conds[i % 6].id })) }];
+  const a = auditDeviceLists({
+    referenced: referencedListValues({ lists }),
+    inForce: { places: places.slice(0, 2), owners: [], conditions: conds.slice(0, 1), people: [], phases: [] },
+    signedIn: true,
+    hasCatalogue: true,
+  });
+  assert.equal(a.level, 'broken');
+  const byKind = Object.fromEntries(a.lists.map((r) => [r.kind, r]));
+  assert.equal(byKind.places.missing.length, 15);
+  assert.equal(byKind.conditions.missing.length, 5);
+  assert.equal(a.missingTotal, 20);
+  assert.deepEqual(a.broken.map((r) => r.kind).sort(), ['conditions', 'places']);
+});
+
+test('auditDeviceLists: the healthy Mac holding all seventeen says ok', () => {
+  const places = Array.from({ length: 17 }, (_, i) => `Place ${i + 1}`);
+  const lists = [{ items: places.map((p) => auditItem({ storage: p })) }];
+  const a = auditDeviceLists({
+    referenced: referencedListValues({ lists }),
+    inForce: { places, owners: [], conditions: [], people: [], phases: [] },
+    signedIn: true,
+    hasCatalogue: true,
+  });
+  assert.equal(a.level, 'ok');
+  assert.equal(a.missingTotal, 0);
+  assert.deepEqual(a.gappy, []);
+});
+
+test('auditDeviceLists: a stray or two never raises an alarm', () => {
+  // Deleting a place you no longer keep anything in leaves the items pointing at
+  // it on purpose — the app goes on offering it. That must read as ok, not broken.
+  const kept = ['Loft', 'Garage', 'Shed', 'Attic', 'Cellar'];
+  const items = [...kept, 'Old boat locker', 'Sold caravan'].map((p) => auditItem({ storage: p }));
+  const a = auditDeviceLists({
+    referenced: referencedListValues({ lists: [{ items }] }),
+    inForce: { places: kept, owners: [], conditions: [], people: [], phases: [] },
+    signedIn: true, hasCatalogue: true,
+  });
+  assert.equal(AUDIT_STRAY_TOLERANCE, 2);
+  assert.equal(a.level, 'ok');
+  // One more stray and it is worth a mention — but only as "suspect", because the
+  // list still remembers far more than it has forgotten.
+  const b = auditDeviceLists({
+    referenced: referencedListValues({ lists: [{ items: [...items, auditItem({ storage: 'Gone too' })] }] }),
+    inForce: { places: kept, owners: [], conditions: [], people: [], phases: [] },
+    signedIn: true, hasCatalogue: true,
+  });
+  assert.equal(b.level, 'suspect');
+  assert.deepEqual(b.broken, []);
+  assert.equal(b.gappy.length, 1);
+});
+
+test('auditDeviceLists: nothing to compare against is "off", never a warning', () => {
+  const lists = [{ items: [auditItem({ storage: 'Loft' })] }];
+  const referenced = referencedListValues({ lists });
+  const inForce = { places: [], owners: [], conditions: [], people: [], phases: [] };
+  // Signed out: a short list means nothing — there is no account to be short of.
+  const out = auditDeviceLists({ referenced, inForce, signedIn: false, hasCatalogue: true });
+  assert.equal(out.level, 'off');
+  assert.deepEqual(out.gappy, []);
+  assert.equal(out.missingTotal, 0);
+  // Empty device (mid "Replace this device"): nothing has arrived yet, so nothing
+  // is missing. This is the v118 mistake in miniature — never judge an empty table.
+  assert.equal(auditDeviceLists({ referenced, inForce, signedIn: true, hasCatalogue: false }).level, 'off');
+  assert.equal(auditDeviceLists({}).level, 'off');
+  // ...but the per-list detail is still computed, so Settings can show it.
+  assert.equal(out.lists.length, AUDITABLE_KINDS.length);
+});
+
+test('AUDIT_LABELS: every audited kind has a name to show', () => {
+  for (const k of AUDITABLE_KINDS) assert.equal(typeof AUDIT_LABELS[k], 'string');
+  for (const k of AUDITABLE_KINDS) assert.ok(AUDIT_LABELS[k].length > 0);
 });

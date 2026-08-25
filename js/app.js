@@ -22,6 +22,7 @@ import {
   shoppingReason, shoppingSuggestions, openShoppingCount,
   PERSON_COLORS, coercePerson, newPerson, personColor, assignedPeople, DEFAULT_PEOPLE,
   SHARED_KINDS, sharedRowId, sharedRowsOfKind, sharedRowsFrom, isFactoryList,
+  AUDITABLE_KINDS, AUDIT_LABELS, referencedListValues, auditDeviceLists,
   conditionsFromRows, peopleFromRows, namesFromRows, orderedNamesFromRows, ownersByUsage, namesToRows, presetsFromRows, presetsToRows,
   monthKey, shiftMonth, monthGrid, rangeCellState, orderRange,
   catalogRows, duplicateGroups, duplicateIds,
@@ -38,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v128';
+const APP_VERSION = 'v129';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -191,6 +192,70 @@ const sharedCustomised = (kind) => sharedRowsOfKind(SHARED_ROWS, kind).length > 
 // device's pre-v120 copy, the FIRST edit has to write the whole list down, or
 // storing one entry would silently discard everything shown beside it.
 const sharedStored = (kind) => SHARED_STORED.has(kind);
+
+// --- "Did all of my lists actually reach this device?" ------------------------
+//
+// The detector for the fault written up at length in model.js: a synced list that
+// never downloaded onto a device that was already syncing, and then stayed short
+// for ever without a word. It compares the lists in force against what this
+// device's own gear points at. No server call, and nothing that depends on the
+// sync addon's internals — those two are exactly what cost v121 and v124.
+//
+// Bump when a release adds a SYNCED list. It rides along in the signature below,
+// so crossing it makes every device take a fresh look at itself instead of
+// staying quiet behind an old dismissal.
+const SYNC_GEN = 2;                              // 1 = phases (v118) · 2 = shared (v120)
+const AUDIT_HUSH_KEY = 'ams-list-check-hushed';  // the one verdict he has already seen and waved away
+let LAST_LIST_CHECK = null;
+
+// Every list as the app is really showing it — stored rows where there are any,
+// the code's defaults where there are none. An entry that comes from the defaults
+// is PRESENT, not missing, which is why this and not the stored rows is the right
+// thing to compare against (rule 5: `sharedStored` ≠ `sharedCustomised`).
+function listsInForce() {
+  return {
+    places: loadStorageLocs(),
+    owners: loadOwners(),
+    conditions: ITEM_CONDITIONS,
+    people: loadPeople(),
+    phases: PHASES,
+  };
+}
+
+// Pass the screen's own data in where it already has it; only the Settings button
+// pays for a re-read.
+async function runListCheck(loaded = {}) {
+  const [lists, events, actions] = await Promise.all([
+    loaded.lists || db.getLists(),
+    loaded.events || db.getEvents(),
+    loaded.actions || db.getActions(),
+  ]);
+  const st = await db.syncStatus().catch(() => ({ signedIn: false }));
+  LAST_LIST_CHECK = auditDeviceLists({
+    referenced: referencedListValues({ lists, events, actions }),
+    inForce: listsInForce(),
+    signedIn: !!st.signedIn,
+    hasCatalogue: lists.length > 0,
+  });
+  return LAST_LIST_CHECK;
+}
+
+// Hush ONE verdict, not the feature. If a different list goes short later — or a
+// release adds another synced one — the signature changes and it speaks up again.
+const auditSignature = (a) => `${SYNC_GEN}|${(a.gappy || []).map((r) => `${r.kind}:${r.missing.length}`).join(',')}`;
+function auditHushed(a) {
+  try { return localStorage.getItem(AUDIT_HUSH_KEY) === auditSignature(a); } catch { return false; }
+}
+function hushAudit(a) {
+  try { localStorage.setItem(AUDIT_HUSH_KEY, auditSignature(a)); } catch { /* ignore */ }
+}
+
+// "15 storage places and 5 item conditions" — the gaps, in his words not mine.
+function auditGapPhrase(a) {
+  const parts = (a.gappy || []).map((r) => `${r.missing.length} ${AUDIT_LABELS[r.kind].toLowerCase()}`);
+  if (parts.length <= 1) return parts[0] || '';
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
 
 // --- The three ways to write. Each returns after the store is updated, and each
 // keeps the cache exact; the cache is also updated up front so a redraw that does
@@ -1316,6 +1381,51 @@ async function renderHome() {
       <span class="nudge-body"><b>To-dos to tackle</b> — ${detail}<span class="nudge-sub">Tap to open your Actions list</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
+  }
+
+  // HALF-FINISHED SWAP. "Replace this device with the account copy" signs out
+  // before it clears, so at this point the device is empty and signed out and
+  // nothing will arrive until it is signed in again. That is the step that got
+  // left off once, and an empty app gives no clue that it is waiting. Say so, and
+  // put the button that finishes it right here.
+  if (db.cloudConfigured() && db.awaitingCloudCopy() && !lists.length) {
+    const swap = h(`<div class="nudge sync">
+      <span class="nudge-ic">${ic('refresh','md')}</span>
+      <span class="nudge-body"><b>Sign in to finish the swap</b> — this device was emptied on purpose, ready to take your account’s copy.<span class="nudge-sub">Step 1 of 2 (erase this device) is done. This is step 2, and nothing downloads until you do it.</span></span>
+      <span class="nudge-acts">
+        <button class="btn sm nudge-signin" type="button">${ic('refresh','sm')}<span>Sign in and download</span></button>
+      </span>
+    </div>`);
+    swap.querySelector('.nudge-signin').addEventListener('click', async (e) => {
+      e.currentTarget.disabled = true;
+      try { await db.signIn(); showToast('Signed in — your account copy is downloading.'); }
+      catch (err) { logDiag('sync', err); e.currentTarget.disabled = false; return; }
+      render();
+    });
+    wrap.appendChild(swap);
+  }
+
+  // LISTS THAT NEVER ARRIVED. The quiet one: a device that was already syncing
+  // when a release added a list can end up holding a fraction of it and carry on
+  // as if nothing were wrong — see the write-up in model.js. Only the unmistakable
+  // verdict interrupts him here; a milder one waits in Settings.
+  const audit = await runListCheck({ lists, events, actions }).catch(() => null);
+  if (audit && audit.level === 'broken' && !auditHushed(audit)) {
+    const gaps = auditGapPhrase(audit);
+    const nudge = h(`<div class="nudge sync urgent">
+      <span class="nudge-ic">${ic('warn','md')}</span>
+      <span class="nudge-body"><b>Some of your lists didn’t reach this device</b> — your gear points at ${esc(gaps)} this device has never heard of.<span class="nudge-sub">It happens when a list is added while a device is already syncing. Settings → Sync your devices shows exactly what’s missing, and the two steps that fix it.</span></span>
+      <span class="nudge-acts">
+        <a class="btn sm" href="#/settings">${ic('wrench','sm')}<span>Show me</span></a>
+        <button class="nudge-x" type="button" aria-label="Dismiss" title="Dismiss">${ic('close','sm')}</button>
+      </span>
+    </div>`);
+    nudge.querySelector('.nudge-x').addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      hushAudit(audit);
+      render();
+    });
+    wrap.appendChild(nudge);
   }
 
   // Backup reminder: a saved file is the real insurance for on-device data. It
@@ -5410,6 +5520,12 @@ function howtoCard() {
         <p><b>The first time each device runs this version</b> it offers up the lists you had already made on it, and they are <b>merged</b> \u2014 an entry your account already has is left exactly as it is, and anything only one device had is added. So the first time round you may see the combined set. <b>Go through the six lists once afterwards and remove anything you don't want</b>: from then on a removal travels too.</p>
         <p>Two things are deliberately never written into your shared data: the <b>standard</b> versions of these lists (the four conditions, Martin &amp; Anna, the standard storage places) live in the app itself, so no device can ever plant them over yours \u2014 and a device <b>waits until it has actually seen your account's copy</b> before offering anything up.</p>
 
+        <h4>&ldquo;Is this device missing anything?&rdquo; \u2014 the self-check</h4>
+        <p>At the bottom of <b>Settings \u2192 Sync your devices</b>, every device can check <b>itself</b>. It needs no internet and asks your account nothing, because the evidence is already sitting on the device: <b>your gear carries its own answers</b>. Each item knows where it is kept, whose it is, what condition it is in and when it gets packed \u2014 so the app can simply ask <b>&ldquo;does anything my things point at not exist on my lists?&rdquo;</b> If your things between them name fifteen storage places and the storage-place list has heard of two, that list never arrived, and the device can work that out on its own. It <b>names every entry it cannot account for</b>, so you can see whether something real is missing or whether it is just a place you deleted on purpose.</p>
+        <p><b>Why this can happen at all.</b> When a version adds a list that syncs, each device downloads that list once in full and then notes that it has done so; afterwards it expects only <em>changes</em>. A device that reaches the new list <b>before the other device has put anything into it</b> downloads an empty list, quite correctly, and then only ever receives entries that are <b>brand new</b> \u2014 never the ones that were already there. Nothing looks broken, because the app deliberately carries on when it meets a storage place it doesn't recognise. That is exactly why the check exists.</p>
+        <p><b>A gap or two is normal and is not flagged.</b> Delete a storage place you have stopped using and the things still standing in it keep the old name on purpose, so the place goes on being offered. What the check flags is a list that has forgotten more than it remembers \u2014 and when it is that clear-cut, it says so on the <b>Home screen</b> too rather than waiting to be found.</p>
+        <p><b>The cure is two steps, and the second is the one people forget.</b> On the device with the gaps, press <b>Replace this device with the account copy</b> \u2014 it asks twice, erases that device and reloads. Then <b>sign in again</b>: the reset deliberately signs the device out first, so that emptying one device is never mistaken for you deleting everything everywhere, and <b>nothing at all downloads until you sign back in</b>. If a device is ever left sitting in that gap \u2014 emptied, signed out, waiting \u2014 its Home screen says <b>&ldquo;Sign in to finish the swap&rdquo;</b> with the button right there.</p>
+
         <h4>Photos stay on the device that took them \u2014 on purpose</h4>
         <p>This is a deliberate decision, not a limitation, and it is worth understanding because it is the one place where your two devices are <em>meant</em> to differ.</p>
         <p>When you photograph an item, the picture is stored on <b>that</b> device and stays there. It is never uploaded, and it will not appear on your other device.</p>
@@ -5665,6 +5781,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v129', '2026-08-26 · 21:00 UTC', false, 'The app now notices when a list hasn’t reached a device',
+      '<b>The problem this fixes is not that syncing broke. It is that when it broke, nothing said so.</b> Your iPhone spent a fortnight holding <b>two storage places out of seventeen</b> and <b>one item condition out of six</b>, and the only thing in the world that could have told you was you happening to look at the list and think it seemed short. There was no error, no warning, and the app carried on quite happily — because it is <em>designed</em> to carry on when it meets a storage place it doesn’t recognise, and it did exactly that, several hundred times, without comment.<br><br><b>Why it happened, in one paragraph.</b> When a new version adds a list that syncs — <b>When</b> in v118, the five Settings lists in v120 — every device downloads that list once, in full, and then makes a note that it has done so. From then on it only expects <em>changes</em>. Your iPhone reached the new list <b>before the Mac had put anything into it</b>. So it downloaded an empty list, correctly, made its note, and afterwards received only entries that were <b>newly created</b> — never the twenty-five that were already sitting there. That is why the two places it did have were precisely the two you happened to type during the field check, and why <b>re-sending the lists from the Mac didn’t help</b>: those arrived as changes to entries the iPhone had never had, and were ignored.<br><br><b>What is new: the device checks itself.</b> <b>Settings → Sync your devices</b> now ends with <b>“Is this device missing anything?”</b>. It needs no internet and asks the account nothing — the evidence is already sitting on the device. <b>Your gear carries its own answers.</b> Every item knows where it is kept, whose it is, what condition it is in and when it gets packed, and all of that <em>did</em> arrive. So the app simply asks: <b>does anything my things point at not exist on my lists?</b> If your rucksacks and boots and toiletries between them name <b>fifteen storage places</b> and your storage-place list has heard of <b>two</b>, that list did not arrive — and the app can work that out entirely on its own. It <b>names every entry it can’t account for</b>, so you can see at a glance whether something real is missing or whether it is just an old place you deleted on purpose. If the answer is bad enough to matter, it also says so <b>on the Home screen</b> rather than waiting to be found.<br><br><b>A gap or two is not a fault, and it doesn’t raise an alarm.</b> Delete a storage place you have stopped using and the things still standing in it keep the old name deliberately, so the place goes on being offered — that is working as intended, and the check treats it as such. What it flags is a list that has <b>forgotten more than it remembers</b>.<br><br><b>And the instruction is no longer half an instruction.</b> The cure for this has only ever been one thing: <b>Replace this device with the account copy</b> — and it is <b>two steps</b>, because the reset deliberately <b>signs the device out</b> before it erases (so that emptying one device is never mistaken for you deleting everything, everywhere). You then have to <b>sign in again</b>, and until you do, absolutely nothing downloads. I gave you step one and not step two, at the end of a long evening, and you sat looking at an empty app working it out for yourself. Now the app carries the second step: the confirmation says <b>“Step 1 of 2 done”</b> and tells you what to expect, the check writes the fix out as two numbered steps, and if a device is ever left sitting in the gap — emptied, signed out, waiting — the <b>Home screen says “Sign in to finish the swap”</b> with the button right there, and keeps saying it until you have.',
+      'If a list ever fails to reach one of your devices again, the device tells you — with the missing entries named and the fix spelled out — instead of you finding out weeks later because something looked short.'),
     v('v128', '2026-08-26 · 18:00 UTC', false, 'An item shows once on All items — and the guide explains why it ever showed twice',
       '<b>The duplicate lines are gone.</b> On <b>Care → All items</b>, an item in several templates was drawn <b>once per template</b> — “Sports bra” twice, marked Bike and Run. Nothing was ever duplicated in your data, but the screen made it look that way, and you have now said so three times (v108, v121 and again today). v121 fixed the <em>counter</em> to read “431 items · 538 lines”; that explained the extra lines rather than removing the ones that should never have been there. Now an item appears <b>once</b>, with its templates named on the line — <b>“Bike, Run”</b> — and the count simply says <b>“431 items”</b>.<br><br>The second line was not <em>always</em> pointless, so it has been kept exactly where it earns its place. <b>Only three things about an item can differ between templates</b>: which <b>bag</b> it goes in (a template may override it), its <b>section</b> (a section belongs to one template), and the <b>template</b> itself. Sort or group by any of those three and the item still splits into a line per template — that is how you reach the Run half and the Bike half separately, and the count says how many lines. Group by <b>Whose it is</b>, <b>Where it’s stored</b>, <b>Item condition</b>, <b>Category</b>, <b>Care status</b>, <b>Manufacturer</b> or <b>First letter</b> and you get one line each, because those belong to the <em>object</em> — a second line could only ever repeat the first, word for word but the template name. That was the whole problem: you were grouping by <b>Whose it is</b>, where the two rows were identical. An item in more than three templates shows the first three and a <b>+2</b>; the full list is in its editor. <b>Nothing about your data changed</b>, and editing an item on any line still updates it everywhere.<br><br>Two guide sections went in alongside it. <b>(1) Template vs Trip preset</b> — the section added in v125 now says exactly what a preset holds instead of describing it in prose. When you tap <b>Save as preset</b>, <b>eight</b> things are remembered and they are now listed one by one: trip or quick, <b>which activities you ticked</b>, transport, time of year, context, catering, forced weather gear, and laundry. That is the whole list — the trip’s <b>name, dates, destination and packed items are deliberately not saved</b>, because they belong to one particular trip rather than to a kind of trip. A <b>side-by-side table</b> now settles the five questions people actually ask — does it hold items, where does it live, is it still connected after the trip is made, what happens if you change it, what happens if you delete it — and it is spelled out that <b>saving a preset under a name you already used replaces it</b> rather than quietly making a second one. <b>(2) One item, many templates</b> — a brand-new section on something the app has always done but the guide only mentioned in passing, inside the paragraph about bags. Calling a template “a box of things” is the right picture for what it is <em>for</em>, but it can read as though an item in three templates is three copies. It is not. You own <b>one</b> head torch, the app stores <b>one</b> head torch, and each template holds a <b>link</b> to it. The section draws the line plainly: <b>what the thing IS</b> is shared — name, weight, photos, storage, care record, owner, condition, brand, model, serial, price, warranty, and the liquid / restricted / charging flags — so editing it on <b>any</b> line in <b>any</b> template changes it everywhere at once; while <b>how it is packed HERE</b> is local to one template — its section, kit, bag exception, “When”, quantity, note and the conditions that decide whether it comes along. That is also why <b>Care → All items</b> gives an item one line per template and counts “431 items · 538 lines”: two lines reading “Sports bra” are one sports bra shown twice, not two.',
       'All items stops looking like it holds duplicates, while keeping the split line-per-template exactly where it tells you something.'),
@@ -6444,8 +6563,48 @@ function accountName(user) {
 // The "Sync your devices" card. Shows where this device stands, and offers the
 // one action that matters (sign in / sign out). Dexie Cloud supplies its own
 // e-mail-code dialog, so there is no password to invent or remember here.
+// The self-check, drawn. This is the part that was missing: for a fortnight the
+// only thing that could tell Martin a list had not arrived was Martin noticing it
+// looked short. Now the device says so itself, and names exactly what it can't
+// account for — and the fix is written as TWO numbered steps, because giving it as
+// one is what left him staring at an empty app.
+function listCheckBlock(a) {
+  if (!a) return '';
+  if (a.level === 'off') {
+    return `<div class="sync-check" data-level="off">
+      <p class="data-status">${ic('note', 'sm')}<b>Nothing to check yet</b></p>
+      <p class="muted">This check compares your lists against the gear that points at them. It needs this device to be signed in and holding your catalogue.</p>
+    </div>`;
+  }
+  if (a.level === 'ok') {
+    return `<div class="sync-check" data-level="ok">
+      <p class="data-status">${ic('check', 'sm')}<b>This device has everything</b></p>
+      <p class="muted">Every storage place, owner, item condition, person and stage your gear refers to is on the lists here — so nothing has gone missing on the way down.</p>
+      <div class="btnrow"><button class="btn ghost sm" data-sync="check">Check again</button></div>
+    </div>`;
+  }
+  const rows = a.gappy.map((r) => `<li><b>${esc(AUDIT_LABELS[r.kind])}</b> — this device lists ${r.listed}, and your gear names ${r.missing.length} more it has never heard of:
+    <span class="sync-missing">${r.missingLabels.map((m) => `<span class="pill">${esc(m)}</span>`).join(' ')}</span></li>`).join('');
+  const hard = a.level === 'broken';
+  return `<div class="sync-check" data-level="${a.level}">
+    <p class="data-status">${ic('warn', 'sm')}<b>${hard ? 'Some lists didn’t reach this device' : 'One of your lists looks short'}</b></p>
+    <p class="muted">${hard
+      ? 'This is what it looks like when a list is added in a new version while a device is <em>already</em> syncing: that device downloads the empty list once, decides it is done, and afterwards only ever receives brand-new entries — never the ones that were already there.'
+      : 'A gap or two is normal — remove a storage place you no longer use and the things still standing in it keep the old name on purpose. Worth a glance rather than an alarm.'}</p>
+    <ul class="muted sync-gaps">${rows}</ul>
+    ${hard ? `<p class="muted"><b>How to put it right — two steps, and the second is the one everyone forgets:</b></p>
+    <ol class="muted sync-fix">
+      <li>Press <b>Replace this device with the account copy</b> below. It asks twice, then the app reloads.</li>
+      <li><b>Sign in again.</b> Nothing downloads until you do — the reset signs this device out on purpose, so the erase can’t be mistaken for you deleting everything everywhere.</li>
+    </ol>
+    <p class="muted sync-note">Do this on <em>this</em> device — the one with the gaps. It throws away what is here and takes the account’s copy, which is the only thing that has ever fixed this.</p>` : ''}
+    <div class="btnrow"><button class="btn ghost sm" data-sync="check">Check again</button></div>
+  </div>`;
+}
+
 async function syncCard() {
   const st = await db.syncStatus().catch(() => ({ enabled: true, signedIn: false, user: '', state: 'error' }));
+  const audit = LAST_LIST_CHECK || await runListCheck().catch(() => null);
   const body = st.signedIn
     ? `<p class="data-status">${ic('check', 'sm')}<b>Syncing as ${esc(accountName(st.user))}</b></p>
        <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on — and so are the lists you make here: <b>When</b>, <b>Item conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>. Changes made offline are sent as soon as you're back online.</p>
@@ -6463,7 +6622,9 @@ async function syncCard() {
       <button class="btn ghost danger-txt" data-sync="reset">Replace this device with the account copy</button>
     </div>
     ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Item conditions, Trip presets, People, Owners or Storage places look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
-    <p class="muted sync-note">Use <b>Replace this device</b> only on a device holding the <em>wrong</em> catalogue — it erases what is on this one and takes the account's copy instead. The device with your real catalogue should <b>sign in</b>, not this.</p>
+    <p class="muted sync-note">Use <b>Replace this device</b> only on a device holding the <em>wrong</em> catalogue — it erases what is on this one and takes the account's copy instead. The device with your real catalogue should <b>sign in</b>, not this. It is <b>two steps</b>: it erases and reloads, and then you have to <b>sign in again</b> before anything downloads.</p>
+    <h3 class="sync-check-h">Is this device missing anything?</h3>
+    ${listCheckBlock(audit)}
   </div>`);
   el.addEventListener('click', async (e) => {
     const act = e.target.closest('[data-sync]')?.dataset.sync;
@@ -6478,8 +6639,22 @@ async function syncCard() {
           alert('Could not finish clearing this device — another tab or window still has the app open.\n\nClose any other copies of the app and try again.');
           return;
         }
-        alert('This device has been cleared.\n\nThe app will reload. Sign in and the account copy will download.');
+        // STEP 2 IS THE ONE THAT GETS LOST. The reset signs this device out before
+        // it clears, so what comes back is an empty app that will stay empty until
+        // he signs in. Say it as a numbered step here, and the Home screen keeps
+        // saying it until he has (see the "Sign in to finish the swap" nudge in renderHome).
+        alert('Step 1 of 2 done — this device has been cleared.\n\nThe app will reload, and it will be EMPTY.\n\nStep 2: sign in again. Nothing downloads until you do.');
         location.reload();
+        return;
+      }
+      if (act === 'check') {
+        LAST_LIST_CHECK = null;
+        const a = await runListCheck();
+        showToast(a.level === 'ok'
+          ? 'Checked — this device has everything.'
+          : a.level === 'off' ? 'Nothing to check on this device yet.'
+            : `Checked — ${a.missingTotal} entr${a.missingTotal === 1 ? 'y' : 'ies'} your gear names are missing here.`);
+        render();
         return;
       }
       if (act === 'resend') {

@@ -195,6 +195,29 @@ export async function resetFromCloud() {
   }
 }
 
+// Is this device sitting in the gap in the middle of "Replace this device with
+// the account copy"? `resetFromCloud()` signs out BEFORE it clears, so afterwards
+// the device is empty AND signed out — and nothing at all downloads until it is
+// signed in again. That second step was given to Martin as an afterthought once,
+// at the end of a long evening, and he sat looking at an empty app. It is not an
+// afterthought any more: while this is true the app says so on the Home screen.
+export function awaitingCloudCopy() {
+  try { return localStorage.getItem(AWAITING_CLOUD_KEY) === '1'; } catch { return false; }
+}
+
+// A read-only peek at which tables the sync addon believes it has already done a
+// first, full download of. Diagnostics ONLY — nothing acts on it. v121 tried
+// EDITING this and it achieved nothing, so it is here purely so the question
+// "did this table ever download here?" can be answered in one glance next time.
+export async function syncTablesSeen() {
+  if (!syncEnabled()) return null;
+  try {
+    const db = await open();
+    const st = await db.table('$syncState').get('syncState');
+    return (st && Array.isArray(st.syncedTables)) ? st.syncedTables.slice() : null;
+  } catch { return null; }
+}
+
 // Sign out on THIS device. Local data stays; it simply stops syncing.
 export async function signOut() {
   if (!syncEnabled()) return;

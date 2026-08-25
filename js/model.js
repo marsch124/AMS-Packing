@@ -1082,6 +1082,146 @@ export function isFactoryList(kind, list) {
     && JSON.stringify(r.data) === JSON.stringify(b[i].data));
 }
 
+// --- Is this device holding the account's WHOLE copy? -----------------------
+//
+// 🚨 THE FAULT THIS EXISTS TO CATCH, AND WHY IT HAS TO BE FOUND LOCALLY.
+//
+// When a release adds a synced table, the sync addon gives it one first, full
+// download and then records it as done. A device that reaches the new table
+// BEFORE the other device has written anything into it downloads nothing,
+// records the table as done anyway, and from then on receives only rows that are
+// newly CREATED — never an update to a row it has no copy of. So it sits on a
+// fraction of the list for ever, and nothing about it looks broken: no error, no
+// warning, and the app carries on because it deliberately tolerates a value it
+// doesn't recognise (see `collectStorages`). That is how an iPhone held two
+// storage places out of seventeen for a fortnight without saying a word.
+//
+// Two pushes from the healthy device were shipped to cure it (v121, v124). Both
+// failed, and the second was PROVEN to reach the server — the rows arrived and
+// were ignored, because they were updates to rows that device never had. The only
+// thing that worked was pulling: Replace this device with the account copy, and
+// then sign in again.
+//
+// So this does not try to fix it. It tries to NOTICE it, which is the part that
+// was missing. The trick is that no server call is needed, because the evidence
+// is already on the device: your items travel with the catalogue and they carry
+// the answers — this rucksack is kept in the "Loft", that jacket is "Anna's",
+// this one is "Worn out". Those arrived. If your gear points at fifteen storage
+// places and the storage-place list has heard of two, the list did not arrive,
+// and the device can work that out entirely on its own.
+//
+// Everything below is pure: no database, no network, no addon internals. That is
+// deliberate — the sync path cannot be exercised in the preview (`databaseUrl` is
+// blank there), so anything that mattered was built where it CAN be tested.
+
+// The lists whose entries the rest of your data points at. `presets` is
+// deliberately absent: nothing refers to a trip preset, so one going missing
+// leaves no trace to find, and claiming otherwise would be a guess.
+export const AUDITABLE_KINDS = Object.freeze(['places', 'owners', 'conditions', 'people', 'phases']);
+
+export const AUDIT_LABELS = Object.freeze({
+  places: 'Storage places',
+  owners: 'Owners',
+  conditions: 'Item conditions',
+  people: 'People',
+  phases: 'When',
+});
+
+// How an entry of each list is addressed by the data that points at it. Items
+// store a condition's and a phase's ID, not its label — which is exactly why a
+// missing one shows up as a slug rather than a name.
+const AUDIT_KEY_OF = {
+  places: (v) => (typeof v === 'string' ? v : (v && v.name) || ''),
+  owners: (v) => (typeof v === 'string' ? v : (v && v.name) || ''),
+  people: (v) => (v && typeof v === 'object' ? v.name : v) || '',
+  conditions: (v) => (v && typeof v === 'object' ? v.id : v) || '',
+  phases: (v) => (v && typeof v === 'object' ? v.id : v) || '',
+};
+
+// Every value this device's own data refers to, per list, normalised — plus, in
+// `display`, the spelling it was actually written in. Comparing has to normalise
+// ("Loft" and "loft" are one place), but SHOWING him a normalised key would put
+// "basement / cellar" on screen where his items say "Basement / cellar". A list of
+// what is missing is only useful if he recognises the entries in it.
+export function referencedListValues({ lists = [], events = [], actions = [] } = {}) {
+  const out = { display: {} };
+  for (const k of AUDITABLE_KINDS) { out[k] = new Set(); out.display[k] = new Map(); }
+  const add = (kind, v) => {
+    const raw = typeof v === 'string' ? v.trim() : '';
+    const t = normName(raw);
+    if (!t) return;
+    out[kind].add(t);
+    if (!out.display[kind].has(t)) out.display[kind].set(t, raw);
+  };
+  for (const l of asArray(lists)) for (const it of asArray(l && l.items)) {
+    if (!it) continue;
+    add('places', it.storage);
+    add('owners', it.ownedBy);
+    add('conditions', it.condition);
+    add('phases', it.phase);
+  }
+  // Trip entries are self-contained copies, so they carry the same answers even
+  // for gear that has since left the catalogue.
+  for (const ev of asArray(events)) for (const e of asArray(ev && ev.entries)) {
+    if (!e) continue;
+    add('places', e.storage);
+    add('people', e.packer);
+    add('phases', e.phase);
+  }
+  for (const a of asArray(actions)) if (a) add('phases', a.phase);
+  return out;
+}
+
+// One list, compared against what points at it. `inForce` is the list the app is
+// actually showing — stored rows, or the code's defaults where there are none —
+// because an entry supplied by the defaults is not missing, it is just not stored.
+export function auditList(kind, referenced, inForce) {
+  const keyOf = AUDIT_KEY_OF[kind];
+  const used = [...((referenced && referenced[kind]) || [])];
+  if (!keyOf) return { kind, used: used.length, listed: 0, missing: [], missingLabels: [] };
+  const have = new Set();
+  for (const v of asArray(inForce)) {
+    const k = normName(keyOf(v));
+    if (k) have.add(k);
+  }
+  const missing = used.filter((k) => !have.has(k)).sort();
+  // A condition and a phase are referred to by their id, so what shows here is a
+  // slug — which is the honest answer: that IS what the item is pointing at.
+  const shown = (referenced && referenced.display && referenced.display[kind]) || new Map();
+  return { kind, used: used.length, listed: have.size, missing, missingLabels: missing.map((k) => shown.get(k) || k) };
+}
+
+// A stray or two is ORDINARY and must never raise an alarm: remove a storage
+// place you have stopped using and the items still standing in it keep the old
+// name on purpose, so the place goes on being offered. What is not ordinary is a
+// list that has heard of less than it has forgotten.
+export const AUDIT_STRAY_TOLERANCE = 2;
+
+// The verdict.
+//
+//  off     — nothing to compare against (not syncing, or nothing on the device).
+//  ok      — every list accounts for what your gear points at, give or take strays.
+//  suspect — one list has more gaps than strays explain. Worth a look.
+//  broken  — a list has forgotten at least as much as it remembers. This is the
+//            shape of a list that never downloaded, and the shape his iPhone had:
+//            2 places listed, 15 unaccounted for.
+export function auditDeviceLists({ referenced, inForce, signedIn = false, hasCatalogue = false } = {}) {
+  const lists = AUDITABLE_KINDS.map((k) => auditList(k, referenced || {}, (inForce || {})[k]));
+  const gappy = lists.filter((r) => r.missing.length > AUDIT_STRAY_TOLERANCE);
+  const broken = gappy.filter((r) => r.missing.length >= r.listed);
+  let level = 'ok';
+  if (!signedIn || !hasCatalogue) level = 'off';
+  else if (broken.length) level = 'broken';
+  else if (gappy.length) level = 'suspect';
+  return {
+    level,
+    lists,
+    gappy: level === 'off' ? [] : gappy,
+    broken: level === 'off' ? [] : broken,
+    missingTotal: level === 'off' ? 0 : gappy.reduce((n, r) => n + r.missing.length, 0),
+  };
+}
+
 export function newItem(partial = {}) {
   return coerceItem({
     id: id(),

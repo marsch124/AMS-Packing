@@ -709,12 +709,15 @@ em {
    viewport breakpoint: the message keeps a sensible minimum width and the Save
    button drops to its own row whenever the card gets too narrow to hold both.
    Top-aligned, because the message often runs to two or three lines. */
-.nudge.backup {
+.nudge.backup,
+.nudge.sync {
   flex-wrap: wrap;
   align-items: flex-start;
 }
-.nudge.backup .nudge-ic { margin-top: 1px; }
-.nudge.backup .nudge-body { flex: 1 1 15rem; }
+.nudge.backup .nudge-ic,
+.nudge.sync .nudge-ic { margin-top: 1px; }
+.nudge.backup .nudge-body,
+.nudge.sync .nudge-body { flex: 1 1 15rem; }
 .nudge-acts {
   flex: 0 0 auto;
   display: flex;
@@ -5785,3 +5788,115 @@ table.grid {
   padding: 7px 13px;
   font-size: .84rem;
 }
+
+/* --- The "is this device missing anything?" self-check (v129) ---------------
+   Uses the palette's *-txt variables, which are the ones already mixed toward
+   --ink for readable text; the raw --warn/--ok are for fills and dots only. */
+.sync-check-h {
+  margin: 16px 0 8px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+  font-size: .95rem;
+}
+
+.sync-check {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 13px;
+  background: var(--line-2);
+}
+
+.sync-check[data-level="ok"] { border-left-color: var(--ok); }
+.sync-check[data-level="suspect"] { border-left-color: var(--warn); }
+.sync-check[data-level="broken"] { border-left-color: var(--danger); }
+.sync-check[data-level="ok"] .data-status { color: var(--check-ok); }
+.sync-check[data-level="suspect"] .data-status { color: var(--check-warn); }
+.sync-check[data-level="broken"] .data-status { color: var(--check-danger); }
+
+/* The heading sits on a tinted panel (--line-2), not on the card, so the shared
+   *-txt tokens are one step short of readable there: in dark, "broken" measured
+   4.41:1 against 4.5 minimum at 14.4px/600. Mixing further toward --ink brings it
+   back without giving up the colour. Defined per theme rather than once, because
+   --ink swaps ends and a single mix cannot suit both. */
+:root {
+  --check-ok: var(--ok-txt);
+  --check-warn: var(--warn-txt);
+  --check-danger: var(--danger-txt);
+}
+
+:root[data-theme="dark"] {
+  --check-ok: color-mix(in srgb, var(--ok) 45%, var(--ink));
+  --check-warn: color-mix(in srgb, var(--warn) 45%, var(--ink));
+  --check-danger: color-mix(in srgb, var(--danger) 45%, var(--ink));
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --check-ok: color-mix(in srgb, var(--ok) 45%, var(--ink));
+    --check-warn: color-mix(in srgb, var(--warn) 45%, var(--ink));
+    --check-danger: color-mix(in srgb, var(--danger) 45%, var(--ink));
+  }
+}
+
+.sync-check p { margin: 6px 0; }
+.sync-check .data-status { margin-top: 0; }
+.sync-check .btnrow { margin-top: 10px; }
+
+.sync-gaps,
+.sync-fix {
+  margin: 8px 0;
+  padding-left: 1.2rem;
+}
+
+.sync-gaps li,
+.sync-fix li { margin-bottom: 7px; }
+
+/* The missing entries themselves. They wrap freely — fifteen storage places is
+   exactly the case this has to stay readable for. */
+.sync-missing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.sync-missing .pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  font-size: .78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* The two sync nudges (v129). Amber for "you have one step left to do", red for
+   "a list did not reach this device" — the first is an unfinished action, the
+   second is a fault. Both borrow the wrapping layout from .nudge.backup above. */
+.nudge.sync {
+  background: color-mix(in srgb, var(--warn) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+}
+
+.nudge.sync .nudge-ic { color: var(--warn); }
+.nudge.sync .nudge-body > b { color: var(--warn-txt); }
+
+.nudge.sync.urgent {
+  background: color-mix(in srgb, var(--danger) 12%, var(--card));
+  border: 2px solid color-mix(in srgb, var(--danger) 55%, var(--line));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+.nudge.sync.urgent .nudge-ic { color: var(--danger); }
+/* Measured, not guessed: --danger-txt on this tinted ground came out at 4.48:1 in
+   dark at 16px/700 — under the 4.5 minimum, and 16px bold is not "large text".
+   --check-danger is the same hue mixed one step further toward --ink. */
+.nudge.sync.urgent .nudge-body > b { color: var(--check-danger); }
+.nudge.sync .nudge-acts .btn { white-space: nowrap; }
+
+/* The sub-line is --muted, which on a tinted nudge reads 4.34:1 in light at
+   12.8px. Small text on a warning is the last thing that should be faint. */
+.nudge.sync .nudge-sub { color: color-mix(in srgb, var(--muted) 45%, var(--ink)); }
