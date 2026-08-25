@@ -726,6 +726,12 @@ em {
   margin-left: auto;
 }
 .nudge-save { white-space: nowrap; }
+
+/* Every nudge sub-line, lifted off --muted. Measured on the tinted grounds in the
+   light theme it read 4.34:1 on the urgent backup nudge (under the 4.5 minimum at
+   12.8px) and 4.53:1 on the trip and to-do nudges — passing, but with no margin at
+   phone size. One rule for the whole family, so the greys can't drift apart. */
+.nudge-sub { color: color-mix(in srgb, var(--muted) 45%, var(--ink)); }
 .nudge.backup.urgent .nudge-save {
   border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
   color: var(--danger);
@@ -5897,6 +5903,3 @@ table.grid {
 .nudge.sync.urgent .nudge-body > b { color: var(--check-danger); }
 .nudge.sync .nudge-acts .btn { white-space: nowrap; }
 
-/* The sub-line is --muted, which on a tinted nudge reads 4.34:1 in light at
-   12.8px. Small text on a warning is the last thing that should be faint. */
-.nudge.sync .nudge-sub { color: color-mix(in srgb, var(--muted) 45%, var(--ink)); }
