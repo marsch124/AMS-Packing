@@ -37,7 +37,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v123';
+const APP_VERSION = 'v124';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -5284,6 +5284,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v124', '2026-08-25 · 20:30 UTC', false, 'The repair that actually reaches your iPhone',
+      '<b>v121’s repair did not work.</b> Your iPhone still showed one condition out of six, and two storage places out of seventeen — the two being exactly the ones you had just changed on the Mac. That is the whole diagnosis in one sentence: <b>a row you CHANGE reaches the other device reliably; a row that merely already exists does not.</b> v121 tried to make the iPhone re-download the list from scratch, which depended on how the syncing library keeps its own internal notes. It did not do what its source code led me to believe, and I should not have bet your evening on it. <b>v124 bets on nothing.</b> The device that has the lists simply <b>writes them again</b> — every entry becomes an ordinary change, and ordinary changes are the one thing that has demonstrably worked all along. It happens by itself, once, on each device. And because relying on an automatic thing is what went wrong last time, there is now also a button: <b>Settings → Sync your devices → Re-send my lists to my other devices</b>. Press it on whichever device is <b>right</b>, and it sends its lists again. It only ever <b>adds</b> to the other device — since v121 nothing is deleted just for being absent from the list a device happens to be holding — so it is safe to press whenever something looks short, and safe to press twice.',
+      'Your iPhone gets the lists it should have had, and if anything ever looks short again you can fix it yourself with one button instead of waiting for me.'),
     v('v123', '2026-08-25 · 19:15 UTC', false, 'Typing in an editor can no longer be wiped out from under you',
       '<b>What went wrong.</b> Adding a storage place from inside an item’s editor — pick <b>＋ Add a new place…</b>, type the name, Save — did nothing on the Mac. The place never appeared and the item was left without one. <b>Why.</b> v120 gave three things permission to redraw the screen on their own: the one-time list re-download, the one-time adoption of your old lists, and returning to the app. Each is right to redraw, because the lists genuinely may have changed. What none of them checked was whether <b>you were in the middle of something</b>. Both of the one-time jobs run a few seconds after launch — which is exactly when you were in an item editor typing. The redraw rebuilt the editor and <b>emptied the box you had just typed into</b>, so Save recorded a blank place and, quite correctly, added nothing to the list. Nothing was corrupted; the edit simply never happened. <b>The fix:</b> a background refresh now <b>skips the redraw whenever an editor is open or a field has focus</b>, and picks it up the next time the screen is drawn anyway. It was never urgent — it was only ever tidying. This applies to every editor in the app, not just this one, so no background job can take your typing again.',
       'What you type stays typed. The bug was invisible and looked like the feature was simply broken.'),
@@ -6063,8 +6066,10 @@ async function syncCard() {
       ${st.signedIn
         ? '<button class="btn ghost" data-sync="out">Sign out of this device</button>'
         : '<button class="btn primary" data-sync="in">Sign in to sync</button>'}
+      ${st.signedIn ? '<button class="btn ghost" data-sync="resend">Re-send my lists to my other devices</button>' : ''}
       <button class="btn ghost danger-txt" data-sync="reset">Replace this device with the account copy</button>
     </div>
+    ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Conditions, Trip presets, People, Owners or Storage places look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
     <p class="muted sync-note">Use <b>Replace this device</b> only on a device holding the <em>wrong</em> catalogue — it erases what is on this one and takes the account's copy instead. The device with your real catalogue should <b>sign in</b>, not this.</p>
   </div>`);
   el.addEventListener('click', async (e) => {
@@ -6082,6 +6087,13 @@ async function syncCard() {
         }
         alert('This device has been cleared.\n\nThe app will reload. Sign in and the account copy will download.');
         location.reload();
+        return;
+      }
+      if (act === 'resend') {
+        const r = await db.republishSharedLists();
+        showToast(r.sent
+          ? `Sent ${r.sent} entr${r.sent === 1 ? 'y' : 'ies'} — open the app on your other device to pull them in.`
+          : 'Nothing to send yet — this device has no lists of its own.');
         return;
       }
       if (act === 'in') { await db.signIn(); showToast('Signed in — syncing now.'); }
@@ -8036,6 +8048,12 @@ function watchForUpdate(reg) {
   // empty, and only ever apply changes after that — which is how the iPhone ended
   // up with one condition out of six. Adoption has to run against the real account
   // copy, so it waits for this.
+  // Re-send this device's lists once, so the other device actually receives them.
+  // This is the repair that does not depend on the sync addon's internals — see
+  // `republishSharedLists` in db.js for why the earlier one could not be trusted.
+  db.republishSharedListsOnce()
+    .then((r) => { if (r && r.sent) logDiag('shared-republish', { sent: r.sent }); })
+    .catch((err) => logDiag('shared-republish', err));
   db.repairSharedSync()
     .then(async (r) => {
       if (r && r.repaired && r.after !== r.before) {

@@ -782,6 +782,50 @@ export async function repairSharedSync() {
   }
 }
 
+// Re-send every shared row this device holds, so the other device receives them.
+//
+// 🚨 WHY THIS EXISTS, AND WHY IT IS THE ONE THAT WORKS. `repairSharedSync()` above
+// tries to make the addon redo its first full download of the table. On Martin's
+// iPhone it did not — it left him with one condition out of six even after running.
+// That approach depends on the addon's internal bookkeeping behaving the way its
+// (minified) source reads, which is a bet I lost.
+//
+// This one bets on nothing. The ONE delivery path proven to work all along is the
+// ordinary one: a row CHANGED on one device reliably reaches the other — that is
+// exactly how "Test shelf" and "Test worn out" got through when the other 25 rows
+// did not. So instead of asking for a re-download, the device that HAS the lists
+// simply writes them again. Every row becomes an ordinary change, and ordinary
+// changes arrive.
+//
+// `data.rev` is a timestamp nobody reads (every reader takes named keys out of
+// `data`), there purely so the write is a genuine change rather than a no-op the
+// sync layer might reasonably skip.
+export async function republishSharedLists() {
+  const rows = await getSharedRows();
+  if (!rows.length) return { sent: 0 };
+  const stamped = rows.map((r) => ({ ...r, data: { ...r.data, rev: Date.now() } }));
+  const db = await open();
+  await db.table(SHARED).bulkPut(stamped);
+  return { sent: stamped.length };
+}
+
+// Do that once per device, unprompted, so the repair needs nothing of the user.
+// Safe on every device: a device holding a SHORT list re-sends only what it has,
+// which cannot remove what the other one holds — rows are merged by id, and since
+// v121 nothing is ever deleted by omission.
+const SHARED_REPUBLISH_KEY = 'ams-shared-republish';   // v1
+export async function republishSharedListsOnce() {
+  try { if (localStorage.getItem(SHARED_REPUBLISH_KEY) === '1') return { sent: 0, already: true }; } catch { /* ignore */ }
+  if (!syncEnabled() || !(await isSignedIn())) return { sent: 0, signedOut: true };
+  try {
+    const r = await republishSharedLists();
+    try { localStorage.setItem(SHARED_REPUBLISH_KEY, '1'); } catch { /* ignore */ }
+    return r;
+  } catch (err) {
+    return { sent: 0, error: String((err && err.message) || err) };
+  }
+}
+
 // Move this device's own lists into the account, once.
 //
 // Three guards, each of which has a v118-shaped disaster behind it:
