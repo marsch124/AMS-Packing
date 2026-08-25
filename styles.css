@@ -4156,12 +4156,18 @@ details.care[open] .care-h::before {
   text-overflow: ellipsis;
 }
 
+/* Since v128 a row names EVERY template the item is in ("RV Granden (base),
+   Travel"), so a single clipped line was cutting the storage place off the end.
+   Allow a second line before clipping: rows only grow where there is genuinely
+   more to say, and the common one-template row is unchanged. */
 .ai-sub {
   color: var(--muted);
   font-size: .82rem;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .ai-badge {

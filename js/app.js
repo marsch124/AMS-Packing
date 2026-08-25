@@ -928,6 +928,24 @@ const AI_SORTS = [
   { key: 'section',      label: 'Section',           val: (r) => r.section || '' },
 ];
 
+// ---- Which views may show one item on more than one line (v128) -------------
+// A row on "All items" is one item AS IT SITS IN ONE TEMPLATE, so an item in Bike
+// and Run has two. That is only ever WORTH seeing when the thing you are sorting
+// or grouping by is itself per-template — because everything else a row draws
+// (name, owner, storage, care, photo) belongs to the ITEM and is therefore
+// identical on both lines. Grouped by "Whose it is", two "Sports bra" rows differ
+// only by a template name: noise, not information. So outside these dimensions the
+// rows COLLAPSE to one per item, listing its templates on the sub-line.
+//
+// Only three dimensions genuinely differ between templates:
+//   container — a membership may override the bag for one list
+//   section   — a section belongs to ONE template
+//   template  — self-evidently
+// Keep these two sets in step with AI_GROUPS / AI_SORTS if a per-template
+// dimension is ever added, or that view will silently hide real differences.
+const PER_TEMPLATE_GROUPS = new Set(['container', 'section', 'template']);
+const PER_TEMPLATE_SORTS = new Set(['container', 'section']);
+
 // Grouping choices. `of(row)` names the bucket ('' = not set, always shown last
 // under `empty`); `order` pins the buckets that have a natural running order.
 const AI_GROUPS = [
@@ -4833,12 +4851,43 @@ function allItemsSection(lists) {
   for (const l of lists) for (const it of (l.items || [])) flat.push({ it, list: l, section: sectionName(l, it.section) });
   flat.sort((a, b) => (a.it.name || '').localeCompare(b.it.name || '', undefined, { sensitivity: 'base' }));
 
+  // One item keeps the SAME id in every template it is resolved into, so this is
+  // what makes "how many actual things" answerable at all (`_itemId` covers the
+  // paths that carry the catalog id separately).
+  const itemKey = (r) => r.it._itemId || r.it.id;
+
+  // Every template an item is in, by item — built once from the UNFILTERED set so
+  // a collapsed row tells the whole truth ("Bike, Run") even when a search matched
+  // only one of them.
+  const tplsByItem = new Map();
+  for (const r of flat) {
+    const k = itemKey(r);
+    if (!tplsByItem.has(k)) tplsByItem.set(k, []);
+    const names = tplsByItem.get(k);
+    if (r.list.name && !names.includes(r.list.name)) names.push(r.list.name);
+  }
+
+  // Fold the per-template rows down to one row per item, keeping the first as the
+  // representative. Safe for every non-per-template sort and grouping, because
+  // those read only fields that live on the item itself.
+  const collapseRows = (rows) => {
+    const seen = new Set();
+    const out = [];
+    for (const r of rows) {
+      const k = itemKey(r);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(r);
+    }
+    return out;
+  };
+
   sec.innerHTML = `
     <div class="ai-head">
       <h2>${IC.list}<span>All items</span></h2>
       <button class="btn ghost sm" type="button" data-ai-add>${IC.plus}<span>New item</span></button>
     </div>
-    <p class="ai-hint">Jump to any item to set where it’s stored, add a photo, or plan its maintenance. An item that belongs to <b>several templates</b> gets a line for each — the template’s name is on the line — because what it packs into can differ between them. It is still <b>one item</b>: edit it on any line and every template follows.</p>
+    <p class="ai-hint">Jump to any item to set where it’s stored, add a photo, or plan its maintenance. An item in <b>several templates</b> is shown <b>once</b>, with its templates named on the line. Sort or group by <b>Container</b>, <b>Section</b> or <b>Template</b> and it splits into a line per template instead — those three are the only things that can differ between them. Either way it is <b>one item</b>: edit it anywhere and every template follows.</p>
     <form class="ai-addform hidden" data-ai-form>
       <div class="row2">
         <label class="field"><span>Add to</span>${selectHtml('ai-list', [
@@ -4948,9 +4997,15 @@ function allItemsSection(lists) {
     const q = careItemSearch.trim().toLowerCase();
     const shown = flat.filter((r) => passCats(r) && passCond(r) && passSec(r) && passText(r, q));
     const sd = AI_SORTS.find((s) => s.key === careItemSort.by) || AI_SORTS[0];
-    const byName = (a, b) => (a.it.name || '').localeCompare(b.it.name || '', undefined, { sensitivity: 'base' });
-    const sorted = sortRowsBy(shown, sd.val, { dir: careItemSort.dir, num: !!sd.num, tie: byName });
     const gd = AI_GROUPS.find((g) => g.key === careItemGroup) || AI_GROUPS[0];
+    // Split one item across several lines ONLY where the dimension in play really
+    // is per-template; everywhere else fold it back to one line. See the note on
+    // PER_TEMPLATE_GROUPS. Filter first, THEN collapse, so an item still surfaces
+    // when only one of its memberships matches the search or a section chip.
+    const splitByTemplate = PER_TEMPLATE_GROUPS.has(gd.key) || PER_TEMPLATE_SORTS.has(sd.key);
+    const rows = splitByTemplate ? shown : collapseRows(shown);
+    const byName = (a, b) => (a.it.name || '').localeCompare(b.it.name || '', undefined, { sensitivity: 'base' });
+    const sorted = sortRowsBy(rows, sd.val, { dir: careItemSort.dir, num: !!sd.num, tie: byName });
 
     listEl.innerHTML = '';
     if (!shown.length) {
@@ -4964,17 +5019,21 @@ function allItemsSection(lists) {
     // Bike and Run has two — which reads as a duplicate unless the count says
     // otherwise. Martin reported "several instances of the same item" once before
     // (v108) and his catalogue was clean then too; the wording was what misled him.
-    const distinct = (rs) => new Set(rs.map((r) => r.it._itemId || r.it.id)).size;
+    const distinct = (rs) => new Set(rs.map(itemKey)).size;
     const nAll = distinct(flat);
     const nShown = distinct(sorted);
     const lines = (n) => `${n} line${n === 1 ? '' : 's'}`;
+    // "· N lines" is only honest — and only needed — while an item may occupy more
+    // than one row. Once the rows are collapsed the two numbers are the same, and
+    // printing both was what read as "my catalogue has duplicates in it".
+    const multi = splitByTemplate && sorted.length !== nShown;
     const head = (q || anyFilter())
-      ? `${nShown} of ${nAll} items · ${lines(shown.length)}`
-      : (flat.length === nAll ? `${nAll} items` : `${nAll} items · ${lines(flat.length)}`);
+      ? `${nShown} of ${nAll} items${multi ? ` · ${lines(sorted.length)}` : ''}`
+      : `${nAll} items${multi ? ` · ${lines(sorted.length)}` : ''}`;
 
     if (!gd.key) {
       countEl.textContent = head;
-      for (const row of sorted) listEl.appendChild(aiRow(row.it, row.list));
+      for (const row of sorted) listEl.appendChild(aiRow(row.it, row.list, splitByTemplate ? null : tplsByItem.get(itemKey(row))));
       return;
     }
     const gOrder = typeof gd.order === 'function' ? gd.order() : (gd.order || []);
@@ -4985,7 +5044,7 @@ function allItemsSection(lists) {
       const collapsed = careItemFolds.has(foldKey);
       const box = h(`<div class="group ai-group${collapsed ? ' collapsed' : ''}">${groupHead(b.label, b.rows.length, collapsed)}<div class="group-body"></div></div>`);
       const body = $('.group-body', box);
-      for (const row of b.rows) body.appendChild(aiRow(row.it, row.list));
+      for (const row of b.rows) body.appendChild(aiRow(row.it, row.list, splitByTemplate ? null : tplsByItem.get(itemKey(row))));
       const hd = $('.group-h', box);
       const toggle = () => {
         const nowC = !careItemFolds.has(foldKey);
@@ -5050,13 +5109,23 @@ function allItemsSection(lists) {
   return sec;
 }
 
-function aiRow(it, list) {
+// `tpls` (v128) is every template the item is in. On a collapsed row that is the
+// whole set, so one line can say "Bike, Run" instead of the app showing the item
+// twice; when the rows are deliberately split per template it is just this one.
+// Capped so an item in nine templates cannot push the owner and storage off a
+// phone — the item's editor lists them all.
+function aiRow(it, list, tpls = null) {
   const care = maintenanceStatus(it);
   const nPhotos = (it.photos || []).length;
   const thumb = (nPhotos && it.thumb)
     ? `<span class="ai-thumb"><img src="${esc(it.thumb)}" alt="">${nPhotos > 1 ? `<span class="thumb-count">${nPhotos}</span>` : ''}</span>`
     : `<span class="ai-thumb ph">${IC.wrench}</span>`;
-  const bits = [esc(list.name)];
+  const TPL_CAP = 3;
+  const names = (tpls && tpls.length) ? tpls : [list.name];
+  const tplLabel = names.length > TPL_CAP
+    ? `${names.slice(0, TPL_CAP).map(esc).join(', ')} +${names.length - TPL_CAP}`
+    : names.map(esc).join(', ');
+  const bits = [`<span class="ai-tpl"${names.length > 1 ? ` title="${esc(names.join(' · '))}"` : ''}>${tplLabel}</span>`];
   if (it.ownedBy) bits.push(`${ic('person','xs')}${esc(it.ownedBy)}`);
   if (it.storage) bits.push(`${ic('pin','xs')}${esc(it.storage)}`);
   const unfiledBadge = isUnfiled(it.name) ? `<span class="ai-badge unfiled" title="Not in any template yet — still a loose item">${ic('warn','xs')}</span>` : '';
@@ -5424,7 +5493,7 @@ function howtoCard() {
           <li><b>Shared everywhere (the object itself).</b> Its name, category, <b>weight</b>, <b>photos</b>, where it is <b>stored</b>, its <b>care / maintenance record</b>, <b>owner</b>, condition, and all the purchase details — brand, model, serial, price, warranty, expiry — plus its flags (liquid, restricted, charging, per-night, consumable). Change any of these on <b>any</b> line, in <b>any</b> template, and every other template shows the change at once. This is the <b>① The item itself</b> panel in its editor, and its heading means exactly what it says.</li>
           <li><b>Local to one template (how it is packed there).</b> Its <b>section</b>, its <b>kit</b>, a per-list <b>bag</b> exception, its <b>“When”</b>, its <b>quantity</b> and <b>note</b>, and the <b>conditions</b> that decide whether it comes on a given trip. These genuinely do differ — the same sports bra can go in the duffel for Run and a pannier for Bike — so they are remembered per template. This is the <b>② In this list</b> panel.</li>
         </ul>
-        <p>Which is why the <b>Care → All items</b> list gives an item <b>one line per template</b> it belongs to, with the template's name on the line, and why its header counts both — <b>“431 items · 538 lines”</b>. Two lines saying “Sports bra” are not two sports bras; they are one sports bra shown twice so you can set the Run half and the Bike half. Edit either line and both follow.</p>
+        <p>Which is what decides how <b>Care → All items</b> lists things. An item is shown <b>once</b>, with its templates named on the line — “Sports bra · <em>Bike, Run</em>”. It splits into <b>a line per template</b> only when you sort or group by <b>Container</b>, <b>Section</b> or <b>Template</b>, because those are the only three things that can differ between them, and there the second line is the whole point: it is how you reach the Run half and the Bike half separately. Group by <b>Whose it is</b> or <b>Where it's stored</b> and a second line could only repeat the first, so there isn't one. The count says <b>“431 items”</b>, and mentions lines only in the views that actually have them.</p>
         <p class="hint">A quick way to hold it: <b>an item is a thing you own; a membership is that thing's place in one list.</b> You have one of the first and as many of the second as you have templates it belongs to. Ticking an item into another template adds a link — it never duplicates the item, and it never touches its photos or its care history.</p>
  <p><b>Kits.</b> A <b>kit</b> is a bundle of small things you always pack together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Build your kits under <b>Settings → Kits</b>: give each a name and an emoji, then search your catalogue to pick its members. Once a kit exists you can add it <b>as one unit</b> in two places — from a <b>template</b> (its <b>Add a kit</b> button, so every trip built from that template includes the whole bundle) or straight onto a single <b>trip</b> (the <b>Kit</b> button on the trip’s toolbar). On the Packing List the kit’s items <b>cluster together</b> under a <b>kit header</b> with a <b>Pack all</b> button, so you tick the whole pouch off in one tap. Need to tweak one trip? Open any item on a trip and use its <b>Kit</b> field to add it to, move it between, or clear it from a kit just for that trip. Kits are included in your backups and automatic snapshots. (Deleting a kit only removes the bundle — items you already added to templates or trips stay put.)</p>
         <ul>
@@ -5596,9 +5665,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
-    v('v128', '2026-08-26 · 18:00 UTC', false, 'The guide spells out Template vs Trip preset — and that you only own one of each thing',
-      'Two guide sections, no change to how anything works. <b>(1) Template vs Trip preset</b> — the section added in v125 now says exactly what a preset holds instead of describing it in prose. When you tap <b>Save as preset</b>, <b>eight</b> things are remembered and they are now listed one by one: trip or quick, <b>which activities you ticked</b>, transport, time of year, context, catering, forced weather gear, and laundry. That is the whole list — the trip’s <b>name, dates, destination and packed items are deliberately not saved</b>, because they belong to one particular trip rather than to a kind of trip. A <b>side-by-side table</b> now settles the five questions people actually ask — does it hold items, where does it live, is it still connected after the trip is made, what happens if you change it, what happens if you delete it — and it is spelled out that <b>saving a preset under a name you already used replaces it</b> rather than quietly making a second one. <b>(2) One item, many templates</b> — a brand-new section on something the app has always done but the guide only mentioned in passing, inside the paragraph about bags. Calling a template “a box of things” is the right picture for what it is <em>for</em>, but it can read as though an item in three templates is three copies. It is not. You own <b>one</b> head torch, the app stores <b>one</b> head torch, and each template holds a <b>link</b> to it. The section draws the line plainly: <b>what the thing IS</b> is shared — name, weight, photos, storage, care record, owner, condition, brand, model, serial, price, warranty, and the liquid / restricted / charging flags — so editing it on <b>any</b> line in <b>any</b> template changes it everywhere at once; while <b>how it is packed HERE</b> is local to one template — its section, kit, bag exception, “When”, quantity, note and the conditions that decide whether it comes along. That is also why <b>Care → All items</b> gives an item one line per template and counts “431 items · 538 lines”: two lines reading “Sports bra” are one sports bra shown twice, not two.',
-      'The two things most easily misread — what a preset actually saves, and whether an item in several templates is several items — are now written down in full.'),
+    v('v128', '2026-08-26 · 18:00 UTC', false, 'An item shows once on All items — and the guide explains why it ever showed twice',
+      '<b>The duplicate lines are gone.</b> On <b>Care → All items</b>, an item in several templates was drawn <b>once per template</b> — “Sports bra” twice, marked Bike and Run. Nothing was ever duplicated in your data, but the screen made it look that way, and you have now said so three times (v108, v121 and again today). v121 fixed the <em>counter</em> to read “431 items · 538 lines”; that explained the extra lines rather than removing the ones that should never have been there. Now an item appears <b>once</b>, with its templates named on the line — <b>“Bike, Run”</b> — and the count simply says <b>“431 items”</b>.<br><br>The second line was not <em>always</em> pointless, so it has been kept exactly where it earns its place. <b>Only three things about an item can differ between templates</b>: which <b>bag</b> it goes in (a template may override it), its <b>section</b> (a section belongs to one template), and the <b>template</b> itself. Sort or group by any of those three and the item still splits into a line per template — that is how you reach the Run half and the Bike half separately, and the count says how many lines. Group by <b>Whose it is</b>, <b>Where it’s stored</b>, <b>Item condition</b>, <b>Category</b>, <b>Care status</b>, <b>Manufacturer</b> or <b>First letter</b> and you get one line each, because those belong to the <em>object</em> — a second line could only ever repeat the first, word for word but the template name. That was the whole problem: you were grouping by <b>Whose it is</b>, where the two rows were identical. An item in more than three templates shows the first three and a <b>+2</b>; the full list is in its editor. <b>Nothing about your data changed</b>, and editing an item on any line still updates it everywhere.<br><br>Two guide sections went in alongside it. <b>(1) Template vs Trip preset</b> — the section added in v125 now says exactly what a preset holds instead of describing it in prose. When you tap <b>Save as preset</b>, <b>eight</b> things are remembered and they are now listed one by one: trip or quick, <b>which activities you ticked</b>, transport, time of year, context, catering, forced weather gear, and laundry. That is the whole list — the trip’s <b>name, dates, destination and packed items are deliberately not saved</b>, because they belong to one particular trip rather than to a kind of trip. A <b>side-by-side table</b> now settles the five questions people actually ask — does it hold items, where does it live, is it still connected after the trip is made, what happens if you change it, what happens if you delete it — and it is spelled out that <b>saving a preset under a name you already used replaces it</b> rather than quietly making a second one. <b>(2) One item, many templates</b> — a brand-new section on something the app has always done but the guide only mentioned in passing, inside the paragraph about bags. Calling a template “a box of things” is the right picture for what it is <em>for</em>, but it can read as though an item in three templates is three copies. It is not. You own <b>one</b> head torch, the app stores <b>one</b> head torch, and each template holds a <b>link</b> to it. The section draws the line plainly: <b>what the thing IS</b> is shared — name, weight, photos, storage, care record, owner, condition, brand, model, serial, price, warranty, and the liquid / restricted / charging flags — so editing it on <b>any</b> line in <b>any</b> template changes it everywhere at once; while <b>how it is packed HERE</b> is local to one template — its section, kit, bag exception, “When”, quantity, note and the conditions that decide whether it comes along. That is also why <b>Care → All items</b> gives an item one line per template and counts “431 items · 538 lines”: two lines reading “Sports bra” are one sports bra shown twice, not two.',
+      'All items stops looking like it holds duplicates, while keeping the split line-per-template exactly where it tells you something.'),
     v('v127', '2026-08-26 · 16:30 UTC', false, 'Activities move up the trip form, and lose the word “Extra”',
       'Following on from v126’s reshuffle: <b>Activities to pack for</b> now sits <b>directly under List type</b>, instead of at the very bottom past transport, season, weather, catering and laundry. Those two questions belong together — <b>List type</b> and <b>the activities you tick</b> are what the trip is <em>for</em>, and everything below them (how you travel, what time of year, the weather, the catering) is detail about the <em>conditions</em>. In practice it means the two things you always change are both at the top, and the settings you often leave alone have moved out of the way. It is also just called <b>Activities to pack for</b> now, in both modes. It used to rename itself to <b>“Extra</b> activities to pack for” whenever you were building a full trip — a heading that changes under you is harder to read than one that stays put, and the line underneath already explains the point far better: <em>“Your common base and transport kit are already in — tick only the extra activities you’ll do.”</em> The trip-setup card on a trip now uses the same wording, so the two agree. <b>Nothing about what gets packed has changed</b> — same picker, same templates, same list.',
       'The two questions you actually answer on every trip are now the first two on the form.'),
