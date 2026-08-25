@@ -2910,7 +2910,8 @@ a.rd-stat.rd-link::after {
   color: var(--ink);
 }
 
-.howto-body ul {
+.howto-body ul,
+.howto-body ol {
   margin: 6px 0;
   padding-left: 20px;
   display: grid;
@@ -2924,6 +2925,50 @@ a.rd-stat.rd-link::after {
 
 .howto-body b {
   font-weight: 600;
+}
+
+/* The Template-vs-Trip-preset side-by-side in the guide (v128). Cells are kept
+   to short phrases so the three columns still fit a phone; the wrapper scrolls
+   on its own rather than pushing the whole guide sideways. */
+.vs-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 10px 0;
+}
+
+.vs-table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 296px;
+  font-size: .82rem;
+  line-height: 1.35;
+}
+
+.vs-table th,
+.vs-table td {
+  border: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.vs-table thead th {
+  background: var(--chip);
+  color: var(--chip-ink);
+  font-weight: 600;
+}
+
+/* The empty corner cell is a spacer, not a heading — no fill, no rules. */
+.vs-table thead th:first-child {
+  background: transparent;
+  border-top-color: transparent;
+  border-left-color: transparent;
+}
+
+.vs-table tbody th {
+  width: 30%;
+  font-weight: 600;
+  color: var(--muted);
 }
 
 /* version history */

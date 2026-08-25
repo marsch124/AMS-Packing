@@ -38,7 +38,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v127';
+const APP_VERSION = 'v128';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -5380,19 +5380,52 @@ function howtoCard() {
         <h3>Template vs Trip preset — what each one actually is</h3>
         <p>They sound alike and they are not alike at all. The one-line version: <b>a Template holds your gear; a Trip preset holds your answers.</b></p>
         <ul>
-          <li><b>A Template is a box of things.</b> “Diving”, “Run”, “Travel”, “Golf” — each holds actual <b>items</b>, with their quantities, sections, bags and when-to-pack. Templates are what the app is <em>made of</em>; they live in the <b>Templates</b> tab and you edit them over the years as your kit changes.</li>
-          <li><b>A Trip preset is a filled-in form.</b> It contains <b>no items whatsoever</b>. It remembers the answers you gave on the <b>Home</b> builder: full trip or quick activity, which transport, which season, catering, the WET options, any forced weather gear, laundry on or off, and <b>which activities you ticked</b> — which is to say, which templates get combined. It lives in <b>Settings → Trip presets</b>.</li>
+          <li><b>A Template is a box of things.</b> “Diving”, “Run”, “Travel”, “Golf” — each holds actual <b>items</b>, and each item carries its own detail: quantity, section, which bag it goes in, when to pack it, whether it is a liquid or needs charging. Templates are what the app is <em>made of</em>; they live in the <b>Templates</b> tab and you edit them over the years as your kit changes. Strictly speaking the box holds a <b>link</b> to each item rather than a copy of it — see <em>One item, many templates</em> just below.</li>
+          <li><b>A Trip preset is a filled-in form.</b> It contains <b>no items whatsoever</b> — there is nowhere in a preset to put one. What it remembers is the answers you gave on the <b>Home</b> builder. It lives in <b>Settings → Trip presets</b>.</li>
         </ul>
+        <p>When you tap <b>Save as preset</b>, exactly <b>eight</b> things are remembered:</p>
+        <ol>
+          <li>Full trip or quick activity</li>
+          <li><b>Which activities you ticked</b> — which is to say, which templates get combined</li>
+          <li>Transport</li>
+          <li>Time of year</li>
+          <li>Context</li>
+          <li>Catering</li>
+          <li>Any <b>forced weather gear</b> (the WET options you switched on)</li>
+          <li>Laundry on or off</li>
+        </ol>
+        <p>And that is the whole list. The trip's <b>name, dates, destination and everything you had packed are deliberately not saved</b> — those belong to one particular trip, not to a kind of trip.</p>
         <p>So they work at different moments. A preset is <b>spent the instant you press Create Event</b> — it fills the form, the form builds the trip, and the trip has no further connection to the preset. Templates keep working after that: the trip's Packing List <em>is</em> your templates merged, and <b>Save &amp; regenerate</b> on a trip rebuilds it from them again.</p>
+        <div class="vs-wrap"><table class="vs-table">
+          <thead><tr><th></th><th>Template</th><th>Trip preset</th></tr></thead>
+          <tbody>
+            <tr><th>Holds items</th><td>Yes — that is the point</td><td><b>None, ever</b></td></tr>
+            <tr><th>Lives in</th><td>Templates tab</td><td>Settings → Trip presets</td></tr>
+            <tr><th>Still connected after the trip is made</th><td>Yes — regenerate pulls from it</td><td>No — the link ends at Create Event</td></tr>
+            <tr><th>Change it</th><td>Every future trip changes</td><td>Nothing changes, anywhere</td></tr>
+            <tr><th>Delete it</th><td>The gear list itself is gone</td><td>Only a shortcut is gone</td></tr>
+          </tbody>
+        </table></div>
         <p>Which explains everything that follows from it:</p>
         <ul>
           <li><b>Add a new head torch</b> to your Diving template and every future dive trip has it. Put it in a preset — you can't; a preset has nowhere to put an item.</li>
           <li><b>Change a preset</b> (or delete it) and <b>nothing anywhere changes</b> — not one existing trip, not one item. You have only changed a shortcut. <b>Delete a template</b> and you have thrown away the gear list itself.</li>
-          <li>A preset points at activities <b>by name</b>. Rename or empty a template and the preset still ticks that box — it just brings in whatever that template holds <em>now</em>.</li>
+          <li>A preset points at activities <b>by name</b>. Rename or empty a template and the preset still ticks that box — it just brings in whatever that template holds <em>now</em>. So a preset can never go stale in the sense of holding old gear: it has no gear to be old.</li>
+          <li><b>Saving a preset under a name you already used replaces it</b> rather than quietly making a second one — the app matches on the name, and asks first.</li>
           <li>You can happily have <b>none</b> of either: no presets at all (fill the form each time), or a trip built from a single template.</li>
         </ul>
         <p><b>A worked example.</b> You have templates called <b>Travel</b>, <b>Diving</b> and <b>Swim</b> — three boxes of gear. You take a Red Sea dive week most winters, so once you've set a trip up the way you like it (transport Plane, season Winter, Diving + Swim ticked, catering half-board, laundry on) you tap <b>Save as preset</b> and call it “Dive week”. Next winter you tap <b>Dive week</b> on Home, type the name and the dates, and press Create Event. The preset supplied the <em>answers</em>; the three <b>templates</b> supplied every single <em>item</em> on the list that comes out.</p>
         <p class="hint">Rule of thumb: if you're thinking about <b>a thing you own</b>, you want a Template. If you're thinking about <b>a kind of trip you take</b>, you want a Trip preset. Both travel between your devices, and both are in your backups.</p>
+
+        <h3>One item, many templates — there is only ever <em>one</em> of it</h3>
+        <p>Calling a template “a box of things” is the right picture for what it is <em>for</em>, but it can mislead in one way, so it is worth being exact. An item that belongs to several templates is <b>not several copies</b>. You own <b>one</b> head torch, so the app stores <b>one</b> head torch, and each template holds a <b>link</b> to it. There is no second copy anywhere to drift out of step.</p>
+        <p>What that means in practice is a clean split — <b>what the thing IS</b> is shared, <b>how it is packed HERE</b> is local:</p>
+        <ul>
+          <li><b>Shared everywhere (the object itself).</b> Its name, category, <b>weight</b>, <b>photos</b>, where it is <b>stored</b>, its <b>care / maintenance record</b>, <b>owner</b>, condition, and all the purchase details — brand, model, serial, price, warranty, expiry — plus its flags (liquid, restricted, charging, per-night, consumable). Change any of these on <b>any</b> line, in <b>any</b> template, and every other template shows the change at once. This is the <b>① The item itself</b> panel in its editor, and its heading means exactly what it says.</li>
+          <li><b>Local to one template (how it is packed there).</b> Its <b>section</b>, its <b>kit</b>, a per-list <b>bag</b> exception, its <b>“When”</b>, its <b>quantity</b> and <b>note</b>, and the <b>conditions</b> that decide whether it comes on a given trip. These genuinely do differ — the same sports bra can go in the duffel for Run and a pannier for Bike — so they are remembered per template. This is the <b>② In this list</b> panel.</li>
+        </ul>
+        <p>Which is why the <b>Care → All items</b> list gives an item <b>one line per template</b> it belongs to, with the template's name on the line, and why its header counts both — <b>“431 items · 538 lines”</b>. Two lines saying “Sports bra” are not two sports bras; they are one sports bra shown twice so you can set the Run half and the Bike half. Edit either line and both follow.</p>
+        <p class="hint">A quick way to hold it: <b>an item is a thing you own; a membership is that thing's place in one list.</b> You have one of the first and as many of the second as you have templates it belongs to. Ticking an item into another template adds a link — it never duplicates the item, and it never touches its photos or its care history.</p>
  <p><b>Kits.</b> A <b>kit</b> is a bundle of small things you always pack together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Build your kits under <b>Settings → Kits</b>: give each a name and an emoji, then search your catalogue to pick its members. Once a kit exists you can add it <b>as one unit</b> in two places — from a <b>template</b> (its <b>Add a kit</b> button, so every trip built from that template includes the whole bundle) or straight onto a single <b>trip</b> (the <b>Kit</b> button on the trip’s toolbar). On the Packing List the kit’s items <b>cluster together</b> under a <b>kit header</b> with a <b>Pack all</b> button, so you tick the whole pouch off in one tap. Need to tweak one trip? Open any item on a trip and use its <b>Kit</b> field to add it to, move it between, or clear it from a kit just for that trip. Kits are included in your backups and automatic snapshots. (Deleting a kit only removes the bundle — items you already added to templates or trips stay put.)</p>
         <ul>
           <li><b>Name, trip dates, destination</b> (the dates and the destination are both optional). <b>Trip dates is one dropdown for the whole trip.</b> Tap it and a calendar opens showing <b>two months side by side</b> (stacked on a phone); tap the day you <b>leave</b>, then the day you <b>come back</b>, and it closes itself. The days in between fill in as you go — on the Mac the range even previews under the mouse — so you can see how long the trip is before you commit. Tapping a day <em>earlier</em> than the start simply begins the range again there, and tapping the <b>same day twice</b> gives you a <b>day trip</b> (0 nights). <b>Clear</b> empties both ends; <b>Today</b> brings the calendar back to this month. You never count nights yourself — the app does it and shows the total live, both in the field and under it.</li>
@@ -5563,6 +5596,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v128', '2026-08-26 · 18:00 UTC', false, 'The guide spells out Template vs Trip preset — and that you only own one of each thing',
+      'Two guide sections, no change to how anything works. <b>(1) Template vs Trip preset</b> — the section added in v125 now says exactly what a preset holds instead of describing it in prose. When you tap <b>Save as preset</b>, <b>eight</b> things are remembered and they are now listed one by one: trip or quick, <b>which activities you ticked</b>, transport, time of year, context, catering, forced weather gear, and laundry. That is the whole list — the trip’s <b>name, dates, destination and packed items are deliberately not saved</b>, because they belong to one particular trip rather than to a kind of trip. A <b>side-by-side table</b> now settles the five questions people actually ask — does it hold items, where does it live, is it still connected after the trip is made, what happens if you change it, what happens if you delete it — and it is spelled out that <b>saving a preset under a name you already used replaces it</b> rather than quietly making a second one. <b>(2) One item, many templates</b> — a brand-new section on something the app has always done but the guide only mentioned in passing, inside the paragraph about bags. Calling a template “a box of things” is the right picture for what it is <em>for</em>, but it can read as though an item in three templates is three copies. It is not. You own <b>one</b> head torch, the app stores <b>one</b> head torch, and each template holds a <b>link</b> to it. The section draws the line plainly: <b>what the thing IS</b> is shared — name, weight, photos, storage, care record, owner, condition, brand, model, serial, price, warranty, and the liquid / restricted / charging flags — so editing it on <b>any</b> line in <b>any</b> template changes it everywhere at once; while <b>how it is packed HERE</b> is local to one template — its section, kit, bag exception, “When”, quantity, note and the conditions that decide whether it comes along. That is also why <b>Care → All items</b> gives an item one line per template and counts “431 items · 538 lines”: two lines reading “Sports bra” are one sports bra shown twice, not two.',
+      'The two things most easily misread — what a preset actually saves, and whether an item in several templates is several items — are now written down in full.'),
     v('v127', '2026-08-26 · 16:30 UTC', false, 'Activities move up the trip form, and lose the word “Extra”',
       'Following on from v126’s reshuffle: <b>Activities to pack for</b> now sits <b>directly under List type</b>, instead of at the very bottom past transport, season, weather, catering and laundry. Those two questions belong together — <b>List type</b> and <b>the activities you tick</b> are what the trip is <em>for</em>, and everything below them (how you travel, what time of year, the weather, the catering) is detail about the <em>conditions</em>. In practice it means the two things you always change are both at the top, and the settings you often leave alone have moved out of the way. It is also just called <b>Activities to pack for</b> now, in both modes. It used to rename itself to <b>“Extra</b> activities to pack for” whenever you were building a full trip — a heading that changes under you is harder to read than one that stays put, and the line underneath already explains the point far better: <em>“Your common base and transport kit are already in — tick only the extra activities you’ll do.”</em> The trip-setup card on a trip now uses the same wording, so the two agree. <b>Nothing about what gets packed has changed</b> — same picker, same templates, same list.',
       'The two questions you actually answer on every trip are now the first two on the form.'),
