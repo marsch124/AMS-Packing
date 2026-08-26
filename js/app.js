@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v138';
+const APP_VERSION = 'v139';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1240,6 +1240,7 @@ const IC = {
   camera: svgIcon('<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.2"/>'),
   cal: svgIcon('<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M8 3.5v3M16 3.5v3"/>'),
   search: svgIcon('<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/>'),
+  filter: svgIcon('<path d="M3.6 5.2h16.8l-6.4 7.6v6.4l-4 1.8v-8.2Z"/>'),
   globe: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.8 3 2.8 15 0 18M12 3c-2.8 3-2.8 15 0 18"/>'),
   star: svgSolid('<path d="M12 3.5l2.6 5.27 5.82.85-4.21 4.1.99 5.79L12 16.77 6.8 19.5l.99-5.79-4.21-4.1 5.82-.85Z"/>'),
 
@@ -5099,7 +5100,8 @@ const careSecFilter = new Set();   // active Section chips (section NAMES; '' = 
 let careItemSort = loadAiSort();   // { by, dir } for the All-items index — remembered on this device
 let careItemGroup = loadAiGroup(); // '' = flat, else an AI_GROUPS key — remembered too
 const careItemFolds = new Set();   // collapsed grouping buckets, keyed `${groupKey}|${bucketKey}`
-const careChipsOpen = new Set();   // filter rows showing all their chips rather than the first few ('cond' / 'sec')
+let careFilterOpen = false;        // is the All-items filter panel unfolded? (the filters themselves stay on when it's shut)
+let careHintOpen = false;          // is the All-items "?" explanation showing? Read-once material, so it starts shut every visit
 const monthOf = (ymd) => ymd.slice(0, 7);
 
 async function renderMaintenance() {
@@ -5252,7 +5254,6 @@ function allItemsSection(lists) {
       <h2>${IC.list}<span>All items</span></h2>
       <button class="btn ghost sm" type="button" data-ai-add>${IC.plus}<span>New item</span></button>
     </div>
-    <p class="ai-hint">Jump to any item to set where it’s stored, add a photo, or plan its maintenance. An item in <b>several templates</b> is shown <b>once</b>, with its templates named on the line. Sort or group by <b>Where — the bag</b>, <b>When</b>, <b>Section</b> or <b>Template</b> and it splits into a line per template instead — those four are the only things that can differ between them. Either way it is <b>one item</b>: edit it anywhere and every template follows.</p>
     <form class="ai-addform hidden" data-ai-form>
       <div class="row2">
         <label class="field"><span>Add to</span>${selectHtml('ai-list', [
@@ -5267,9 +5268,8 @@ function allItemsSection(lists) {
       </div>
     </form>
     <label class="ai-searchbox">${IC.search}<input type="search" class="ai-search" placeholder="Search all items…" value="${esc(careItemSearch)}" autocomplete="off"></label>
-    <div class="ai-filterbar"></div>
-    <div class="ai-filtergroups"></div>
     <div class="ai-arrange">
+      <button type="button" class="ai-filterbtn" aria-expanded="false">${IC.filter}<span class="ai-fbtxt">Filter</span></button>
       <label class="ai-arr"><span>Sort</span>
         <select class="ai-sortsel">${AI_SORTS.map((s) => `<option value="${s.key}"${s.key === careItemSort.by ? ' selected' : ''}>${esc(s.label)}</option>`).join('')}</select>
       </label>
@@ -5278,14 +5278,21 @@ function allItemsSection(lists) {
         <select class="ai-groupsel">${AI_GROUPS.map((g) => `<option value="${g.key}"${g.key === careItemGroup ? ' selected' : ''}>${esc(g.label)}</option>`).join('')}</select>
       </label>
     </div>
-    <div class="ai-count"></div>
+    <div class="ai-filterpanel" hidden></div>
+    <div class="ai-countrow">
+      <div class="ai-count"></div>
+      <button type="button" class="ai-why" aria-expanded="false" aria-label="What this list is showing you">?</button>
+    </div>
+    <p class="ai-hint ai-whytext" hidden>Jump to any item to set where it’s stored, add a photo, or plan its maintenance. An item in <b>several templates</b> is shown <b>once</b>, with its templates named on the line. Sort or group by <b>Where — the bag</b>, <b>When</b>, <b>Section</b> or <b>Template</b> and it splits into a line per template instead — those four are the only things that can differ between them. Either way it is <b>one item</b>: edit it anywhere and every template follows.</p>
     <div class="ai-list"></div>`;
 
   const listEl = $('.ai-list', sec);
   const countEl = $('.ai-count', sec);
+  const whyBtn = $('.ai-why', sec);
+  const whyText = $('.ai-whytext', sec);
   const searchEl = $('.ai-search', sec);
-  const filterEl = $('.ai-filterbar', sec);
-  const groupsEl = $('.ai-filtergroups', sec);
+  const filterBtn = $('.ai-filterbtn', sec);
+  const panelEl = $('.ai-filterpanel', sec);
   const sortSel = $('.ai-sortsel', sec);
   const dirBtn = $('.ai-sortdir', sec);
   const groupSel = $('.ai-groupsel', sec);
@@ -5303,23 +5310,62 @@ function allItemsSection(lists) {
   const passSec = (row) => !careSecFilter.size || careSecFilter.has(row.section || '');
   const anyFilter = () => careItemFilter.size || careCondFilter.size || careSecFilter.size;
 
-  // Chip counts are honest: each group is counted against the rows that already
-  // pass the OTHER groups and the search, so a count says how many you'd get.
-  // Long rows (a section chip per section name) are capped so the filters can't
-  // push the list itself off the screen on a phone; the rest are one tap away.
-  const CHIP_CAP = 10;
-  const chipRow = (title, defs, active, attr, rowKey) => {
-    const live = defs.filter((d) => d.n || active.has(d.value));
-    const open = careChipsOpen.has(rowKey);
-    const capped = !open && live.length > CHIP_CAP;
-    const shown = capped ? live.filter((d, i) => i < CHIP_CAP - 1 || active.has(d.value)) : live;
-    const chips = shown
-      .map((d) => `<button class="fchip${active.has(d.value) ? ' on' : ''}" type="button" ${attr}="${esc(d.value)}">${d.icon ? ic(d.icon, 'sm') : ''}${esc(d.label)} <em>${d.n}</em></button>`).join('');
-    const more = capped
-      ? `<button class="fchip more" type="button" data-more="${rowKey}">+${live.length - shown.length} more</button>`
-      : (open && live.length > CHIP_CAP ? `<button class="fchip more" type="button" data-more="${rowKey}">Fewer</button>` : '');
-    return chips ? `<div class="ai-fgroup"><span class="ai-flabel">${esc(title)}</span><div class="ai-fchips">${chips}${more}</div></div>` : '';
+  // ---- The filter panel ---------------------------------------------------
+  // All three groups used to sit open above the list: eight flag chips, five
+  // condition chips, then a chip per section — twenty of them, wrapping over
+  // four rows behind a "+10 more". Six rows of controls before the first item,
+  // on a screen whose job is to show you items. They now live behind ONE
+  // button, which carries the whole state while shut: `Filter · 2`, lit up, with
+  // the active names in its hover text. Nothing about how the filters COMBINE
+  // changes — chips within a group are still OR'd, the groups still AND'ed.
+  const CONDITION_LABELS = new Map(ITEM_CONDITIONS.map((c) => [c.id, c.label]));
+  const activeLabels = () => [
+    ...[...careItemFilter].map((k) => (ITEM_FILTER_CATS.find((x) => x.key === k) || {}).label).filter(Boolean),
+    ...[...careCondFilter].map((k) => CONDITION_LABELS.get(k) || 'Not rated'),
+    ...[...careSecFilter].map((k) => k || 'No section'),
+  ];
+  const paintFilterBtn = () => {
+    const labs = activeLabels();
+    filterBtn.classList.toggle('on', labs.length > 0);
+    $('.ai-fbtxt', filterBtn).textContent = labs.length ? `Filter · ${labs.length}` : 'Filter';
+    filterBtn.title = labs.length
+      ? `Showing only: ${labs.join(', ')} — tap to change`
+      : 'Narrow the index by flag, condition or section';
   };
+  const paintPanel = () => {
+    panelEl.hidden = !careFilterOpen;
+    filterBtn.setAttribute('aria-expanded', String(careFilterOpen));
+  };
+
+  // ---- The "?" ------------------------------------------------------------
+  // What this index is and why one item can occupy several lines is genuinely
+  // worth knowing — and worth knowing ONCE. As a standing four-line paragraph it
+  // was the tallest thing above the list, charging every later visit for a
+  // sentence already read. It now hangs off a "?" beside the count, where the
+  // question it answers is actually asked: "why does it say 431 items?"
+  const paintHint = () => {
+    whyText.hidden = !careHintOpen;
+    whyBtn.classList.toggle('on', careHintOpen);
+    whyBtn.setAttribute('aria-expanded', String(careHintOpen));
+    whyBtn.title = careHintOpen ? 'Hide this' : 'What is this list?';
+  };
+  paintHint();
+
+  // Counts are honest: each group is counted against the rows that already pass
+  // the OTHER groups and the search, so a count says how many you'd get.
+  const chipsHTML = (defs, active, attr) => defs.filter((d) => d.n || active.has(d.value))
+    .map((d) => `<button class="fchip${active.has(d.value) ? ' on' : ''}" type="button" ${attr}="${esc(d.value)}" aria-pressed="${active.has(d.value)}">${d.icon ? ic(d.icon, 'sm') : ''}${esc(d.label)} <em>${d.n}</em></button>`).join('');
+  const fgroup = (title, inner) => inner ? `<div class="ai-fgroup"><span class="ai-flabel">${esc(title)}</span>${inner}</div>` : '';
+  // Sections are a LIST, not a wall of chips. There is one per section name and
+  // they are ordinary words of unpredictable length, so as chips they wrapped
+  // into an unreadable thicket; down a column they read like the list they are,
+  // with the counts in a straight line. The column scrolls rather than growing.
+  const secListHTML = (defs, active) => defs.filter((d) => d.n || active.has(d.value))
+    .map((d) => `<button class="ai-secrow${active.has(d.value) ? ' on' : ''}" type="button" data-sec="${esc(d.value)}" aria-pressed="${active.has(d.value)}">
+        <span class="ai-secbox" aria-hidden="true">${IC.check}</span>
+        <span class="ai-secname">${esc(d.label)}</span>
+        <span class="ai-secn">${d.n}</span>
+      </button>`).join('');
 
   const drawChips = () => {
     const q = careItemSearch.trim().toLowerCase();
@@ -5327,20 +5373,35 @@ function allItemsSection(lists) {
     const catPool = flat.filter((r) => passText(r, q) && passCond(r) && passSec(r));
     const condPool = flat.filter((r) => passText(r, q) && passCats(r) && passSec(r));
     const secPool = flat.filter((r) => passText(r, q) && passCats(r) && passCond(r));
-    // If a Condition/Section filter has narrowed things so far that no category
-    // chip is left, keep a bare "Show all" so there's always a way back out.
-    filterEl.innerHTML = itemFilterChipsHTML(catPool.map((r) => r.it), careItemFilter, false, anyFilter())
-      || (anyFilter() ? '<button class="fchip clear" type="button" data-cat="__clear">Show all</button>' : '');
+    // `false` for the last argument on purpose: the shared chip builder would add
+    // its own "Show all", and the panel already has one "Clear all" in its header
+    // that empties all three groups rather than only the flags it sits above.
+    const catHTML = itemFilterChipsHTML(catPool.map((r) => r.it), careItemFilter, false, false);
 
     const condDefs = [...ITEM_CONDITIONS.map((c) => ({ value: c.id, label: c.label })), { value: '', label: 'Not rated' }]
       .map((d) => ({ ...d, icon: 'sparkle', n: condPool.filter((r) => (r.it.condition || '') === d.value).length }));
     const secNames = [...new Set(flat.map((r) => r.section).filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
     const secDefs = [...secNames.map((s) => ({ value: s, label: s })), { value: '', label: 'No section' }]
-      .map((d) => ({ ...d, icon: 'folder', n: secPool.filter((r) => (r.section || '') === d.value).length }));
+      .map((d) => ({ ...d, n: secPool.filter((r) => (r.section || '') === d.value).length }));
     // Only offer a group when it actually splits the collection in two or more.
     const useful = (defs) => defs.filter((d) => d.n).length > 1;
-    groupsEl.innerHTML = (useful(condDefs) ? chipRow('Item condition', condDefs, careCondFilter, 'data-cond', 'cond') : '')
-      + (useful(secDefs) ? chipRow('Section', secDefs, careSecFilter, 'data-sec', 'sec') : '');
+
+    // Rebuilt whole on every tap so the counts stay live — so the section column's
+    // scroll position has to be carried across, or ticking the twentieth section
+    // would throw you back to the first.
+    const keepScroll = $('.ai-seclist', panelEl)?.scrollTop || 0;
+    panelEl.innerHTML = `
+      <div class="ai-fp-head">
+        <span class="ai-fp-title">Filter</span>
+        ${anyFilter() ? '<button type="button" class="fchip clear" data-cat="__clear">Clear all</button>' : ''}
+        <button type="button" class="iconbtn sm" data-fp-close aria-label="Close the filters">${IC.close}</button>
+      </div>
+      ${fgroup('Flags', catHTML ? `<div class="ai-fchips">${catHTML}</div>` : '')}
+      ${useful(condDefs) ? fgroup('Item condition', `<div class="ai-fchips">${chipsHTML(condDefs, careCondFilter, 'data-cond')}</div>`) : ''}
+      ${useful(secDefs) ? fgroup('Section', `<div class="ai-seclist">${secListHTML(secDefs, careSecFilter)}</div>`) : ''}`;
+    const secList = $('.ai-seclist', panelEl);
+    if (secList) secList.scrollTop = keepScroll;
+    paintFilterBtn();
   };
 
   // ---- Sorting & grouping -------------------------------------------------
@@ -5437,27 +5498,31 @@ function allItemsSection(lists) {
   };
   const redraw = () => { drawChips(); drawItems(); };
   redraw();
+  paintPanel();
 
   searchEl.addEventListener('input', () => { careItemSearch = searchEl.value; redraw(); });
   const toggleIn = (set, key) => { if (set.has(key)) set.delete(key); else set.add(key); };
-  filterEl.addEventListener('click', (e) => {
-    const key = e.target.closest('[data-cat]')?.dataset.cat;
-    if (key === undefined) return;
-    // "Show all" clears every group, not just the chips it sits among.
-    if (key === '__clear') { careItemFilter.clear(); careCondFilter.clear(); careSecFilter.clear(); }
-    else toggleIn(careItemFilter, key);
-    redraw();
+  const closePanel = () => { careFilterOpen = false; paintPanel(); filterBtn.focus(); };
+  filterBtn.addEventListener('click', () => {
+    careFilterOpen = !careFilterOpen;
+    paintPanel();
+    if (careFilterOpen) panelEl.scrollIntoView({ block: 'nearest' });
   });
-  groupsEl.addEventListener('click', (e) => {
-    const more = e.target.closest('[data-more]');
-    if (more) { toggleIn(careChipsOpen, more.dataset.more); drawChips(); return; }
+  panelEl.addEventListener('click', (e) => {
+    if (e.target.closest('[data-fp-close]')) { closePanel(); return; }
+    const cat = e.target.closest('[data-cat]');
     const cond = e.target.closest('[data-cond]');
     const sect = e.target.closest('[data-sec]');
-    if (cond) toggleIn(careCondFilter, cond.dataset.cond);
+    // "Clear all" empties all three groups, not just the flags it sits above.
+    if (cat && cat.dataset.cat === '__clear') { careItemFilter.clear(); careCondFilter.clear(); careSecFilter.clear(); }
+    else if (cat) toggleIn(careItemFilter, cat.dataset.cat);
+    else if (cond) toggleIn(careCondFilter, cond.dataset.cond);
     else if (sect) toggleIn(careSecFilter, sect.dataset.sec);
     else return;
     redraw();
   });
+  sec.addEventListener('keydown', (e) => { if (e.key === 'Escape' && careFilterOpen) closePanel(); });
+  whyBtn.addEventListener('click', () => { careHintOpen = !careHintOpen; paintHint(); });
   sortSel.addEventListener('change', () => { careItemSort = { ...careItemSort, by: sortSel.value }; saveAiSort(careItemSort); drawItems(); });
   dirBtn.addEventListener('click', () => {
     careItemSort = { ...careItemSort, dir: careItemSort.dir === 'desc' ? 'asc' : 'desc' };
@@ -5711,7 +5776,7 @@ function howtoCard() {
           <li><b>OE — Other Events:</b> small nice things (a coffee, a winter bath, a walk).</li>
         </ul>
         <p><b>Covers.</b> Each template shows as a <b>cover card</b> in the grid — a coloured tile with an emoji — so you can pick out Golf, Diving or Travel by look alone. Every template gets a distinct colour automatically; to choose your own, open a template and tap the <b>Cover</b> button in its toolbar, then set an <b>emoji</b> and a <b>colour</b> (or leave the colour on <b>Auto</b>). A live preview shows the card before you save. It’s purely visual — it doesn’t change what the template holds.</p>
- <p>Open a template to add or edit its items. (Items imported from your original Swedish lists still carry that wording underneath — it is <b>no longer shown</b> anywhere, since it only repeated what the English name already said, but it is kept, and <b>search still finds an item by it</b>.) At the top of a template’s item list sit <b>quick-filter chips</b> — <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index for filtering across every template at once.</p>
+ <p>Open a template to add or edit its items. (Items imported from your original Swedish lists still carry that wording underneath — it is <b>no longer shown</b> anywhere, since it only repeated what the English name already said, but it is kept, and <b>search still finds an item by it</b>.) At the top of a template’s item list sit <b>quick-filter chips</b> — <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index — behind its <b>Filter</b> button — for filtering across every template at once.</p>
         <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. When you <b>add an item to another template</b>, its section comes along <b>by name</b> — if that template has a section called the same thing the item lands in it, otherwise it arrives under <b>Ungrouped</b> for you to file (it never creates a section in a list you’ve arranged yourself). Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
 
         <h3>Which bag an item goes in</h3>
@@ -5953,11 +6018,14 @@ function howtoCard() {
           <li><b>Calendar</b> — a month view with each scheduled service on its due date, colour-coded by urgency and dotted with a count; tap a day to see (and tick off) what's due. Overdue items are flagged above the grid.</li>
         </ul>
  <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>reminder</b> also shows on the <b>Home</b> screen.</p>
- <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>No template</b> (loose items), <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> and <b>Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
+ <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
  <p><b>Reading a row.</b> Under each name sits the template it's in, then — when they're filled in — the <b>Owner</b> behind a <b>luggage tag</b>, the <b>packer</b> behind a <b>person</b>, and where it's stored behind a <b>pin</b>. The tag and the person are deliberately different marks: both are somebody's name, and while they shared one glyph a row could show “Martin” directly under a heading saying nobody had been assigned, which read as the screen contradicting itself. Hover either one and it says which it is.</p>
  <p><b>When a grouping finds only one group</b> — every item having the same answer, as they do for <b>Who packs it</b> until you've assigned some — the app doesn't draw a heading round the lot. It says so in the count line instead (<em>431 items · all “Anyone — not assigned”</em>) and lists the items plainly, rather than spending three rows and a fold arrow on a group that is the whole list.</p>
- <p>Below the category chips sit two more filter rows, <b>Item condition</b> and <b>Section</b>, which appear whenever they’d actually split the collection. The rule is worth knowing: chips <b>in the same row</b> mean “either of these”, and the <b>rows combine</b> — so <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn, not liquids plus worn things. Each chip’s number is what you’d get if you tapped it, counted against the filters already on, and <b>Show all</b> clears every row at once. (One item that lives in three templates is three rows here — that’s why a section, which belongs to a template, can be filtered at all.)</p>
- <p><b>Sort</b> reorders the whole index — <b>Alphabetically</b>, <b>When</b>, <b>Where — the bag</b>, <b>Where it’s stored</b>, <b>Weight</b>, <b>Manufacturer</b>, <b>Acquired</b>, <b>Warranty until</b> or <b>Section</b> — and <b>▲/▼</b> flips the direction. Anything with that field left blank <b>always sinks to the bottom</b>, whichever direction you choose, so “Manufacturer, Z–A” shows you makers rather than three hundred blanks. <b>When</b> sorts down the <em>timeline</em>, not the alphabet, so Preparations comes before the front door. <b>Group</b> then breaks the list into headed, <b>collapsible</b> sections — by <b>When</b>, <b>Where — the bag</b>, <b>Where it’s stored</b>, <b>Section</b>, <b>Manufacturer</b>, <b>Item condition</b>, <b>Template</b>, <b>Category</b>, <b>Whose it is</b>, <b>Who packs it</b>, <b>Care status</b> or <b>First letter</b> — each showing how many it holds, with your sort still applying inside each one and the “not set” bucket always last. Tap a group’s header to fold it away. Sort and grouping are <b>remembered on this device</b>; the filter chips deliberately are not, so the index always opens showing everything.</p>
+ <p><b>Everything that narrows the index lives behind the <b>Filter</b> button</b>, under the search box. Tap it and a panel opens with three groups. <b>Flags</b> — <b>No template</b> (loose items), <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b>, <b>Not in use</b>. <b>Item condition</b>. And <b>Section</b>, which is a <b>scrolling list</b> of your section names with a tick box and a count each, rather than a chip apiece — there can easily be twenty of them. The last two appear only when they’d actually split the collection.</p>
+ <p>The rule is worth knowing: choices <b>within a group</b> mean “either of these”, and the <b>groups combine</b> — so <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn, not liquids plus worn things. Each number is what you’d get if you tapped it, counted against the filters already on, and <b>Clear all</b>, at the top of the panel, empties all three groups at once. (One item that lives in three templates is three rows here — that’s why a section, which belongs to a template, can be filtered at all.)</p>
+ <p><b>The button says what is on while the panel is shut.</b> With nothing filtered it reads <b>Filter</b>; turn something on and it lights up and counts — <b>Filter · 2</b> — and hovering it names them (<em>“Showing only: Liquids, Bathroom cabinet”</em>). Close the panel with its <b>×</b>, by tapping <b>Filter</b> again, or with <b>Escape</b>; your filters stay on either way, since closing the panel only puts the controls away.</p>
+ <p>The small <b>?</b> beside the item count explains what the index is and why one item can occupy several lines. It starts shut on every visit — it is a reminder rather than a setting — and tapping it drops the explanation in above the first item.</p>
+ <p><b>Sort</b> reorders the whole index — <b>Alphabetically</b>, <b>When</b>, <b>Where — the bag</b>, <b>Where it’s stored</b>, <b>Weight</b>, <b>Manufacturer</b>, <b>Acquired</b>, <b>Warranty until</b> or <b>Section</b> — and <b>▲/▼</b> flips the direction. Anything with that field left blank <b>always sinks to the bottom</b>, whichever direction you choose, so “Manufacturer, Z–A” shows you makers rather than three hundred blanks. <b>When</b> sorts down the <em>timeline</em>, not the alphabet, so Preparations comes before the front door. <b>Group</b> then breaks the list into headed, <b>collapsible</b> sections — by <b>When</b>, <b>Where — the bag</b>, <b>Where it’s stored</b>, <b>Section</b>, <b>Manufacturer</b>, <b>Item condition</b>, <b>Template</b>, <b>Category</b>, <b>Whose it is</b>, <b>Who packs it</b>, <b>Care status</b> or <b>First letter</b> — each showing how many it holds, with your sort still applying inside each one and the “not set” bucket always last. Tap a group’s header to fold it away. Sort and grouping are <b>remembered on this device</b>; the filters deliberately are not, so the index always opens showing everything.</p>
  <p><b>Three of these words mean the same here as they do on a trip.</b> A packing list groups by <b>When / Where / Category</b>, and so does this index — <b>Where — the bag</b> is the container an item goes in, which is exactly what a trip's <b>Where</b> means. It sits deliberately next to <b>Where it’s stored</b>, the other, quite different <em>where</em>: not the bag it travels in, but the cupboard you fetch it from.</p>
  <p><b>Who packs it</b> groups the catalogue by the person whose job each thing is — group by it, fold everyone else's heading shut, and what is left on screen is your share of the packing, before any trip exists. See <b>Who packs what</b> below.</p>
 
@@ -6061,6 +6129,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v139', '2026-08-27 · 23:30 UTC', false, 'One Filter button and a “?” instead of ten rows of chrome — All items gives the screen back to your things',
+      '<b>You said the <b>Care → All items</b> index “looks visually unstructured”, and the measurement bore it out: before the first item there were roughly <b>ten rows of controls</b>.</b> Six of those rows were filter chips. Eight flag chips on one line. Five condition chips on the next. Then <b>Section</b> — one chip per section name, <b>twenty of them</b>, wrapping over four rows and still ending in a <b>“+10 more”</b> because even four rows could not hold them all. On the phone you scrolled past all of it, every time, to reach a list of items you had not asked to filter.<br><br><b>The chips are all still there. They are behind one button now.</b> Under the search box sits a single <b>Filter</b> button, and beside it — <b>on the same line</b>, where they used to have a row of their own — <b>Sort</b>, the <b>▲/▼</b> direction flip and <b>Group</b>. Six rows became one.<br><br><b>The button tells you what is on without being opened.</b> With nothing filtered it reads plainly <b>Filter</b>. Turn something on and it <b>lights up</b> and counts: <b>Filter · 2</b>. Hover or long-press it and it names them — <em>“Showing only: Liquids, Bathroom cabinet”</em>. That matters more than it sounds: the old chip rows were the only way to see what was narrowing the list, so folding them away without this would have meant a list quietly showing you a third of your things with nothing on screen saying why. The count line underneath still says <b>“12 of 431 items”</b> as well, so there are two independent answers to “why am I not seeing everything?”.<br><br><b>Sections are a list now, not a wall.</b> Inside the panel, <b>Flags</b> and <b>Item condition</b> stay as chips — they are short, fixed sets of familiar words. <b>Section</b> does not: those are your own names, of unpredictable length, and twenty of them as chips wrapped into something you had to read as a puzzle rather than a list. They are now <b>a proper list down a column</b>, one name per line with its count in a straight edge on the right and a tick box on the left, in a box that <b>scrolls</b> instead of growing. Twenty sections take up the same space as five, and the <b>“+10 more”</b> button is gone entirely — nothing is hidden any more, so there is nothing to expand.<br><br><b>Nothing about how the filters work has changed.</b> Chips <b>within</b> a group still mean “either of these”; the groups still <b>combine</b> — <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn. Every count is still what you would actually get if you tapped it, worked out against the filters already on. <b>Clear all</b>, at the top of the panel, still empties all three groups at once. Filters are still deliberately <b>not</b> remembered between visits, so the index always opens showing everything, while <b>Sort</b> and <b>Group</b> still are.<br><br>Close the panel with its <b>×</b>, by tapping <b>Filter</b> again, or with <b>Escape</b>. Your filters stay on either way — shutting the panel puts the controls away, it does not undo anything.<br><br><b>And the four-line paragraph at the top is now a “?”.</b> With the chips folded away it had become the tallest thing above the list — an explanation of what the index is, how an item in three templates is shown once, and which four choices split it into a line per template. That is <b>worth knowing, and worth knowing once</b>; standing there permanently, it charged you four lines of a phone screen on every visit for a sentence you read months ago. It is now a small <b>?</b> beside the item count, which is exactly where the question it answers gets asked — <em>“why does it say 431 items?”</em> — and the same words drop in underneath when you tap it. Nothing was cut. It opens shut every time you come back, because it is a reminder, not a setting.<br><br><b>Ten rows of chrome are now three</b>: the search box, the one line of controls, and the count. Everything below the fold is your things.<br><br><b>One more thing fell out of building this: “Show all” has been standing there permanently, all over the app.</b> Every filter bar — a template’s item list, the <b>Sort out</b> row on a trip’s packing list, the Settings overview — is written to <b>hide</b> its dashed <b>Show all</b> button until you have actually filtered something, since there is nothing to clear before then. None of it was working. The instruction to hide it was being <b>overruled by the chips’ own styling</b>, so the button appeared the moment the row did, offering to undo a filter you had not applied. It is one rule, in one place, and it now behaves everywhere: <b>Show all</b> turns up when there is something to show all of, and not before.',
+      'The screen whose job is to show you your things now spends three rows on chrome instead of ten — and when something is hidden, the button says so and says what.'),
     v('v138', '2026-08-27 · 22:15 UTC', false, 'All items stops contradicting itself — Owner gets its own mark, and an empty grouping steps aside',
       '<b>Two things on the <b>Care → All items</b> index that were actively misleading rather than merely untidy.</b><br><br><b>(1) The screen appeared to argue with itself.</b> Group the index by <b>Who packs it</b> today and you get one heading — <b>“Anyone — not assigned”</b> — over all 431 things, while every row underneath shows a little <b>person</b> and a name: <em>Martin</em>, <em>Anna</em>. Heading says nobody; rows say somebody. Both were right, and that was the trouble: the name on the row is the <b>Owner</b>, and the heading is about the <b>Packer</b> — the app’s two most easily confused fields, sharing one glyph, three centimetres apart. <b>Owner now wears a luggage tag</b> and only the packer keeps the person; hover either and it says which it is. And because the row never mentioned the packer at all, it now does — so a row can <em>confirm</em> the heading instead of appearing to deny it.<br><br><b>(2) A grouping that groups nothing now gets out of the way.</b> Because none of your things had a packer yet, grouping by it produced exactly <b>one</b> group containing everything — and the app still drew the full apparatus: a line reading “1 group by Who packs it”, a heading, a divider, and a fold arrow that would have collapsed your entire catalogue in one tap. All to tell you something every row already shared. When a grouping comes out as a single bucket the rows are now drawn <b>plainly</b>, and the one fact it actually established — <b>431 items · all “Anyone — not assigned”</b> — is stated once, in the count line, where it takes a few words instead of three rows.<br><br>Neither change touches what the index <em>does</em>: same items, same sorting, same grouping choices, same filters. This is only the screen no longer saying two contradictory things at once, and no longer building scaffolding around a group of one.',
       'The index stops giving you two answers to “whose is this?” and stops spending three rows to say nothing — so what is left on screen is your things.'),

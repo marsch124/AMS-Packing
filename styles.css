@@ -1299,6 +1299,16 @@ legend {
   font-weight: 600;
 }
 
+/* Every filter bar in the app marks its "Show all" chip hidden while nothing is
+   filtered — some in the markup, some by setting `.hidden` in script — and none of
+   it worked: `display: inline-flex` above is an author rule, so it beat the
+   browser's own `[hidden] { display: none }`, and the chip sat there permanently
+   offering to clear a filter you had not applied. Same clash, same fix as
+   `.btn[hidden]` further down. */
+.fchip[hidden] {
+  display: none;
+}
+
 .ev-summary {
   margin: 4px 0 6px;
 }
@@ -3923,6 +3933,12 @@ details.care[open] .care-h::before {
   gap: 10px;
 }
 
+/* The explanatory paragraph that used to sit here supplied the gap under the
+   heading; it now lives behind the "?" beside the count, so the gap is stated. */
+.allitems .ai-head {
+  margin-bottom: 12px;
+}
+
 .ai-head h2 {
   display: flex;
   align-items: center;
@@ -4024,49 +4040,62 @@ details.care[open] .care-h::before {
   outline: none;
 }
 
-.ai-filterbar,
 .item-filterbar {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-}
-
-.ai-filterbar {
-  margin: 10px 0 0;
-}
-
-.item-filterbar {
   margin: 2px 2px 12px;
 }
 
-.ai-filterbar:empty,
 .item-filterbar:empty {
   margin: 0;
 }
 
-/* The Condition / Section filter groups under the category chips. Each is a
-   labelled row of chips: OR within the row, AND between the rows. */
-.ai-filtergroups {
+/* ---- The All-items filter panel -------------------------------------------
+   Flags, Item condition and Section used to sit open above the list: six rows
+   of chips (twenty of them for Section alone) before the first item. They now
+   fold behind one Filter button, which carries the state while shut. Each group
+   is a stack — its label above its controls — because in a panel this narrow a
+   label in a fixed left column leaves too little room for the chips. */
+.ai-filterpanel {
+  display: grid;
+  gap: 12px;
+  margin: 10px 0 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+/* The author-sheet `display: grid` above would otherwise beat the browser's own
+   rule for the `hidden` attribute, and the panel could never be shut. (The same
+   clash on the chips inside it is handled once, up at `.fchip[hidden]`.) */
+.ai-filterpanel[hidden] {
+  display: none;
+}
+
+.ai-fp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-fp-title {
+  flex: 1;
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.ai-fgroup {
   display: grid;
   gap: 6px;
 }
 
-.ai-filtergroups:not(:empty) {
-  margin-top: 8px;
-}
-
-.ai-fgroup {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .ai-flabel {
-  flex: none;
-  min-width: 4.6rem;
-  padding-top: 6px;
   color: var(--muted);
   font-size: .78rem;
   font-weight: 800;
@@ -4078,21 +4107,117 @@ details.care[open] .care-h::before {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  flex: 1 1 12rem;
 }
 
-.fchip.more {
-  border-style: dashed;
+/* Section names are ordinary words of unpredictable length, so as chips they
+   wrapped into a thicket. Down a column they read as the list they are — and
+   the column scrolls instead of pushing the items off the screen. */
+.ai-seclist {
+  display: grid;
+  gap: 2px;
+  max-height: 15rem;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.ai-secrow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: .88rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ai-secrow:hover {
+  background: var(--line-2);
+}
+
+.ai-secbox {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: transparent;
+}
+
+.ai-secbox .ic {
+  width: 13px;
+  height: 13px;
+}
+
+.ai-secrow.on .ai-secbox {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+
+.ai-secname {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-secn {
+  flex: none;
   color: var(--muted);
+  font-size: .78rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Sort & group controls for the item index. */
+/* Filter, sort & group controls for the item index — one line, in that order. */
 .ai-arrange {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px 10px;
   margin: 10px 2px 0;
+}
+
+/* `margin-right: auto` keeps Sort/Group to the right on a wide screen, and lets
+   them drop to their own line on a narrow one rather than squeezing. */
+.ai-filterbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: .85rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ai-filterbtn .ic {
+  width: 16px;
+  height: 16px;
+}
+
+.ai-filterbtn.on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
 }
 
 .ai-arr {
@@ -4128,7 +4253,57 @@ details.care[open] .care-h::before {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .03em;
+}
+
+/* The count line and the "?" that explains it, on one row. The explanation used
+   to be a standing four-line paragraph at the top of the section — the tallest
+   thing above the list, and read-once material. It hangs off the count instead,
+   which is where the question it answers ("why does it say 431 items?") is
+   actually asked. */
+.ai-countrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin: 10px 2px 6px;
+}
+
+.ai-why {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  font: inherit;
+  font-size: .74rem;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ai-why.on {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-ink);
+}
+
+/* `.ai-hint` sets no `display`, so the browser's own rule for the `hidden`
+   attribute works — but say it out loud, since the panel above needed exactly
+   this spelling out and the next person will wonder. */
+.ai-hint[hidden] {
+  display: none;
+}
+
+/* Revealed by the "?", the paragraph sits between the count and the first item,
+   indented to read as an aside rather than as part of the list. */
+.ai-whytext {
+  margin: 0 2px 12px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
 }
 
 /* Grouped item index: reuses the packing list's group header, a little tighter. */
