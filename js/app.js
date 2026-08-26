@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v136';
+const APP_VERSION = 'v137';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -3710,6 +3710,21 @@ function savePackByPacker(on) {
   try { localStorage.setItem(PACK_BYPACKER_KEY, on ? '1' : '0'); } catch { /* ignore */ }
 }
 
+// "Group by place" — the same phase, gathered by WHERE THINGS LIVE rather than by
+// the bag they are going into. The two answer different moments: the bag is where a
+// thing is GOING, the place is where you have to WALK to fetch it. Grouped by place
+// you visit the bathroom cabinet once and take all seventy-two things that live
+// there, instead of seven times because they are spread across seven bags.
+// A tick still means PACKED throughout — this only rearranges the same rows.
+// Remembered on the device, like the packer grouping and the person filter.
+const PACK_BYPLACE_KEY = 'ams.pack.byplace';
+function loadPackByPlace() {
+  try { return localStorage.getItem(PACK_BYPLACE_KEY) === '1'; } catch { return false; }
+}
+function savePackByPlace(on) {
+  try { localStorage.setItem(PACK_BYPLACE_KEY, on ? '1' : '0'); } catch { /* ignore */ }
+}
+
 // The person filter is remembered on the device for the same reason: mostly you
 // pack your own share, so opening on "Everyone" and re-tapping your own name is a
 // toll charged on the common case, every trip, for ever. Stored as the chip's own
@@ -3742,14 +3757,18 @@ async function renderPackMode(eventId) {
     // Open at the first phase that still has unpacked items.
     const steps = packSteps(ev.entries);
     const firstUnpacked = steps.findIndex((s) => s.remaining > 0);
-    packState = { eventId, idx: firstUnpacked < 0 ? 0 : firstUnpacked, showPacked: false, editId: null, byPacker: loadPackByPacker() };
+    packState = { eventId, idx: firstUnpacked < 0 ? 0 : firstUnpacked, showPacked: false, editId: null };
   }
-  // Reopen on whoever you were last packing as, if they're on this trip. Done on
-  // EVERY entry, not just a new one: `personFilter` is shared with the packing list
-  // screen, which clears it whenever you visit — so closing Packing Mode to glance at
-  // the list and tapping Start packing again, the commonest way back in, would
-  // otherwise drop you back on Everyone. Storage is the one source of truth here, and
-  // the chips write to it, so this can never overwrite a choice you just made.
+  // The three "how am I looking at this" preferences are re-read on EVERY entry, not
+  // just on a new trip. `personFilter` has to be: it is shared with the packing list
+  // screen, which clears it whenever you visit, so closing Packing Mode to glance at
+  // the list and tapping Start packing again — the commonest way back in — would
+  // otherwise drop you back on Everyone. The two groupings don't strictly need it,
+  // but they are the same kind of thing and reading them the same way keeps them from
+  // drifting apart. Safe in every case: the chips write to storage the moment you tap
+  // them, so re-reading can only ever hand back the choice you just made.
+  packState.byPacker = loadPackByPacker();
+  packState.byPlace = loadPackByPlace();
   personFilter = packPersonFor(ev);
 
   const wrap = h('<section class="screen pack"></section>');
@@ -3795,11 +3814,23 @@ async function renderPackMode(eventId) {
     // one block, and hidden entirely while a person filter is on (you are already
     // looking at exactly one person, so every heading would say the same name).
     const bucketsIfGrouped = tripPeople.length + (unassigned ? 1 : 0);
-    if (bucketsIfGrouped > 1 && !personFilter) {
+    const offerPacker = bucketsIfGrouped > 1 && !personFilter;
+    // "Group by place" stands on its own condition: it needs storage places on the
+    // trip, and nothing to do with who is packing. A trip whose items have no place
+    // recorded would group into one "No place set" heap, so it isn't offered.
+    const offerPlace = tripHasStorage(ev);
+    if (offerPacker || offerPlace) {
       const gb = h(`<div class="filterbar pack-groupbar">
-        <button class="fchip${packState.byPacker ? ' on' : ''}" type="button" data-bypacker>${ic('person', 'sm')}Group by packer</button>
+        ${offerPlace ? `<button class="fchip${packState.byPlace ? ' on' : ''}" type="button" data-byplace>${ic('pin', 'sm')}Group by place</button>` : ''}
+        ${offerPacker ? `<button class="fchip${packState.byPacker ? ' on' : ''}" type="button" data-bypacker>${ic('person', 'sm')}Group by packer</button>` : ''}
       </div>`);
       gb.addEventListener('click', (e) => {
+        if (e.target.closest('[data-byplace]')) {
+          packState.byPlace = !packState.byPlace;
+          savePackByPlace(packState.byPlace);
+          draw();
+          return;
+        }
         if (!e.target.closest('[data-bypacker]')) return;
         packState.byPacker = !packState.byPacker;
         savePackByPacker(packState.byPacker);
@@ -3831,9 +3862,13 @@ async function renderPackMode(eventId) {
     body.appendChild(stepper);
     if (step.phase.hint) body.appendChild(h(`<p class="pack-hint">${esc(step.phase.hint)}</p>`));
 
-    // Items in this phase, grouped by container — and, when asked for, by packer
-    // WITHIN each container; hide packed unless toggled.
+    // Items in this phase, gathered by bag (or, when asked for, by the place they
+    // live) — and, when asked for, by packer WITHIN each of those; hide packed
+    // unless toggled.
     const listEl = h('<div class="pack-list"></div>');
+    // A remembered "by place" only holds while the trip actually has places on it,
+    // so a trip that has none falls back to bags rather than one big "No place set".
+    const byPlace = packState.byPlace && offerPlace;
     const grouping = packState.byPacker && bucketsIfGrouped > 1 && !personFilter;
     // Whether the screen has ALREADY said whose these are, in which case the rows
     // leave the name off. Two ways that happens: a packer heading three lines up, or
@@ -3841,22 +3876,30 @@ async function renderPackMode(eventId) {
     // "Martin" only crowd out the bag and the cupboard beside it.
     const packerSaid = grouping || !!personFilter;
     let shown = 0;
-    for (const cg of groupByContainer(step.entries)) {
+    // One shape for both groupings, so everything below is written once. A bag group
+    // with no bag gets no heading (as it always has); a place group always has one,
+    // since "No place set" is itself worth saying.
+    const groups = byPlace
+      ? groupBy('stored', step.entries)
+      : groupByContainer(step.entries).map((g) => ({ label: g.container || '', entries: g.entries }));
+    for (const cg of groups) {
       // A row you're editing stays put even once you tick it, so the editor can't
       // vanish out from under you.
       const items = cg.entries.filter((e) => packState.showPacked || !e.checked || packState.editId === e.id);
       if (!items.length) continue;
-      if (cg.container) listEl.appendChild(h(`<div class="sub">${groupIcon(cg.container) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(cg.container)}</span>` : ''}${esc(cg.container)}</div>`));
-      // The heading above just named the bag, so the rows under it don't repeat it.
-      const containerSaid = !!cg.container;
+      // Places get a pin so a "where I fetch it from" heading never reads as a bag.
+      const gicon = byPlace ? ic('pin', 'sm') : (groupIcon(cg.label) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(cg.label)}</span>` : '');
+      if (cg.label) listEl.appendChild(h(`<div class="sub">${gicon}${esc(cg.label)}</div>`));
+      // Whichever dimension the heading above just named, the rows don't repeat.
+      const saidBy = cg.label ? (byPlace ? 'stored' : 'container') : '';
       if (!grouping) {
-        for (const entry of items) { listEl.appendChild(packRow(ev, entry, draw, packerSaid, containerSaid)); shown++; }
+        for (const entry of items) { listEl.appendChild(packRow(ev, entry, draw, packerSaid, saidBy)); shown++; }
         continue;
       }
-      // Roster order, so your own block sits in the same place bag after bag.
+      // Roster order, so your own block sits in the same place group after group.
       const blocks = groupByPacker(items, loadPeople().map((p) => p.name));
       for (const pg of blocks) {
-        // One block in this bag means nobody is sharing it — the heading would only
+        // One block here means nobody is sharing it — the heading would only
         // repeat what the rows already say, so it is left off.
         if (blocks.length > 1) {
           listEl.appendChild(h(`<div class="sub packer-sub">${pg.packer
@@ -3864,7 +3907,7 @@ async function renderPackMode(eventId) {
             : '<span class="person-dot none"></span>Anyone — not assigned'}<em>${pg.entries.length}</em></div>`));
         }
         // A lone block means no heading was drawn, so those rows still name their packer.
-        for (const entry of pg.entries) { listEl.appendChild(packRow(ev, entry, draw, blocks.length > 1, containerSaid)); shown++; }
+        for (const entry of pg.entries) { listEl.appendChild(packRow(ev, entry, draw, blocks.length > 1, saidBy)); shown++; }
       }
     }
     if (step.remaining === 0) listEl.appendChild(h(`<div class="pack-phase-done">${IC.check}<span>${esc(step.phase.label)} — all packed</span></div>`));
@@ -3898,19 +3941,22 @@ async function renderPackMode(eventId) {
 // quick editor the packing list uses, right here in place.
 // `packerSaid` means the screen has already established whose this is — a packer
 // heading just above, or a person filter naming one person — so the row leaves the
-// name off. `containerSaid` is the same rule for the bag: Packing Mode always
-// gathers a phase BY container and writes that name in the heading above, so
-// repeating it on every row underneath says nothing and costs the most.
-// This is the rule entryRow has always followed — drop whatever dimension the
-// current grouping is by.
-function packRow(ev, entry, redraw, packerSaid = false, containerSaid = false) {
+// name off. `saidBy` is the same rule for the grouping: Packing Mode gathers a phase
+// either by bag ('container') or by where things live ('stored'), and writes that in
+// the heading above, so the row drops whichever one that was. '' means no heading was
+// drawn and the row still carries both.
+// This is the rule entryRow has always followed — show the dimensions NOT used as the
+// current grouping. It matters most here because the meta line is a single nowrap
+// line that ellipsises: a word already printed three lines up pushes the one you
+// still need off the end of the screen.
+function packRow(ev, entry, redraw, packerSaid = false, saidBy = '') {
   // Built as HTML rather than plain text because the packer carries a colour dot.
   // It goes FIRST: the meta line is a single nowrap line that ellipsises, and whose
   // job a thing is should never be the part that gets cut off.
   const meta = [
     !packerSaid && entry.packer ? personChipHTML(entry.packer) : '',
-    entry.storage ? esc(entry.storage) : '',
-    !containerSaid && entry.container ? esc(entry.container) : '',
+    saidBy !== 'stored' && entry.storage ? esc(entry.storage) : '',
+    saidBy !== 'container' && entry.container ? esc(entry.container) : '',
     entry.note ? esc(entry.note) : '',
   ].filter(Boolean).join(' · ');
   const editing = packState.editId === entry.id;
@@ -5910,6 +5956,7 @@ function howtoCard() {
 
         <h3>Packing Mode</h3>
  <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List. Within a phase, things are gathered <b>by bag</b>, under a heading naming that bag — so the rows beneath it don't repeat it, and their small grey line is left for what the heading hasn't already told you: whose it is, the cupboard to fetch it from, and any note.</p>
+ <p><b>Fetching, not just stowing — <b>Group by place</b>.</b> Packing is really two jobs: walking round the house <b>collecting</b> things, and standing at a bag <b>putting them in</b>. Grouping by bag serves the second. Tap <b>Group by place</b> — beside <b>Group by packer</b> — and the same phase re-gathers by <b>where each thing lives</b> (the item's <b>Where it's stored</b>), so your headings become <b>Bathroom cabinet</b>, <b>Bedroom wardrobe</b>, <b>Basement / cellar</b>. Everything that lives in one place is together whatever bag it's headed for, so you visit each cupboard <b>once</b>. The rows then name <b>the bag</b> instead of the place, since the heading has just given you the place — the same “never repeat what the screen already said” rule, pointed the other way. <b>A tick still means packed</b>: this only rearranges the rows, it doesn't add a separate “fetched” step. It's offered only when the trip's things actually have places recorded, it's <b>remembered on this device</b>, and it combines with <b>Group by packer</b> so each cupboard can still split into your things and hers.</p>
  <p><b>Packing with someone — two ways to see whose is whose.</b> Every row shows its <b>packer</b> at the head of its grey line, name and colour dot, so you never have to guess or open anything. Then pick the approach that suits the moment. <b>Filter</b> — tap your own name in the chip row at the top and everything else disappears; you step through your share alone, phase by phase. <b>Or group</b> — tap <b>Group by packer</b> and everything stays on screen, but each bag splits into a short block per person, in the order your <b>Packers</b> list is in, with the still-unassigned pile last and a count on each heading. Grouping is the better one when you are packing the same suitcase together: you work down your block, she works down hers, and nothing is out of sight. (The rows drop whatever the screen has already said — the bag, because the heading above names it; the packer, when you are under a packer heading or filtered to one person.) Both controls appear only once the trip actually has more than one person's worth of things to divide, and <b>both are remembered on this device</b>: whichever name you last packed as, Packing Mode opens on it again next time — on every trip, not just that one — and <b>Group by packer</b> stays on once you turn it on. If the person you last packed as has nothing on the trip you have just opened, it quietly falls back to <b>Everyone</b> rather than showing you an empty screen. To see everything again, tap <b>Everyone</b> (or tap your own name a second time), and that is what it will remember from then on.</p>
  <p><b>Fixing something mid-pack.</b> Tapping the row itself always means “packed” — that's the whole point of this screen — so editing has its own small <b>pen</b> at the right-hand end of each row. Tap it and the quick editor opens in place: quantity, which bag, when, section, kit, who packs it, weight, the flags and a note. <b>Save</b> and you're back in Packing Mode at the same phase, right where you were. Need more than that? The editor's <b>Edit the full item</b> button opens the item's full editor (conditions, templates, storage &amp; care, photos) — and saving <em>there</em> also brings you straight back here, so a detour never costs you your place. A row you're editing stays on screen even if you tick it.</p>
 
@@ -5993,6 +6040,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v137', '2026-08-27 · 21:00 UTC', false, 'Pack by where things LIVE, not just by the bag they’re going into',
+      '<b>Packing Mode has only ever answered one of the two questions you ask while packing.</b> It gathers each phase <b>by bag</b> — everything for the toiletry bag, everything for the suitcase — which is the right answer when you are standing at an open bag deciding what goes in it. But that is the <em>second</em> half of packing. The first half is <b>walking round the house fetching things</b>, and for that the bag is the wrong sort: your toiletry bag’s contents are scattered across the bathroom cabinet, the chest of drawers and the basement, so a bag-shaped list sends you up and down the stairs all evening.<br><br><b>The new <b>Group by place</b> toggle</b> sits beside <b>Group by packer</b> and re-gathers the same phase by <b>where each thing lives</b> — the field you already fill in as <b>Where it’s stored</b>. Turn it on and you get <b>Bathroom cabinet</b>, <b>Bedroom wardrobe</b>, <b>Basement / cellar</b> as your headings, each with everything that lives there, whatever bag it is destined for. You visit each place <b>once</b>, take everything you need from it, and it is done.<br><br>Your catalogue is unusually well set up for this: <b>421 of your 440 things</b> already have a place recorded, and they sit in just <b>nine</b> of them — so the groups come out a sensible size rather than a hundred headings of one item each.<br><br><b>A tick still means packed.</b> Nothing about what the screen <em>does</em> changes, only how it is arranged — the same rows, the same one-tap slab, the same counters and phases. That is deliberate: you fetch a thing and put it straight into its bag in one movement, so there is no half-done state to record, and inventing one would have made the simple thing complicated.<br><br><b>And the rows tell you what the heading cannot.</b> Grouped by place, each row now names <b>the bag it is going into</b> — because the heading has already told you the cupboard. Grouped by bag it is the other way round, exactly as before. That is the same rule the packing list has always followed, and the same one v136 applied to the bag: <b>never repeat what the screen has just said</b>, so that single grey line is always spent on something you did not already know.<br><br>The toggle appears only when the trip’s things actually have places recorded, is ignored on a trip that has none (rather than herding everything under one “No place set” heading), and is <b>remembered on this device</b> like the others — turn it on once and every trip opens ready to be fetched. It combines with <b>Group by packer</b>, so each cupboard can still split into your things and hers.',
+      'The walking-round-the-house half of packing finally has a list shaped for it — one trip to each cupboard instead of one trip per bag.'),
     v('v136', '2026-08-27 · 19:30 UTC', false, 'Packing Mode stops repeating the bag, and remembers whose share you pack',
       '<b>Two small things that were quietly costing you a tap and a line of screen every time you packed.</b><br><br><b>(1) Every row was repeating the bag it was in.</b> Packing Mode gathers a phase <b>by bag</b> and writes that bag in a heading above the group — and then every single row underneath said it again. Under <b>Toiletry bag</b>, thirty rows each ended “· Toiletry bag”. It was not merely redundant: that small grey line under an item’s name is a <b>single line that trims with an ellipsis</b>, so on the phone the repetition was <b>pushing the useful half off the end</b> — you got “Bathroom cabinet · Toiletr…” where the cupboard you actually have to walk to was fighting for room with a word already printed three lines up. The row now leaves the bag to the heading, and the line is free for what the heading has <em>not</em> told you: whose it is, where it is stored, and your note. This is the rule the packing list has always followed — <b>never repeat the thing you are currently grouped by</b> — and Packing Mode was the one screen not following it. v134 applied it to the packer; this finishes the job.<br><br><b>(2) It opens on whoever you last packed as.</b> Packing Mode always started on <b>Everyone</b>, by design — and since you mostly pack your own share, that design charged you the same tap on the way into every trip, for ever. Whichever chip you last chose is now <b>remembered on this device</b> and Packing Mode reopens on it, on <b>every</b> trip rather than just that one — the same way <b>Group by packer</b> has been remembered since v134, and for the same reason: which half of the suitcase you are standing over is a fact about <b>you</b>, not about the holiday.<br><br>It is careful about it. If the name you last packed as has <b>nothing at all</b> on the trip you have just opened — a trip that is all hers, or one that arrived from someone else — it falls back to <b>Everyone</b> rather than opening you on a blank screen, because a filter that hides everything is worse than one that forgot. Tap <b>Everyone</b> whenever you want the whole trip back, and that is what it will remember from then on.',
       'The line under each item now tells you something you did not already know, and the screen opens on your own share without being asked twice.'),
