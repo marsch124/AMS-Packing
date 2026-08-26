@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v131';
+const APP_VERSION = 'v132';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -644,6 +644,14 @@ const openActionsForItem = (itemId) => (itemId ? ALL_ACTIONS.filter((a) => a.ite
 // packing-list kit clusters can read them synchronously. Refreshed on each render.
 let ALL_KITS = [];
 async function refreshKits() { ALL_KITS = await db.getKits(); return ALL_KITS; }
+// The one-line state for the Kits fold. Shared by the first render and by every
+// redraw after an edit, so the two can't disagree. Pluralised inline: the `nOf`
+// helper is local to renderSettings and long gone by the time a redraw runs.
+function kitsSummary(list = ALL_KITS || []) {
+  return list.length
+    ? `${list.length} ${list.length === 1 ? 'kit' : 'kits'}`
+    : 'None yet — bundles you pack as one';
+}
 
 // The "Loose items" bin — where items live before they belong to any template.
 // It's a real list under the hood (so the editor, care, matrix all work) but
@@ -5792,6 +5800,7 @@ function howtoCard() {
 
         <h3>Finding your way round Settings</h3>
         <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
+        <p>Those summary lines are <b>live</b>. Add a person, remove a storage place, delete a trip preset, and the line above the list updates as you do it — you never have to leave Settings and come back to find out whether the change took. That matters because the editors here deliberately redraw <b>only their own list</b> when you make a change, so that renaming something halfway down a long page doesn’t throw away your scroll position.</p>
         <p>Each section has its <b>own colour and icon</b>, fixed for good, so you come to know them by sight rather than by reading. Closed, the colour sits in the little icon tile; <b>open, it takes over the panel</b> — the tile fills in, and the heading, the edge and a faint wash of the background all follow — so you always know which section you are inside. The colour is an <em>identity</em>, not a warning light: it never changes to tell you something is wrong. When something does need attention, the app says so in words, and on the Home screen.</p>
         <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Item conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
@@ -5821,6 +5830,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v132', '2026-08-27 · 09:30 UTC', false, 'The rest of the Settings summary lines keep count as you edit',
+      '<b>Finishing a job v130 only half did.</b> When you removed three storage places and the line above them carried on claiming seventeen, that got fixed — but only for <b>Storage places</b>, because that was the list in front of us. The same staleness was sitting in the other sections, waiting.<br><br>Every section in Settings shows a one-line summary of what is inside it — <em>“Martin, Anna”</em>, <em>“2 presets”</em>, <em>“4 conditions · New, Good, Worn, Needs replacing”</em>. Those lines were written <b>when the screen was drawn</b> and then left alone, while the list underneath carried on changing. So you could add a person, watch them appear in the list, and still read the old names on the line directly above — with no way to tell which of the two was telling the truth.<br><br>Checking each one honestly turned up a smaller problem than expected: <b>Item conditions</b>, <b>When</b> and <b>Owners</b> had already been quietly keeping themselves up to date. The two genuinely stale ones were <b>People</b> and <b>Trip presets</b> — and <b>Kits</b>, which was not on the list but had exactly the same fault. All of them now update the moment you add, rename or remove something, along with the small details you would notice if they were wrong: <em>“1 preset”</em> rather than <em>“1 presets”</em>, and the <em>(standard)</em> note dropping off the conditions and the timeline as soon as you customise them.<br><br>The reason this kept coming back is that each section had been fixing the problem <b>its own way</b>, or not at all — six sections, four different answers. They now all call <b>one</b> piece of code, and each section’s summary comes from the <b>same</b> function whether the screen is being drawn for the first time or redrawn after an edit. The two can no longer disagree, because there is no longer a second version to disagree with.',
+      'The line above each Settings list always matches the list itself — so you can trust what Settings tells you at a glance, without opening every section to check.'),
     v('v131', '2026-08-27 · 00:30 UTC', false, 'Getting a deleted list entry back — and the check now shows its working',
       '<b>Two things you ran into within minutes of each other, and they turn out to be the same problem.</b><br><br><b>(1) “It does not work.”</b> You removed six storage places and the check still said <b>“This device has everything”</b> — and, annoyingly, it was <em>right</em>. The check finds a missing entry by noticing that your <em>gear</em> points at something your <em>list</em> has never heard of. A place with <b>nothing currently stored in it</b> leaves nothing pointing at it, so removing it leaves no gap to find. Perfectly correct, completely unhelpful, because the app told you none of that — it just said all was well and left you to wonder which of you was wrong.<br><br>So the check now <b>shows its working</b>. Underneath the verdict is a short table: for each of the five lists, <b>how many different answers your gear actually uses</b>, <b>how many entries are on your list</b>, and <b>how many are unaccounted for</b>. Only the last column is a problem. Your list holding <em>more</em> than your gear uses is completely normal — a place you are keeping for later is not a fault — and now you can see that at a glance instead of taking the green tick on trust.<br><br><b>(2) “I have six places I want back.”</b> Anything still stored on an item was always recoverable: that is precisely what the check reads, and it names them. But a place with <b>nothing</b> in it is a harder case — once the entry is gone it is gone from this device <em>and</em> from your account, because a removal syncs like every other change. The only surviving copy was inside this device’s <b>automatic backups</b>, and the only way to reach one was to restore the <b>whole</b> snapshot — rolling back every item and every trip along with it. That is a wildly disproportionate hammer for “I deleted a name I wanted”.<br><br>There is now a button for exactly that job: <b>Settings → Sync your devices → Recover entries from this device’s backups</b>. It reads <b>every</b> automatic backup on the device and puts back any list entry — place, owner, person, trip preset or item condition — that is missing from your lists today. It is <b>purely additive</b>: it can only ever put things back. It never removes, renames or reorders anything, so it is safe to press when you are not sure, which is the entire point of offering it. Recovered entries join at the <b>end</b> of their list; use the <b>▲</b> arrows in Storage places to put them where you want them.',
       'A list entry you deleted by mistake takes one button to get back, instead of a full restore that would undo everything else you have done since — and the check now proves it looked, rather than just asserting that all is well.'),
@@ -7093,6 +7105,7 @@ async function renderSettings() {
     <div class="snap-list" data-presets></div>
   </div>`);
   const drawPresets = () => {
+    setFoldSummary('presets', presetsSummary());
     const box = presetCard.querySelector('[data-presets]');
     const list = loadPresets().sort((a, b) => a.name.localeCompare(b.name));
     box.innerHTML = list.length
@@ -7122,6 +7135,7 @@ async function renderSettings() {
     <div class="btnrow"><button class="btn" data-kit="add">${IC.plus}<span>New kit</span></button></div>
   </div>`);
   const drawKits = () => {
+    setFoldSummary('kits', kitsSummary());
     const box = kitCard.querySelector('[data-kits]');
     const kits = (ALL_KITS || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     box.innerHTML = kits.length
@@ -7162,6 +7176,7 @@ async function renderSettings() {
     <div class="btnrow"><button class="btn" data-person="add">${IC.plus}<span>Add person</span></button></div>
   </div>`);
   const drawPeople = () => {
+    setFoldSummary('people', peopleSummary());
     const box = peopleCard.querySelector('[data-people]');
     const people = loadPeople();
     box.innerHTML = people.length
@@ -7237,8 +7252,7 @@ async function renderSettings() {
   const ownersEditor = buildOwnersEditor({
     onChanged: () => {
       // Keep the fold's own summary line honest without re-rendering all of Settings.
-      const sum = ownerCard.closest('.sset')?.querySelector('.howto-sum');
-      if (sum) sum.textContent = ownersSummary();
+      setFoldSummary('owners', ownersSummary());
     },
   });
   ownerCard.appendChild(ownersEditor.el);
@@ -7255,8 +7269,7 @@ async function renderSettings() {
   </div>`);
 
   const drawPhases = () => {
-    const sum = phaseCard.closest('.sset')?.querySelector('.howto-sum');
-    if (sum) sum.textContent = phasesSummary();
+    setFoldSummary('phases', phasesSummary());
     const box = phaseCard.querySelector('[data-phases]');
     const list = PHASES;
     // The name is an ordinary text box rather than a pen-and-dialog: it is the
@@ -7390,8 +7403,7 @@ async function renderSettings() {
 
   const drawConds = () => {
     // Keep the fold's own summary line honest without re-rendering all of Settings.
-    const sum = condCard.closest('.sset')?.querySelector('.howto-sum');
-    if (sum) sum.textContent = `${ITEM_CONDITIONS.length} ${ITEM_CONDITIONS.length === 1 ? 'condition' : 'conditions'} · ${ITEM_CONDITIONS.map((c) => c.label).join(', ')}${conditionsCustomised() ? '' : ' (standard)'}`;
+    setFoldSummary('conditions', conditionsSummary());
     const box = condCard.querySelector('[data-conds]');
     const list = ITEM_CONDITIONS;
     box.innerHTML = list.map((c, i) => `<div class="cond-row" data-cond-id="${esc(c.id)}">
@@ -7610,21 +7622,16 @@ async function renderSettings() {
   wrap.appendChild(overviewLink);
 
   wrap.appendChild(settingsGroup('Your packing setup', 'kits'));
-  wrap.appendChild(foldCard('kits', kitCard,
-    kits2.length ? nOf(kits2.length, 'kit', 'kits') : 'None yet — bundles you pack as one',
-    { icon: 'toolbox' }));
-  wrap.appendChild(foldCard('people', peopleCard,
-    people.length ? people.map((p) => p.name).join(', ') : 'None yet — for splitting who packs what',
-    { icon: 'person' }));
+  // Every one of these summaries comes from the SAME function the fold's own redraw
+  // calls, so an edit that redraws only its list can never leave the line above it
+  // advertising the count from page load.
+  wrap.appendChild(foldCard('kits', kitCard, kitsSummary(kits2), { icon: 'toolbox' }));
+  wrap.appendChild(foldCard('people', peopleCard, peopleSummary(people), { icon: 'person' }));
   wrap.appendChild(foldCard('owners', ownerCard, ownersSummary(), { icon: 'person' }));
   wrap.appendChild(foldCard('phases', phaseCard, phasesSummary(), { icon: 'clock' }));
   wrap.appendChild(foldCard('places', places, placesSummary(places2), { icon: 'box' }));
-  wrap.appendChild(foldCard('conditions', condCard,
-    `${nOf(ITEM_CONDITIONS.length, 'condition', 'conditions')} · ${ITEM_CONDITIONS.map((c) => c.label).join(', ')}${conditionsCustomised() ? '' : ' (standard)'}`,
-    { icon: 'swap' }));
-  wrap.appendChild(foldCard('presets', presetCard,
-    presets2.length ? nOf(presets2.length, 'preset', 'presets') : 'None yet — save a trip’s setup to reuse',
-    { icon: 'star' }));
+  wrap.appendChild(foldCard('conditions', condCard, conditionsSummary(), { icon: 'swap' }));
+  wrap.appendChild(foldCard('presets', presetCard, presetsSummary(presets2), { icon: 'star' }));
   wrap.appendChild(foldCard('sharedtrips', trips, 'Import a trip someone sent you', { icon: 'share' }));
 
   wrap.appendChild(settingsGroup('Appearance', 'theme'));
@@ -7945,6 +7952,13 @@ async function deletePreset(pid) {
   if (!sharedStored('presets')) { await savePresets(loadPresets().filter((p) => p.id !== pid), { remove: [pid] }); return; }
   await deleteShared([pid]);
 }
+// The one-line state for the Trip presets fold. Shared by the first render and by
+// every redraw after a delete, so the two can't disagree.
+function presetsSummary(list = loadPresets()) {
+  return list.length
+    ? `${list.length} ${list.length === 1 ? 'preset' : 'presets'}`
+    : 'None yet — save a trip’s setup to reuse';
+}
 
 // Condition list (New / Good / Worn / Needs replacing, and anything you add).
 // SHARED between your devices since v120; nothing is stored until you actually
@@ -7975,6 +7989,11 @@ async function resetConditions() {
 }
 // Have the conditions been customised at all? (Drives the Settings summary line.)
 function conditionsCustomised() { return sharedCustomised('conditions'); }
+// The one-line state for the Item conditions fold. Shared by the first render and
+// by every redraw after an edit, so the two can't disagree.
+function conditionsSummary(list = ITEM_CONDITIONS) {
+  return `${list.length} ${list.length === 1 ? 'condition' : 'conditions'} · ${list.map((c) => c.label).join(', ')}${conditionsCustomised() ? '' : ' (standard)'}`;
+}
 
 // How many catalogue items currently carry this condition? Counted by the stable
 // item id, so an item in five templates counts once.
@@ -8058,6 +8077,13 @@ async function savePeople(arr, opts = {}) {
 }
 // Has the roster been edited, or is it still the two the app ships with?
 function peopleCustomised() { return sharedCustomised('people'); }
+// The one-line state for the People fold. Shared by the first render and by every
+// redraw after an edit, so the two can't disagree.
+function peopleSummary(list = loadPeople()) {
+  return list.length
+    ? list.map((p) => p.name).join(', ')
+    : 'None yet — for splitting who packs what';
+}
 // ---------- Owners: the "whose is it" roster ----------
 //
 // A real, editable list — like People, Storage places and Conditions — rather than
