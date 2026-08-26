@@ -9,7 +9,7 @@ import {
   ITEM_CONDITION_IDS, itemConditionLabel, sectionName, sortRowsBy, groupRowsBy,
   DEFAULT_ITEM_CONDITIONS, CONDITION_TONES, coerceCondition, newCondition, setItemConditions,
   itemCondition, conditionTone, conditionReplaces, careSections, MAINTENANCE_UPCOMING_DAYS,
-  buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupBy, groupItemsBySection, newSection,
+  buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupByPacker, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v133';
+const APP_VERSION = 'v134';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -3669,6 +3669,17 @@ function addKitToTrip(ev, kit, members) {
 // ============================================================
 let packState = { eventId: null, idx: 0, showPacked: false, editId: null };
 
+// "Group by packer" is a way of LOOKING at the pack, not a fact about a trip, so it
+// is remembered on the device (like the All-items sort and grouping) rather than
+// stored on the event — turn it on once and every trip you pack opens that way.
+const PACK_BYPACKER_KEY = 'ams.pack.bypacker';
+function loadPackByPacker() {
+  try { return localStorage.getItem(PACK_BYPACKER_KEY) === '1'; } catch { return false; }
+}
+function savePackByPacker(on) {
+  try { localStorage.setItem(PACK_BYPACKER_KEY, on ? '1' : '0'); } catch { /* ignore */ }
+}
+
 async function renderPackMode(eventId) {
   const ev = await db.getEvent(eventId);
   if (!ev || !ev.entries.length) { location.assign(`#/event/${eventId}`); return h('<section></section>'); }
@@ -3677,7 +3688,7 @@ async function renderPackMode(eventId) {
     // Open at the first phase that still has unpacked items.
     const steps = packSteps(ev.entries);
     const firstUnpacked = steps.findIndex((s) => s.remaining > 0);
-    packState = { eventId, idx: firstUnpacked < 0 ? 0 : firstUnpacked, showPacked: false, editId: null };
+    packState = { eventId, idx: firstUnpacked < 0 ? 0 : firstUnpacked, showPacked: false, editId: null, byPacker: loadPackByPacker() };
     personFilter = ''; // start Packing Mode showing everyone
   }
 
@@ -3699,8 +3710,8 @@ async function renderPackMode(eventId) {
 
     // Who-packs-what selector — only when this trip has anyone assigned.
     const tripPeople = assignedPeople(ev.entries);
+    const unassigned = ev.entries.filter((e) => !(e.packer || '').trim()).length;
     if (tripPeople.length) {
-      const unassigned = ev.entries.filter((e) => !(e.packer || '').trim()).length;
       const pchip = (key, label, dot) => `<button class="pchip${personFilter === key ? ' on' : ''}" data-person-filter="${esc(key)}">${dot ? `<span class="person-dot" style="background:${esc(dot)}"></span>` : ''}${esc(label)}</button>`;
       const bar = h(`<div class="filterbar personbar pack-personbar">
         ${pchip('', 'Everyone', '')}
@@ -3715,6 +3726,25 @@ async function renderPackMode(eventId) {
         draw();
       });
       body.appendChild(bar);
+    }
+
+    // "Group by packer" — the gentler alternative to filtering: keep everything on
+    // screen, but split each bag into whose is whose so you can work down your own
+    // block and leave hers alone. Offered only when it would actually make more than
+    // one block, and hidden entirely while a person filter is on (you are already
+    // looking at exactly one person, so every heading would say the same name).
+    const bucketsIfGrouped = tripPeople.length + (unassigned ? 1 : 0);
+    if (bucketsIfGrouped > 1 && !personFilter) {
+      const gb = h(`<div class="filterbar pack-groupbar">
+        <button class="fchip${packState.byPacker ? ' on' : ''}" type="button" data-bypacker>${ic('person', 'sm')}Group by packer</button>
+      </div>`);
+      gb.addEventListener('click', (e) => {
+        if (!e.target.closest('[data-bypacker]')) return;
+        packState.byPacker = !packState.byPacker;
+        savePackByPacker(packState.byPacker);
+        draw();
+      });
+      body.appendChild(gb);
     }
 
     if (overall.total === 0) { body.appendChild(h('<p class="muted pad">Nothing assigned to this person on the trip.</p>')); return; }
@@ -3740,8 +3770,15 @@ async function renderPackMode(eventId) {
     body.appendChild(stepper);
     if (step.phase.hint) body.appendChild(h(`<p class="pack-hint">${esc(step.phase.hint)}</p>`));
 
-    // Items in this phase, grouped by container; hide packed unless toggled.
+    // Items in this phase, grouped by container — and, when asked for, by packer
+    // WITHIN each container; hide packed unless toggled.
     const listEl = h('<div class="pack-list"></div>');
+    const grouping = packState.byPacker && bucketsIfGrouped > 1 && !personFilter;
+    // Whether the screen has ALREADY said whose these are, in which case the rows
+    // leave the name off. Two ways that happens: a packer heading three lines up, or
+    // a person filter — you asked for Martin's things, so sixty rows each repeating
+    // "Martin" only crowd out the bag and the cupboard beside it.
+    const packerSaid = grouping || !!personFilter;
     let shown = 0;
     for (const cg of groupByContainer(step.entries)) {
       // A row you're editing stays put even once you tick it, so the editor can't
@@ -3749,7 +3786,23 @@ async function renderPackMode(eventId) {
       const items = cg.entries.filter((e) => packState.showPacked || !e.checked || packState.editId === e.id);
       if (!items.length) continue;
       if (cg.container) listEl.appendChild(h(`<div class="sub">${groupIcon(cg.container) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(cg.container)}</span>` : ''}${esc(cg.container)}</div>`));
-      for (const entry of items) { listEl.appendChild(packRow(ev, entry, draw)); shown++; }
+      if (!grouping) {
+        for (const entry of items) { listEl.appendChild(packRow(ev, entry, draw, packerSaid)); shown++; }
+        continue;
+      }
+      // Roster order, so your own block sits in the same place bag after bag.
+      const blocks = groupByPacker(items, loadPeople().map((p) => p.name));
+      for (const pg of blocks) {
+        // One block in this bag means nobody is sharing it — the heading would only
+        // repeat what the rows already say, so it is left off.
+        if (blocks.length > 1) {
+          listEl.appendChild(h(`<div class="sub packer-sub">${pg.packer
+            ? `<span class="person-dot" style="background:${esc(peopleColor(pg.packer))}"></span>${esc(pg.packer)}`
+            : '<span class="person-dot none"></span>Anyone — not assigned'}<em>${pg.entries.length}</em></div>`));
+        }
+        // A lone block means no heading was drawn, so those rows still name their packer.
+        for (const entry of pg.entries) { listEl.appendChild(packRow(ev, entry, draw, blocks.length > 1)); shown++; }
+      }
     }
     if (step.remaining === 0) listEl.appendChild(h(`<div class="pack-phase-done">${IC.check}<span>${esc(step.phase.label)} — all packed</span></div>`));
     else if (!shown) listEl.appendChild(h('<p class="muted pad">Nothing left to show here.</p>'));
@@ -3780,8 +3833,21 @@ async function renderPackMode(eventId) {
 // One thing to pack. The whole slab still toggles packed — that's the point of
 // Packing Mode — so editing gets its own small pen beside it, opening the same
 // quick editor the packing list uses, right here in place.
-function packRow(ev, entry, redraw) {
-  const meta = [entry.storage ? entry.storage : '', entry.container, entry.note].filter(Boolean).map(esc).join(' · ');
+// `packerSaid` means the screen has already established whose this is — a packer
+// heading just above, or a person filter naming one person — so the row leaves the
+// name off. Repeating it on every line is the noise the packing list has always
+// avoided (entryRow drops whatever dimension the current grouping is by, for the
+// same reason).
+function packRow(ev, entry, redraw, packerSaid = false) {
+  // Built as HTML rather than plain text because the packer carries a colour dot.
+  // It goes FIRST: the meta line is a single nowrap line that ellipsises, and whose
+  // job a thing is should never be the part that gets cut off.
+  const meta = [
+    !packerSaid && entry.packer ? personChipHTML(entry.packer) : '',
+    entry.storage ? esc(entry.storage) : '',
+    entry.container ? esc(entry.container) : '',
+    entry.note ? esc(entry.note) : '',
+  ].filter(Boolean).join(' · ');
   const editing = packState.editId === entry.id;
   const row = h(`<div class="pack-row${editing ? ' editing' : ''}">
     <button class="pack-item${entry.checked ? ' done' : ''}" type="button">
@@ -5778,14 +5844,15 @@ function howtoCard() {
  <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b></b> maintenance nudge when gear is overdue or due soon, a <b>shopping</b> nudge when you’ve things to buy, a <b>“To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), and a <b></b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
 
         <h3>Packing Mode</h3>
- <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List.</p>
+ <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List. Within a phase, things are gathered <b>by bag</b>.</p>
+ <p><b>Packing with someone — two ways to see whose is whose.</b> Every row shows its <b>packer</b> at the head of its grey line, name and colour dot, so you never have to guess or open anything. Then pick the approach that suits the moment. <b>Filter</b> — tap your own name in the chip row at the top and everything else disappears; you step through your share alone, phase by phase. <b>Or group</b> — tap <b>Group by packer</b> and everything stays on screen, but each bag splits into a short block per person, in the order your <b>Packers</b> list is in, with the still-unassigned pile last and a count on each heading. Grouping is the better one when you are packing the same suitcase together: you work down your block, she works down hers, and nothing is out of sight. (The rows drop the packer name whenever the screen has already said it — under a packer heading, or while you are filtered to one person.) Both controls appear only once the trip actually has more than one person's worth of things to divide, and <b>Group by packer</b> is <b>remembered on this device</b>, so turn it on once and every trip opens that way.</p>
  <p><b>Fixing something mid-pack.</b> Tapping the row itself always means “packed” — that's the whole point of this screen — so editing has its own small <b>pen</b> at the right-hand end of each row. Tap it and the quick editor opens in place: quantity, which bag, when, section, kit, who packs it, weight, the flags and a note. <b>Save</b> and you're back in Packing Mode at the same phase, right where you were. Need more than that? The editor's <b>Edit the full item</b> button opens the item's full editor (conditions, templates, storage &amp; care, photos) — and saving <em>there</em> also brings you straight back here, so a detour never costs you your place. A row you're editing stays on screen even if you tick it.</p>
 
         <h3>Who packs what</h3>
         <p>Packing with someone? First set up your <b>Packers</b> in <b>Settings → Packers</b> — each with a name and a colour (Martin &amp; Anna are there to start; add, rename or recolour anyone).</p>
         <p><b>Then say it once, on the item.</b> Open any item, unfold <b>Details &amp; ownership</b>, and beside <b>Owner</b> you'll find <b>Packed by</b>. That is the <b>standing</b> answer — whose job it is to pack that thing, every time — and it sits next to Owner on purpose, because the two questions get asked together and are easy to confuse: <b>Owner</b> is whose the thing <em>is</em>, <b>Packed by</b> is whose job it is to <em>pack</em> it. Your wetsuit can be owned by “Shared” and packed by Anna.</p>
         <p><b>Every trip then starts already divided.</b> When a trip builds its packing list, each item arrives carrying its usual packer, so you never have to split a trip by hand again. If one particular trip is different — she's packing the tent this time — open the item <em>on that trip</em> and change <b>Packed by</b> there; that changes this trip only and leaves the standing answer alone.</p>
-        <p><b>Seeing only your own things.</b> Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row sits at the top of the packing list: <b>Everyone</b>, one person, or the still-<b>Unassigned</b> items, each with a live count. Tap your own name and your wife's things drop out of sight. The same filter sits atop <b>Packing Mode</b>, so each of you can step through only your own share, phase by phase. <em>(The row only appears once something on the trip actually has a packer — which, before you could set one on the item itself, meant it stayed hidden until you had assigned things by hand. Fill in a few <b>Packed by</b> fields and it's simply there.)</em> Away from any trip, <b>Care → All items</b> can <b>Group</b> by <b>Who packs it</b>, which splits the whole catalogue into whose job each thing is.</p>
+        <p><b>Seeing only your own things.</b> Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row sits at the top of the packing list: <b>Everyone</b>, one person, or the still-<b>Unassigned</b> items, each with a live count. Tap your own name and your wife's things drop out of sight. The same filter sits atop <b>Packing Mode</b>, so each of you can step through only your own share, phase by phase — and Packing Mode also shows each row's packer on its grey line and can <b>Group by packer</b> within each bag, for when you are packing the same suitcase together and want both halves visible at once (see <b>Packing Mode</b> below). <em>(The row only appears once something on the trip actually has a packer — which, before you could set one on the item itself, meant it stayed hidden until you had assigned things by hand. Fill in a few <b>Packed by</b> fields and it's simply there.)</em> Away from any trip, <b>Care → All items</b> can <b>Group</b> by <b>Who packs it</b>, which splits the whole catalogue into whose job each thing is.</p>
         <p>The split <b>travels inside a shared trip</b> — send the trip to someone and the items you gave them arrive marked as theirs (a name that isn't on their own Packers list still shows, just with an auto-picked colour). <b>Renaming a packer</b> carries the new name onto everything at once: every item in your catalogue and every trip they are already on.</p>
 
         <h3>When — the stages of a pack</h3>
@@ -5861,6 +5928,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v134', '2026-08-27 · 16:30 UTC', false, 'Packing Mode shows who packs each thing — and can split each bag between you',
+      '<b>v133 made the app remember whose job a thing is; this puts that answer where you are actually standing when it matters.</b> Packing Mode — the big full-screen flow you pack from — was the one screen that never mentioned it. The packing list has shown a packer chip on its rows for ages, but the moment you tapped <b>Start packing</b> the names vanished, and the only way to tell whose something was was to open its editor.<br><br><b>(1) The packer is on every row.</b> It leads the small grey line under the name — colour dot and all — ahead of the storage place and the bag. It goes <b>first</b> on purpose: that line is a single line that trims with an ellipsis when it is too long for the screen, and whose job a thing is should never be the part that gets cut off.<br><br><b>(2) A new <b>Group by packer</b> toggle.</b> Packing Mode has always gathered a phase <b>by bag</b>. Tap the new toggle and each bag now splits further into <b>a short block per person</b> — Martin\'s things, then Anna\'s, then whatever is still unassigned — with a <b>count</b> on each heading. The blocks come out in the order your <b>Settings → Packers</b> list is in, not the alphabet, so your own block sits in the same place bag after bag and you learn where to look. The unassigned pile is <b>always last</b>: it is the part still to be divided, so it should never head the list.<br><br><b>Why this is not just the filter you already had.</b> The person chips at the top <b>hide</b> everyone else, which is right when you are packing on your own and want no distractions. Grouping keeps <b>everything on screen</b> and merely arranges it — which is the right one when you are standing over the same open suitcase together: you work down your block, she works down hers, and neither of you has to take the other\'s things on trust. Because of that they are deliberately not both on at once — while a person filter is on, the grouping toggle is hidden, since every heading would say the same name. Two smaller touches in the same spirit: a bag containing only <b>one</b> person\'s things gets <b>no</b> heading (it would only repeat what the rows say), and while you are grouped the rows themselves <b>drop</b> the packer name, because the heading three lines up has just told you. That is the same rule the packing list has always followed — it never repeats the thing you are currently grouping by.<br><br>The toggle only appears when the trip genuinely has more than one person\'s worth of things to divide, so a solo trip is exactly as it was. It is <b>remembered on this device</b> rather than stored on the trip — it is a way of looking, not a fact about a particular holiday — so turn it on once and every trip you pack opens that way.',
+      'You can pack the same suitcase side by side without either of you having to guess, remember or check whose things are whose — the screen you are already looking at says it, on every row and at the head of every block.'),
     v('v133', '2026-08-27 · 14:00 UTC', false, 'Say who packs a thing ONCE — “People” is now “Packers”, and it lives beside Owner',
       '<b>The question you asked was “how do I see only my own things?”, and the honest answer was: you could, but only after doing the work twice.</b> Assigning a packer was a <b>per-trip</b> job. Nothing in the catalogue remembered that the wetsuit is Anna’s to pack — so every new trip started with all 431 things unassigned, and you had to divide them by hand again. Worse, the <b>“Who packs”</b> filter row only appears once something on the trip <em>has</em> a packer, so on a fresh trip it wasn’t there at all. You went looking for a filter that was hiding because nothing had been assigned, and nothing had been assigned because assigning was per-trip. That is the whole of it.<br><br><b>(1) It is now a property of the item.</b> Open any item, unfold <b>Details &amp; ownership</b>, and <b>Packed by</b> sits <b>directly beside Owner</b> — where you asked for it, and where it belongs, because the two questions get asked in the same breath and are the two most easily confused things in the app: <b>Owner</b> is whose the thing <em>is</em>, <b>Packed by</b> is whose job it is to <em>pack</em> it. A wetsuit can be owned by “Shared” and packed by Anna. Say it once, and <b>every trip built from then on arrives already divided</b> — the filter row is simply there, with live counts, from the moment the list is made. One trip different from the rest? Change <b>Packed by</b> on the item <em>on that trip</em> and the standing answer is left alone, exactly as the bag and the “When” already work.<br><br><b>(2) “People” is now “Packers”.</b> One word, and it says what the list is <em>for</em> rather than what its entries happen to be. “People” told you nothing — the Owners list is people too, which is precisely why the two kept getting muddled. <b>Settings → Packers</b> now sits beside <b>Settings → Owners</b> and the pair reads as the pair it is. Nothing in your data changed and nothing needs re-entering: it is the same list, the same two names, the same colours, still syncing between your devices. Renaming a packer now carries the new name onto <b>every item in the catalogue as well as every trip</b> — before, only the trips followed, which would have stranded the new item-level answers.<br><br><b>(3) Care → All items can group by “Who packs it”.</b> Away from any trip, that splits the whole catalogue by whose job each thing is — fold everyone else’s heading shut and what is left is your share. Useful for dividing things up in the first place, on a wet Sunday rather than the night before a flight.<br><br><b>(4) “When” and “Where” joined Sort and Group on All items.</b> A trip’s packing list has always offered <b>When / Where / Category</b>; this index offered neither of the first two, and called the bag <b>“Container”</b> — one property, two names, depending which screen you were on. It is now <b>“Where — the bag”</b> in both dropdowns, sitting next to <b>“Where it’s stored”</b> so the two <em>wheres</em> are plainly different questions: the bag it travels in, and the cupboard you fetch it from. <b>When</b> is new to both, and sorts <b>down the timeline</b>, not the alphabet — Preparations before the front door, which is the only ordering that means anything. Grouping by <b>When</b> splits an item into a line per template, like Where and Section already do, because the same thing genuinely can be a Day-before job in one template and a Morning one in another.<br><br><b>(5) “Reset to the standard seven” is gone.</b> As you said: never going to be used, and a risk to leave lying around. Every item in the catalogue points into that timeline, so one tap and one OK could have rewritten the thing all 431 of them depend on. Everything it did is still there a step at a time — rename, reorder, <b>remove</b> (which still makes you say where its things go first), add.<br><br><em>A note on the entries below this one: they still say <b>People</b>, because that is what it was called when they were written. History is left as it happened.</em>',
       'Whose job it is to pack a thing is now something the app remembers about the thing — so every trip starts already split between you, and “show me only my share” is one tap instead of an evening’s work.'),

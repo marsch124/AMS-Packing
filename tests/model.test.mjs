@@ -21,7 +21,7 @@ import {
   presetConfigFromEvent, applyPresetConfig,
   newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
   newAction, coerceAction, shoppingReason, shoppingSuggestions, openShoppingCount, EXPIRY_SOON_DAYS,
-  coercePerson, newPerson, personColor, assignedPeople, PERSON_COLORS,
+  coercePerson, newPerson, personColor, assignedPeople, groupByPacker, PERSON_COLORS,
   listEmoji, listColor, TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS,
   isPhotoRef, photoRefs, inlinePhotos, hasInlinePhotos,
   backupState, backupSnoozeDays, newestChangeAt, oldestCreatedAt, BACKUP_DUE_DAYS, BACKUP_URGENT_DAYS,
@@ -1740,6 +1740,36 @@ test('a per-list link carries no packer of its own — the shared item stays the
 test('referencedListValues sees a packer set on a catalog item, not only on a trip', () => {
   const lists = [newList({ name: 'Dive', items: [newItem({ name: 'Wetsuit', packer: 'Anna' })] })];
   assert.ok(referencedListValues({ lists }).people.has('anna'));
+});
+
+// --- groupByPacker: the sub-grouping Packing Mode puts inside each bag ---
+test('groupByPacker: roster order first, strays A–Z, unassigned always last', () => {
+  const e = (name, packer) => ({ name, packer });
+  const out = groupByPacker(
+    [e('Tent', 'Anna'), e('Map', ''), e('Boots', 'Zoe'), e('Fins', 'Martin'), e('Rope', 'Bo'), e('Torch', 'anna')],
+    ['Martin', 'Anna'],
+  );
+  assert.deepEqual(out.map((g) => g.packer), ['Martin', 'Anna', 'Bo', 'Zoe', '']);
+  // Case-folded into one block, keeping the spelling of the first entry seen.
+  assert.deepEqual(out[1].entries.map((x) => x.name), ['Tent', 'Torch']);
+  assert.deepEqual(out[4].entries.map((x) => x.name), ['Map']);
+});
+
+test('groupByPacker: entry order is preserved inside a block', () => {
+  const out = groupByPacker([{ name: 'C', packer: 'A' }, { name: 'A', packer: 'A' }, { name: 'B', packer: 'A' }], ['A']);
+  assert.deepEqual(out[0].entries.map((x) => x.name), ['C', 'A', 'B']);
+});
+
+test('groupByPacker: nobody assigned is one unassigned block, and nothing is dropped', () => {
+  const rows = [{ name: 'A' }, { name: 'B', packer: '  ' }];
+  const out = groupByPacker(rows, ['Martin']);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].packer, '');
+  assert.equal(out[0].entries.length, 2);
+  assert.deepEqual(groupByPacker([], ['Martin']), []);
+  // Every entry lands in exactly one block, whatever the roster says.
+  const many = [{ packer: 'X' }, { packer: '' }, { packer: 'Martin' }];
+  assert.equal(groupByPacker(many, []).reduce((n, g) => n + g.entries.length, 0), many.length);
 });
 
 // --- Template covers (emoji + colour) ---

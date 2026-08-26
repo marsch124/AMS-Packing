@@ -871,6 +871,39 @@ export function assignedPeople(entries) {
   return out;
 }
 
+// Split entries by who packs them — the sub-grouping Packing Mode puts INSIDE each
+// bag, so two people packing the same suitcase each get their own short block.
+//
+// `order` is the roster (Settings → Packers) so the blocks come out in the order
+// you arranged your people in, not the alphabet — the person you are is then always
+// in the same place on every screen. A name in use but not on the roster (from a
+// shared trip) follows, A–Z, and the unassigned remainder is ALWAYS last: it is the
+// pile still to be divided, so it should never head the list.
+//
+// The entries' own order is preserved within each block, so whatever the caller had
+// already sorted by still holds.
+export function groupByPacker(entries, order = []) {
+  const rank = new Map();
+  asArray(order).forEach((n, i) => { const k = normName(n); if (k && !rank.has(k)) rank.set(k, i); });
+  const map = new Map();   // normalised name -> { packer (as written), entries }
+  const none = [];
+  for (const e of asArray(entries)) {
+    const raw = (e && typeof e.packer === 'string' ? e.packer.trim() : '');
+    if (!raw) { none.push(e); continue; }
+    const k = normName(raw);
+    if (!map.has(k)) map.set(k, { packer: raw, entries: [] });
+    map.get(k).entries.push(e);
+  }
+  const known = [];
+  const strays = [];
+  for (const [k, g] of map) (rank.has(k) ? known : strays).push([k, g]);
+  known.sort((a, b) => rank.get(a[0]) - rank.get(b[0]));
+  strays.sort((a, b) => a[1].packer.localeCompare(b[1].packer, undefined, { sensitivity: 'base' }));
+  const out = [...known, ...strays].map(([, g]) => g);
+  if (none.length) out.push({ packer: '', entries: none });
+  return out;
+}
+
 // --- The five author-made Settings lists, in ONE shared store ---------------
 //
 // Conditions · Trip presets · Packers · Owners · Storage places.
