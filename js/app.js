@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v137';
+const APP_VERSION = 'v138';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1252,6 +1252,11 @@ const IC = {
   cart: svgIcon('<path d="M2.8 4.2h2.4l2.4 10.6h9.3l2.3-7.7H6.3"/><circle cx="9.4" cy="19" r="1.5"/><circle cx="16.6" cy="19" r="1.5"/>'),
   toolbox: svgIcon('<rect x="3" y="8.4" width="18" height="11.2" rx="1.8"/><path d="M8.8 8.4V6.6a1.6 1.6 0 0 1 1.6-1.6h3.2a1.6 1.6 0 0 1 1.6 1.6v1.8"/><path d="M3 13.2h18"/><path d="M10.4 13.2v2.2h3.2v-2.2"/>'),
   person: svgIcon('<circle cx="12" cy="8" r="3.6"/><path d="M5.2 20a6.8 6.8 0 0 1 13.6 0"/>'),
+  // OWNER wears a luggage tag, never the `person` glyph. Owner and packer are both
+  // people's names, so if they share an icon a row saying "Martin" under a heading
+  // saying "Anyone — not assigned" reads as the screen contradicting itself. It is
+  // the app's most persistent confusion (see v133) and one glyph apart fixes it.
+  tag: svgIcon('<path d="M11.3 3.8H19a1.2 1.2 0 0 1 1.2 1.2v7.7a1.6 1.6 0 0 1-.5 1.1l-6.6 6.6a1.6 1.6 0 0 1-2.3 0l-6.4-6.4a1.6 1.6 0 0 1 0-2.3l6.6-6.6a1.6 1.6 0 0 1 1.1-.5Z"/><circle cx="16" cy="8" r="1.5"/>'),
   checkbox: svgIcon('<rect x="3.8" y="3.8" width="16.4" height="16.4" rx="3"/><path d="M8 12.4l2.6 2.6L16.2 9.4"/>'),
   moon: svgIcon('<path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8Z"/>'),
   note: svgIcon('<path d="M6 3.6h8.4L19 8.2v12.2H6Z"/><path d="M14.4 3.6v4.6H19"/><path d="M9 12.4h7M9 16.2h4.6"/>'),
@@ -5391,14 +5396,27 @@ function allItemsSection(lists) {
       ? `${nShown} of ${nAll} items${multi ? ` · ${lines(sorted.length)}` : ''}`
       : `${nAll} items${multi ? ` · ${lines(sorted.length)}` : ''}`;
 
+    const drawFlat = () => {
+      for (const row of sorted) listEl.appendChild(aiRow(row.it, row.list, splitByTemplate ? null : tplsByItem.get(itemKey(row))));
+    };
     if (!gd.key) {
       countEl.textContent = head;
-      for (const row of sorted) listEl.appendChild(aiRow(row.it, row.list, splitByTemplate ? null : tplsByItem.get(itemKey(row))));
+      drawFlat();
       return;
     }
     const gOrder = typeof gd.order === 'function' ? gd.order() : (gd.order || []);
     const buckets = groupRowsBy(sorted, gd.of, { order: gOrder, emptyLabel: gd.empty || 'Not set' });
-    countEl.textContent = `${head} · ${buckets.length} group${buckets.length === 1 ? '' : 's'} by ${gd.label}`;
+    // A grouping that comes out as ONE bucket has split nothing. Drawing it anyway
+    // costs a count line, a heading and a divider to say what every row already
+    // shares — and hands you a fold arrow that collapses the entire list. The single
+    // answer IS the only thing the grouping found, so it goes in the count line and
+    // the rows are drawn flat.
+    if (buckets.length === 1) {
+      countEl.textContent = `${head} · all “${buckets[0].label}”`;
+      drawFlat();
+      return;
+    }
+    countEl.textContent = `${head} · ${buckets.length} groups by ${gd.label}`;
     for (const b of buckets) {
       const foldKey = `${gd.key}|${b.key}`;
       const collapsed = careItemFolds.has(foldKey);
@@ -5486,8 +5504,9 @@ function aiRow(it, list, tpls = null) {
     ? `${names.slice(0, TPL_CAP).map(esc).join(', ')} +${names.length - TPL_CAP}`
     : names.map(esc).join(', ');
   const bits = [`<span class="ai-tpl"${names.length > 1 ? ` title="${esc(names.join(' · '))}"` : ''}>${tplLabel}</span>`];
-  if (it.ownedBy) bits.push(`${ic('person','xs')}${esc(it.ownedBy)}`);
-  if (it.storage) bits.push(`${ic('pin','xs')}${esc(it.storage)}`);
+  if (it.ownedBy) bits.push(`<span title="Owner — whose it is">${ic('tag','xs')}${esc(it.ownedBy)}</span>`);
+  if (it.packer) bits.push(`<span title="Packed by — whose job it is to pack it">${ic('person','xs')}${esc(it.packer)}</span>`);
+  if (it.storage) bits.push(`<span title="Where it’s stored">${ic('pin','xs')}${esc(it.storage)}</span>`);
   const unfiledBadge = isUnfiled(it.name) ? `<span class="ai-badge unfiled" title="Not in any template yet — still a loose item">${ic('warn','xs')}</span>` : '';
   const badge = care
     ? `<span class="ai-badge ${care.state}" title="${esc('Maintenance: ' + dueLabel(care))}">${careIcon(care.state)}</span>`
@@ -5935,6 +5954,8 @@ function howtoCard() {
         </ul>
  <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>reminder</b> also shows on the <b>Home</b> screen.</p>
  <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>No template</b> (loose items), <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> and <b>Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
+ <p><b>Reading a row.</b> Under each name sits the template it's in, then — when they're filled in — the <b>Owner</b> behind a <b>luggage tag</b>, the <b>packer</b> behind a <b>person</b>, and where it's stored behind a <b>pin</b>. The tag and the person are deliberately different marks: both are somebody's name, and while they shared one glyph a row could show “Martin” directly under a heading saying nobody had been assigned, which read as the screen contradicting itself. Hover either one and it says which it is.</p>
+ <p><b>When a grouping finds only one group</b> — every item having the same answer, as they do for <b>Who packs it</b> until you've assigned some — the app doesn't draw a heading round the lot. It says so in the count line instead (<em>431 items · all “Anyone — not assigned”</em>) and lists the items plainly, rather than spending three rows and a fold arrow on a group that is the whole list.</p>
  <p>Below the category chips sit two more filter rows, <b>Item condition</b> and <b>Section</b>, which appear whenever they’d actually split the collection. The rule is worth knowing: chips <b>in the same row</b> mean “either of these”, and the <b>rows combine</b> — so <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn, not liquids plus worn things. Each chip’s number is what you’d get if you tapped it, counted against the filters already on, and <b>Show all</b> clears every row at once. (One item that lives in three templates is three rows here — that’s why a section, which belongs to a template, can be filtered at all.)</p>
  <p><b>Sort</b> reorders the whole index — <b>Alphabetically</b>, <b>When</b>, <b>Where — the bag</b>, <b>Where it’s stored</b>, <b>Weight</b>, <b>Manufacturer</b>, <b>Acquired</b>, <b>Warranty until</b> or <b>Section</b> — and <b>▲/▼</b> flips the direction. Anything with that field left blank <b>always sinks to the bottom</b>, whichever direction you choose, so “Manufacturer, Z–A” shows you makers rather than three hundred blanks. <b>When</b> sorts down the <em>timeline</em>, not the alphabet, so Preparations comes before the front door. <b>Group</b> then breaks the list into headed, <b>collapsible</b> sections — by <b>When</b>, <b>Where — the bag</b>, <b>Where it’s stored</b>, <b>Section</b>, <b>Manufacturer</b>, <b>Item condition</b>, <b>Template</b>, <b>Category</b>, <b>Whose it is</b>, <b>Who packs it</b>, <b>Care status</b> or <b>First letter</b> — each showing how many it holds, with your sort still applying inside each one and the “not set” bucket always last. Tap a group’s header to fold it away. Sort and grouping are <b>remembered on this device</b>; the filter chips deliberately are not, so the index always opens showing everything.</p>
  <p><b>Three of these words mean the same here as they do on a trip.</b> A packing list groups by <b>When / Where / Category</b>, and so does this index — <b>Where — the bag</b> is the container an item goes in, which is exactly what a trip's <b>Where</b> means. It sits deliberately next to <b>Where it’s stored</b>, the other, quite different <em>where</em>: not the bag it travels in, but the cupboard you fetch it from.</p>
@@ -6040,6 +6061,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v138', '2026-08-27 · 22:15 UTC', false, 'All items stops contradicting itself — Owner gets its own mark, and an empty grouping steps aside',
+      '<b>Two things on the <b>Care → All items</b> index that were actively misleading rather than merely untidy.</b><br><br><b>(1) The screen appeared to argue with itself.</b> Group the index by <b>Who packs it</b> today and you get one heading — <b>“Anyone — not assigned”</b> — over all 431 things, while every row underneath shows a little <b>person</b> and a name: <em>Martin</em>, <em>Anna</em>. Heading says nobody; rows say somebody. Both were right, and that was the trouble: the name on the row is the <b>Owner</b>, and the heading is about the <b>Packer</b> — the app’s two most easily confused fields, sharing one glyph, three centimetres apart. <b>Owner now wears a luggage tag</b> and only the packer keeps the person; hover either and it says which it is. And because the row never mentioned the packer at all, it now does — so a row can <em>confirm</em> the heading instead of appearing to deny it.<br><br><b>(2) A grouping that groups nothing now gets out of the way.</b> Because none of your things had a packer yet, grouping by it produced exactly <b>one</b> group containing everything — and the app still drew the full apparatus: a line reading “1 group by Who packs it”, a heading, a divider, and a fold arrow that would have collapsed your entire catalogue in one tap. All to tell you something every row already shared. When a grouping comes out as a single bucket the rows are now drawn <b>plainly</b>, and the one fact it actually established — <b>431 items · all “Anyone — not assigned”</b> — is stated once, in the count line, where it takes a few words instead of three rows.<br><br>Neither change touches what the index <em>does</em>: same items, same sorting, same grouping choices, same filters. This is only the screen no longer saying two contradictory things at once, and no longer building scaffolding around a group of one.',
+      'The index stops giving you two answers to “whose is this?” and stops spending three rows to say nothing — so what is left on screen is your things.'),
     v('v137', '2026-08-27 · 21:00 UTC', false, 'Pack by where things LIVE, not just by the bag they’re going into',
       '<b>Packing Mode has only ever answered one of the two questions you ask while packing.</b> It gathers each phase <b>by bag</b> — everything for the toiletry bag, everything for the suitcase — which is the right answer when you are standing at an open bag deciding what goes in it. But that is the <em>second</em> half of packing. The first half is <b>walking round the house fetching things</b>, and for that the bag is the wrong sort: your toiletry bag’s contents are scattered across the bathroom cabinet, the chest of drawers and the basement, so a bag-shaped list sends you up and down the stairs all evening.<br><br><b>The new <b>Group by place</b> toggle</b> sits beside <b>Group by packer</b> and re-gathers the same phase by <b>where each thing lives</b> — the field you already fill in as <b>Where it’s stored</b>. Turn it on and you get <b>Bathroom cabinet</b>, <b>Bedroom wardrobe</b>, <b>Basement / cellar</b> as your headings, each with everything that lives there, whatever bag it is destined for. You visit each place <b>once</b>, take everything you need from it, and it is done.<br><br>Your catalogue is unusually well set up for this: <b>421 of your 440 things</b> already have a place recorded, and they sit in just <b>nine</b> of them — so the groups come out a sensible size rather than a hundred headings of one item each.<br><br><b>A tick still means packed.</b> Nothing about what the screen <em>does</em> changes, only how it is arranged — the same rows, the same one-tap slab, the same counters and phases. That is deliberate: you fetch a thing and put it straight into its bag in one movement, so there is no half-done state to record, and inventing one would have made the simple thing complicated.<br><br><b>And the rows tell you what the heading cannot.</b> Grouped by place, each row now names <b>the bag it is going into</b> — because the heading has already told you the cupboard. Grouped by bag it is the other way round, exactly as before. That is the same rule the packing list has always followed, and the same one v136 applied to the bag: <b>never repeat what the screen has just said</b>, so that single grey line is always spent on something you did not already know.<br><br>The toggle appears only when the trip’s things actually have places recorded, is ignored on a trip that has none (rather than herding everything under one “No place set” heading), and is <b>remembered on this device</b> like the others — turn it on once and every trip opens ready to be fetched. It combines with <b>Group by packer</b>, so each cupboard can still split into your things and hers.',
       'The walking-round-the-house half of packing finally has a list shaped for it — one trip to each cupboard instead of one trip per bag.'),
