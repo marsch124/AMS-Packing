@@ -1713,6 +1713,35 @@ test('packer flows onto a trip entry and survives the share bundle', () => {
   assert.equal(back.entries[0].packer, 'Anna');
 });
 
+// v133: the packer became an ITEM property (the standing "whose job is this"),
+// which is what makes "show me only my things" answerable before a trip exists.
+test('packer is intrinsic: an item default reaches the catalog and every trip built from it', () => {
+  assert.ok(INTRINSIC_FIELDS.includes('packer'));
+  const cat = catalogItemFromResolved(newItem({ name: 'Wetsuit', packer: 'Anna' }));
+  assert.equal(cat.packer, 'Anna');
+  // A later edit in the item editor pushes the new answer onto the shared item.
+  assert.equal(applyIntrinsic(cat, { packer: 'Martin' }).packer, 'Martin');
+  // …and clearing it back to "anyone" must actually clear it ('' , not undefined).
+  assert.equal(applyIntrinsic(cat, { packer: '' }).packer, '');
+});
+
+test('an item default packer lands on the trip line buildTotalEntries makes', () => {
+  const list = newList({ name: 'Dive', role: 'base', items: [newItem({ name: 'Wetsuit', packer: 'Anna' }), newItem({ name: 'Fins' })] });
+  const entries = buildTotalEntries(newEvent({ name: 'Trip' }), [list]);
+  assert.equal(entries.find((e) => e.name === 'Wetsuit').packer, 'Anna');
+  assert.equal(entries.find((e) => e.name === 'Fins').packer, '');   // unassigned stays anyone's
+});
+
+test('a per-list link carries no packer of its own — the shared item stays the answer', () => {
+  const link = linkFromResolved(newItem({ name: 'Wetsuit', packer: 'Anna' }), 'item-1');
+  assert.equal(link.packer, undefined);  // intrinsic: left for applyIntrinsic to pass over
+});
+
+test('referencedListValues sees a packer set on a catalog item, not only on a trip', () => {
+  const lists = [newList({ name: 'Dive', items: [newItem({ name: 'Wetsuit', packer: 'Anna' })] })];
+  assert.ok(referencedListValues({ lists }).people.has('anna'));
+});
+
 // --- Template covers (emoji + colour) ---
 test('coerceList: cleans cover emoji and colour, drops junk', () => {
   const l = coerceList(newList({ name: 'Golf', emoji: '  ⛳ ', color: '#3b82f6' }));

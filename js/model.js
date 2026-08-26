@@ -65,7 +65,7 @@ export const CONTAINER_LIMITS_KG = {
 //
 // EDITABLE AND SYNCED (v118). The seven below are only the factory setting: the
 // live list is whatever is in the `phases` store, which the user edits in
-// Settings → When. Unlike People, Owners, Conditions and the storage places —
+// Settings → When. Unlike the Packers, Owners, Conditions and the storage places —
 // all of which live on their own device — this list SYNCS, because a phase is
 // stamped on every item, every membership, every trip entry and every to-do, so a
 // phase missing on one device would make the same item read as a different "When"
@@ -507,9 +507,13 @@ export function coerceItem(it) {
   // (e.g. "Charging kit"). Contextual, never a catalog default: it flows onto the
   // trip line so the packing list can cluster kit-mates together. '' = not in a kit.
   it.kit = typeof it.kit === 'string' ? it.kit : '';
-  // Who packs this on a trip — the assigned person's NAME ('' = anyone / shared).
-  // Purely a trip-line concept (like kit): it rides on the entry, travels in the
-  // share bundle, and drives the "whose stuff" filter. Blank on catalog items.
+  // Who packs this — the assigned person's NAME ('' = anyone / nobody in particular).
+  // INTRINSIC since v133: on a catalog item it is the standing answer to "whose job
+  // is this to pack", set beside Owner in the item editor; `entryFromItem` carries it
+  // onto every trip line built from that item, where it can still be changed for that
+  // one trip. It rides on the entry, travels in the share bundle, and drives the
+  // "whose stuff" filter. (Before v133 it was trip-line only and always blank in the
+  // catalog, so an old backup simply arrives with no defaults set — nothing breaks.)
   it.packer = typeof it.packer === 'string' ? it.packer : '';
   it.storage = typeof it.storage === 'string' ? it.storage : '';   // where it lives at home (free text)
   // Pictures of the item. `photos` holds REFERENCES (ids into the `photos` store),
@@ -822,7 +826,9 @@ export function openShoppingCount(actions) {
   return asArray(actions).filter((a) => a.kind === 'shopping' && !a.done).length;
 }
 
-// --- People (who packs what) ---
+// --- Packers (who packs what) ---
+// Called "People" in the UI until v133; the internal key stays `people`, because
+// rows have synced under that name since v120 and renaming it would strand them.
 // A small managed roster of people (name + colour). An assignment stores the
 // person's NAME on the trip line, so it's self-describing and survives a shared
 // trip even on a device without the roster; the colour is only for display.
@@ -867,7 +873,7 @@ export function assignedPeople(entries) {
 
 // --- The five author-made Settings lists, in ONE shared store ---------------
 //
-// Conditions · Trip presets · People · Owners · Storage places.
+// Conditions · Trip presets · Packers · Owners · Storage places.
 //
 // Until v120 each of these lived in the browser's localStorage, which meant a list
 // you AUTHORED on the Mac simply did not exist on the iPhone. That showed up
@@ -912,7 +918,7 @@ export function assignedPeople(entries) {
 // duplication precisely BY overwriting. Same mechanism, so: never seed.
 export const SHARED_KINDS = Object.freeze(['conditions', 'presets', 'people', 'owners', 'places']);
 
-// The starter roster. In the CODE only — an account that has never edited People
+// The starter roster. In the CODE only — an account that has never edited its Packers
 // stores no rows at all, and both devices show these two straight from here.
 export const DEFAULT_PEOPLE = Object.freeze([
   Object.freeze({ name: 'Martin', color: PERSON_COLORS[0] }),
@@ -1123,7 +1129,7 @@ export const AUDIT_LABELS = Object.freeze({
   places: 'Storage places',
   owners: 'Owners',
   conditions: 'Item conditions',
-  people: 'People',
+  people: 'Packers',
   phases: 'When',
 });
 
@@ -1157,6 +1163,7 @@ export function referencedListValues({ lists = [], events = [], actions = [] } =
     if (!it) continue;
     add('places', it.storage);
     add('owners', it.ownedBy);
+    add('people', it.packer);   // since v133 an item carries a standing packer of its own
     add('conditions', it.condition);
     add('phases', it.phase);
   }
@@ -1249,7 +1256,7 @@ export function newItem(partial = {}) {
     consumable: false, // used up & restocked (feeds the pre-trip shopping list)
     section: '',     // per-template section (a section id, resolved from the membership)
     kit: '',         // kit name this item is packed as part of ('' = none; contextual, like section)
-    packer: '',      // who packs this on a trip (person name; '' = anyone) — trip-line only
+    packer: '',      // whose job it is to pack this (person name; '' = anyone) — an item default that flows onto trip lines
     storage: '',     // where the physical item is kept at home (free text)
     photos: [],      // ids into the photos store (max MAX_PHOTOS)
     thumb: '',       // small inline thumbnail of the first photo, for list rows
@@ -1365,6 +1372,7 @@ function entryFromItem(item, list) {
     perNight: !!item.perNight,
     section: sectionName(list, item.section), // resolved to the DISPLAY NAME so sections merge by name across templates
     kit: item.kit || '',         // kit name carried onto the trip so the packing list can cluster kit-mates
+    packer: item.packer || '',   // the item's standing packer becomes this trip's, still changeable per trip
     storage: item.storage || '', // carried onto the trip so packing shows where to grab it
     sub: asArray(item.sub).slice(),
     note: item.note || '',
@@ -2442,7 +2450,7 @@ export function newMembership(partial = {}) {
 // HERE and both sides stay correct for free.
 export const INTRINSIC_FIELDS = [
   'name', 'swedish', 'category', 'charging', 'chargeType', 'liquid', 'restricted',
-  'perNight', 'consumable', 'shortList', 'weight', 'storage', 'sub',
+  'perNight', 'consumable', 'shortList', 'weight', 'storage', 'packer', 'sub',
   'photos', 'thumb', 'maintenance', 'stats',
   'color', 'size', 'manufacturer', 'model', 'ownedBy', 'acquired', 'price', 'currency',
   'purchaseLink', 'expiry', 'condition', 'retired', 'retiredReason', 'serial',

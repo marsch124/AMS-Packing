@@ -1,7 +1,7 @@
 // app.js — screens, navigation and wiring for AMS Packing List.
 import {
   CATEGORIES, CONTAINERS, CONTAINER_ROLE, CONTAINER_LIST_NAME, containerNames, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
-  DEFAULT_PHASES, PHASE_DEFAULT_EMOJI, coercePhase, newPhase, setPhases, phasesCustomised, phaseOrFallback, phaseColor, defaultPhaseId,
+  PHASE_DEFAULT_EMOJI, coercePhase, newPhase, setPhases, phasesCustomised, phaseOrFallback, phaseColor, phaseOrder, defaultPhaseId,
   ACTIVITY_ORDER, orderActivities,
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, normName, newItem, newList, newEvent,
   TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS, listEmoji, listColor,
@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v132';
+const APP_VERSION = 'v133';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -112,7 +112,7 @@ let STORAGES = [];
 
 // ---------- The five lists you author, shared between your devices ----------
 //
-// Conditions · Trip presets · People · Owners · Storage places. They live in one
+// Conditions · Trip presets · Packers · Owners · Storage places. They live in one
 // synced store, one row per entry; the shape and the reasoning are in model.js,
 // the storage in db.js. THIS is the copy every screen reads.
 //
@@ -1030,15 +1030,23 @@ const aiCareLabel = (it) => { const s = maintenanceStatus(it); return s ? (AI_CA
 
 // Sort choices. `val(row)` pulls the comparable value; `num` compares
 // arithmetically. Blanks always sink to the bottom (see sortRowsBy).
+// A trip's packing list groups by When / Where / Category, so this index says the
+// same three words for the same three things: "Where — the bag" is the container
+// (it used to read "Container" here and "Where" there, for one property), and it
+// sits next to "Where it's stored", which is the other, genuinely different where.
 const AI_SORTS = [
-  { key: 'name',         label: 'Alphabetically',    val: (r) => r.it.name || '' },
-  { key: 'container',    label: 'Container',         val: (r) => r.it.container || '' },
-  { key: 'storage',      label: 'Where it’s stored', val: (r) => r.it.storage || '' },
-  { key: 'weight',       label: 'Weight',            val: (r) => r.it.weight || 0, num: true },
-  { key: 'manufacturer', label: 'Manufacturer',      val: (r) => r.it.manufacturer || '' },
-  { key: 'acquired',     label: 'Acquired',          val: (r) => r.it.acquired || '' },
-  { key: 'warranty',     label: 'Warranty until',    val: (r) => r.it.warranty || '' },
-  { key: 'section',      label: 'Section',           val: (r) => r.section || '' },
+  { key: 'name',         label: 'Alphabetically',      val: (r) => r.it.name || '' },
+  // Timeline position, not the name: sorting the stages alphabetically would put
+  // "After / recovery" before "Day before", which is the opposite of a timeline.
+  // +1 keeps 0 (the first phase) out of sortRowsBy's "blank sinks to the bottom".
+  { key: 'phase',        label: 'When',                val: (r) => (r.it.phase ? phaseOrder(r.it.phase) + 1 : 0), num: true },
+  { key: 'container',    label: 'Where — the bag',     val: (r) => r.it.container || '' },
+  { key: 'storage',      label: 'Where it’s stored',   val: (r) => r.it.storage || '' },
+  { key: 'weight',       label: 'Weight',              val: (r) => r.it.weight || 0, num: true },
+  { key: 'manufacturer', label: 'Manufacturer',        val: (r) => r.it.manufacturer || '' },
+  { key: 'acquired',     label: 'Acquired',            val: (r) => r.it.acquired || '' },
+  { key: 'warranty',     label: 'Warranty until',      val: (r) => r.it.warranty || '' },
+  { key: 'section',      label: 'Section',             val: (r) => r.section || '' },
 ];
 
 // ---- Which views may show one item on more than one line (v128) -------------
@@ -1050,20 +1058,29 @@ const AI_SORTS = [
 // only by a template name: noise, not information. So outside these dimensions the
 // rows COLLAPSE to one per item, listing its templates on the sub-line.
 //
-// Only three dimensions genuinely differ between templates:
+// Four dimensions genuinely differ between templates:
 //   container — a membership may override the bag for one list
+//   phase     — a membership may override the "When" for one list (the same thing
+//               can be a Day-before job in Bike and a Morning one in Run). The
+//               editor only offers the everywhere answer nowadays, but the
+//               exceptions are real: the migration created one wherever a
+//               template's copy disagreed with the item's commonest stage.
 //   section   — a section belongs to ONE template
 //   template  — self-evidently
 // Keep these two sets in step with AI_GROUPS / AI_SORTS if a per-template
 // dimension is ever added, or that view will silently hide real differences.
-const PER_TEMPLATE_GROUPS = new Set(['container', 'section', 'template']);
-const PER_TEMPLATE_SORTS = new Set(['container', 'section']);
+const PER_TEMPLATE_GROUPS = new Set(['container', 'phase', 'section', 'template']);
+const PER_TEMPLATE_SORTS = new Set(['container', 'phase', 'section']);
 
 // Grouping choices. `of(row)` names the bucket ('' = not set, always shown last
 // under `empty`); `order` pins the buckets that have a natural running order.
 const AI_GROUPS = [
   { key: '',             label: 'No grouping' },
-  { key: 'container',    label: 'Container',         of: (r) => r.it.container || '',    order: CONTAINERS,                          empty: 'No bag chosen' },
+  // Like `condition` below, `order` is a FUNCTION: the timeline is editable and
+  // syncs, so a snapshot taken when this module loads would pin the factory seven
+  // and mis-order anything you have since renamed, added or moved.
+  { key: 'phase',        label: 'When',              of: (r) => phaseLabel(r.it.phase),  order: () => PHASES.map((p) => p.label),    empty: 'No stage set' },
+  { key: 'container',    label: 'Where — the bag',   of: (r) => r.it.container || '',    order: CONTAINERS,                          empty: 'No bag chosen' },
   { key: 'storage',      label: 'Where it’s stored', of: (r) => r.it.storage || '',                                                  empty: 'Storage place not set' },
   { key: 'section',      label: 'Section',           of: (r) => r.section || '',                                                     empty: 'No section' },
   { key: 'manufacturer', label: 'Manufacturer',      of: (r) => r.it.manufacturer || '',                                             empty: 'No maker recorded' },
@@ -1074,6 +1091,7 @@ const AI_GROUPS = [
   { key: 'template',     label: 'Template',          of: (r) => r.list.name || '',                                                   empty: 'No template' },
   { key: 'category',     label: 'Category',          of: (r) => r.it.category || '',     order: CATEGORIES,                          empty: 'No category' },
   { key: 'owner',        label: 'Whose it is',       of: (r) => r.it.ownedBy || '',                                                  empty: 'Nobody named' },
+  { key: 'packer',       label: 'Who packs it',      of: (r) => r.it.packer || '',                                                   empty: 'Anyone — not assigned' },
   { key: 'care',         label: 'Care status',       of: (r) => aiCareLabel(r.it),       order: AI_CARE_ORDER,                       empty: 'No care record' },
   { key: 'letter',       label: 'First letter',      of: (r) => (r.it.name || '').trim().charAt(0).toUpperCase() || '',              empty: 'Unnamed' },
 ];
@@ -3198,12 +3216,14 @@ function personChipHTML(name) {
   return `<span class="e-person"><span class="person-dot" style="background:${esc(peopleColor(name))}"></span>${esc(name)}</span>`;
 }
 
-// A "Packed by" <select>: — Anyone — plus the People roster. An assigned name not
+// A "Packed by" <select>: — Anyone — plus the Packers roster. An assigned name not
 // on the roster (e.g. from an imported trip) is kept as its own option so it stays.
+// Used in two places that mean slightly different things by the same answer: on an
+// ITEM it is the standing default, on a TRIP LINE it is who packs it this time.
 function packerSelectHtml(current) {
   const people = loadPeople();
   const opts = [{ value: '', label: '— Anyone —' }, ...people.map((p) => ({ value: p.name, label: p.name }))];
-  if (current && !people.some((p) => normName(p.name) === normName(current))) opts.push({ value: current, label: `${current} (not on your People list)` });
+  if (current && !people.some((p) => normName(p.name) === normName(current))) opts.push({ value: current, label: `${current} (not on your Packers list)` });
   return selectHtml('packer', opts, current || '');
 }
 
@@ -4388,7 +4408,7 @@ function itemEditor(list, it, setOpen, draw) {
   };
   // Open the details panel by default only when it already holds something — or
   // always for a container, whose colour & brand live there and are worth surfacing.
-  const detailsOpen = isContainer || !!(it.color || it.size || it.manufacturer || it.model || it.ownedBy || it.acquired
+  const detailsOpen = isContainer || !!(it.color || it.size || it.manufacturer || it.model || it.ownedBy || it.packer || it.acquired
     || it.price || it.currency || it.purchaseLink || it.expiry || it.condition || it.retired || it.serial || it.qtyOwned || it.warranty);
 
   // The three parts of "which bag", separated so the editor can show which one is
@@ -4472,7 +4492,7 @@ function itemEditor(list, it, setOpen, draw) {
       </details>
 
       <details class="care details-panel"${detailsOpen ? ' open' : ''}>
-        <summary><span class="care-h">Details &amp; ownership</span><span class="care-sum">Make, colour, size, value, owner &amp; lifecycle — all optional</span></summary>
+        <summary><span class="care-h">Details &amp; ownership</span><span class="care-sum">Make, colour, size, value, owner, who packs it &amp; lifecycle — all optional</span></summary>
         <div class="care-body">
           <div class="row2">
             ${growField('color', 'Colour', it.color, '＋ Add a colour…', 'e.g. Black · Navy · Red')}
@@ -4482,8 +4502,12 @@ function itemEditor(list, it, setOpen, draw) {
             ${growField('manufacturer', 'Manufacturer', it.manufacturer, '＋ Add a manufacturer…', 'e.g. Patagonia · Apple')}
             <label class="field"><span>Model <em>product name</em></span><input name="model" value="${esc(it.model)}" placeholder="e.g. Atmos AG 65" autocomplete="off"></label>
           </div>
-          <label class="field"><span>Owner <em>whose it is</em></span>
-            <select name="ownedBy-sel" data-was="${esc(it.ownedBy || '')}">${ownerOptsHTML(it.ownedBy)}</select></label>
+          <div class="row2">
+            <label class="field"><span>Owner <em>whose it is</em></span>
+              <select name="ownedBy-sel" data-was="${esc(it.ownedBy || '')}">${ownerOptsHTML(it.ownedBy)}</select></label>
+            <label class="field"><span>Packed by <em>whose job it is to pack it</em></span>${packerSelectHtml(it.packer)}</label>
+          </div>
+          <p class="field-note">Two different questions, deliberately side by side: <b>Owner</b> is whose the thing is at home, <b>Packed by</b> is whose job it is to put it in the bag. This is the <b>standing</b> answer — every trip built from now on starts with it, and you can still change it for one trip in the item's trip editor.</p>
           <div class="row2">
             <label class="field"><span>Item condition <em>how worn it is</em></span>${selectHtml('condition', conditionOpts(it.condition), it.condition)}</label>
             <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
@@ -4795,6 +4819,7 @@ function itemEditor(list, it, setOpen, draw) {
       it.manufacturer = growVal('manufacturer');
       it.model = ($('input[name=model]', ed).value || '').trim();
       it.ownedBy = ($('select[name="ownedBy-sel"]', ed)?.value || '').trim();
+      it.packer = ($('select[name=packer]', ed)?.value || '').trim();
       it.condition = $('select[name=condition]', ed).value;
       it.retired = $('input[name=retired]', ed).checked;
       it.retiredReason = it.retired ? $('select[name=retiredReason]', ed).value : '';
@@ -5045,7 +5070,7 @@ function allItemsSection(lists) {
       <h2>${IC.list}<span>All items</span></h2>
       <button class="btn ghost sm" type="button" data-ai-add>${IC.plus}<span>New item</span></button>
     </div>
-    <p class="ai-hint">Jump to any item to set where it’s stored, add a photo, or plan its maintenance. An item in <b>several templates</b> is shown <b>once</b>, with its templates named on the line. Sort or group by <b>Container</b>, <b>Section</b> or <b>Template</b> and it splits into a line per template instead — those three are the only things that can differ between them. Either way it is <b>one item</b>: edit it anywhere and every template follows.</p>
+    <p class="ai-hint">Jump to any item to set where it’s stored, add a photo, or plan its maintenance. An item in <b>several templates</b> is shown <b>once</b>, with its templates named on the line. Sort or group by <b>Where — the bag</b>, <b>When</b>, <b>Section</b> or <b>Template</b> and it splits into a line per template instead — those four are the only things that can differ between them. Either way it is <b>one item</b>: edit it anywhere and every template follows.</p>
     <form class="ai-addform hidden" data-ai-form>
       <div class="row2">
         <label class="field"><span>Add to</span>${selectHtml('ai-list', [
@@ -5557,14 +5582,14 @@ function howtoCard() {
         <h3>Syncing your devices</h3>
         <p>Your catalogue can be kept in step across every device you use. Open <b>Settings \u2192 Sync your devices</b> and tap <b>Sign in to sync</b>: you type your e-mail, a <b>one-time code</b> arrives, and that's it \u2014 there is no password. Do the same on your other device and from then on the two match each other automatically.</p>
         <ul>
-          <li><b>What travels:</b> your templates, items, trips, to-dos and kits \u2014 everything that makes up the catalogue \u2014 plus the <b>lists you make in Settings</b>: your <b>When</b> timeline, <b>Item conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>.</li>
+          <li><b>What travels:</b> your templates, items, trips, to-dos and kits \u2014 everything that makes up the catalogue \u2014 plus the <b>lists you make in Settings</b>: your <b>When</b> timeline, <b>Item conditions</b>, <b>Trip presets</b>, <b>Packers</b>, <b>Owners</b> and <b>Storage places</b>.</li>
           <li><b>What stays on the device:</b> your <b>photos</b>, the <b>automatic backups</b> (both below) \u2014 and how each device <b>looks and behaves</b>: the theme, the view you last used, which Settings sections you left open, and this device's own backup dates. You may well want dark on the phone and light on the Mac.</li>
           <li><b>Offline is fine.</b> Changes you make with no signal are queued and sent the moment you're back online.</li>
           <li><b>You are never locked out.</b> The app works fully without signing in \u2014 signing in only starts the sharing. Signing out on a device stops it syncing but leaves everything on it untouched.</li>
         </ul>
 
         <h4>The lists you make in Settings</h4>
-        <p>The rule is <b>lists you author travel; how a device looks does not</b>. Six lists travel: the <b>When</b> timeline, <b>Item conditions</b>, <b>Trip presets</b>, <b>People</b> (names <em>and</em> their colours), <b>Owners</b> and <b>Storage places</b>. Change any of them anywhere and every signed-in device follows.</p>
+        <p>The rule is <b>lists you author travel; how a device looks does not</b>. Six lists travel: the <b>When</b> timeline, <b>Item conditions</b>, <b>Trip presets</b>, <b>Packers</b> (names <em>and</em> their colours), <b>Owners</b> and <b>Storage places</b>. Change any of them anywhere and every signed-in device follows.</p>
         <p><b>The first time each device runs this version</b> it offers up the lists you had already made on it, and they are <b>merged</b> \u2014 an entry your account already has is left exactly as it is, and anything only one device had is added. So the first time round you may see the combined set. <b>Go through the six lists once afterwards and remove anything you don't want</b>: from then on a removal travels too.</p>
         <p>Two things are deliberately never written into your shared data: the <b>standard</b> versions of these lists (the four conditions, Martin &amp; Anna, the standard storage places) live in the app itself, so no device can ever plant them over yours \u2014 and a device <b>waits until it has actually seen your account's copy</b> before offering anything up.</p>
 
@@ -5654,10 +5679,10 @@ function howtoCard() {
         <p>Calling a template “a box of things” is the right picture for what it is <em>for</em>, but it can mislead in one way, so it is worth being exact. An item that belongs to several templates is <b>not several copies</b>. You own <b>one</b> head torch, so the app stores <b>one</b> head torch, and each template holds a <b>link</b> to it. There is no second copy anywhere to drift out of step.</p>
         <p>What that means in practice is a clean split — <b>what the thing IS</b> is shared, <b>how it is packed HERE</b> is local:</p>
         <ul>
-          <li><b>Shared everywhere (the object itself).</b> Its name, category, <b>weight</b>, <b>photos</b>, where it is <b>stored</b>, its <b>care / maintenance record</b>, <b>owner</b>, condition, and all the purchase details — brand, model, serial, price, warranty, expiry — plus its flags (liquid, restricted, charging, per-night, consumable). Change any of these on <b>any</b> line, in <b>any</b> template, and every other template shows the change at once. This is the <b>① The item itself</b> panel in its editor, and its heading means exactly what it says.</li>
+          <li><b>Shared everywhere (the object itself).</b> Its name, category, <b>weight</b>, <b>photos</b>, where it is <b>stored</b>, its <b>care / maintenance record</b>, <b>owner</b>, <b>who packs it</b>, condition, and all the purchase details — brand, model, serial, price, warranty, expiry — plus its flags (liquid, restricted, charging, per-night, consumable). Change any of these on <b>any</b> line, in <b>any</b> template, and every other template shows the change at once. This is the <b>① The item itself</b> panel in its editor, and its heading means exactly what it says.</li>
           <li><b>Local to one template (how it is packed there).</b> Its <b>section</b>, its <b>kit</b>, a per-list <b>bag</b> exception, its <b>“When”</b>, its <b>quantity</b> and <b>note</b>, and the <b>conditions</b> that decide whether it comes on a given trip. These genuinely do differ — the same sports bra can go in the duffel for Run and a pannier for Bike — so they are remembered per template. This is the <b>② In this list</b> panel.</li>
         </ul>
-        <p>Which is what decides how <b>Care → All items</b> lists things. An item is shown <b>once</b>, with its templates named on the line — “Sports bra · <em>Bike, Run</em>”. It splits into <b>a line per template</b> only when you sort or group by <b>Container</b>, <b>Section</b> or <b>Template</b>, because those are the only three things that can differ between them, and there the second line is the whole point: it is how you reach the Run half and the Bike half separately. Group by <b>Whose it is</b> or <b>Where it's stored</b> and a second line could only repeat the first, so there isn't one. The count says <b>“431 items”</b>, and mentions lines only in the views that actually have them.</p>
+        <p>Which is what decides how <b>Care → All items</b> lists things. An item is shown <b>once</b>, with its templates named on the line — “Sports bra · <em>Bike, Run</em>”. It splits into <b>a line per template</b> only when you sort or group by <b>Where — the bag</b>, <b>When</b>, <b>Section</b> or <b>Template</b>, because those are the only four things that can differ between them, and there the second line is the whole point: it is how you reach the Run half and the Bike half separately. (<b>When</b> joined that list in v133, when it was added to Sort and Group — the same thing really can be a Day-before job in one template and a Morning one in another.) Group by <b>Whose it is</b>, <b>Who packs it</b> or <b>Where it's stored</b> and a second line could only repeat the first, so there isn't one. The count says <b>“431 items”</b>, and mentions lines only in the views that actually have them.</p>
         <p class="hint">A quick way to hold it: <b>an item is a thing you own; a membership is that thing's place in one list.</b> You have one of the first and as many of the second as you have templates it belongs to. Ticking an item into another template adds a link — it never duplicates the item, and it never touches its photos or its care history.</p>
  <p><b>Kits.</b> A <b>kit</b> is a bundle of small things you always pack together — a <b>charging kit</b> (cables, plug, power bank), a <b>wash bag</b>, a <b>first-aid pouch</b>. Build your kits under <b>Settings → Kits</b>: give each a name and an emoji, then search your catalogue to pick its members. Once a kit exists you can add it <b>as one unit</b> in two places — from a <b>template</b> (its <b>Add a kit</b> button, so every trip built from that template includes the whole bundle) or straight onto a single <b>trip</b> (the <b>Kit</b> button on the trip’s toolbar). On the Packing List the kit’s items <b>cluster together</b> under a <b>kit header</b> with a <b>Pack all</b> button, so you tick the whole pouch off in one tap. Need to tweak one trip? Open any item on a trip and use its <b>Kit</b> field to add it to, move it between, or clear it from a kit just for that trip. Kits are included in your backups and automatic snapshots. (Deleting a kit only removes the bundle — items you already added to templates or trips stay put.)</p>
         <ul>
@@ -5723,7 +5748,7 @@ function howtoCard() {
  <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b>, remove or <b>reorder</b> places — under <b>Storage places</b> in <b>Settings</b>. <b>The order you put them in there is the order in this dropdown</b>, so the two or three places you actually use can sit at the top instead of wherever the alphabet puts them.</li>
  <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one. Pictures are kept in their own place and the item just points at them, so your lists and backups stay quick; if you ever want to reclaim space, <b>Settings → Your data → Tidy up photos</b> frees any picture nothing uses any more.</li>
           <li><b>Maintenance</b> — how and how often to look after it: a <b>maintenance cadence</b> (monthly … every 2 years, or a custom number of days), when it was <b>last done</b>, free-text <b>how-to notes</b> (steps, products, settings), and a <b>how-to link</b>. Tap <b>Log done today</b> to record a service — it resets the schedule and adds a dated entry to the item's maintenance history.</li>
-          <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em> and who owns it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, <b>owner</b> (a dropdown of your <b>Owners</b> list — see <b>Settings → Owners</b> — with <b>＋ Add an owner…</b> to name a new one on the spot and <b>⚙ Manage owners…</b> to rename or remove one without leaving the item; an owner is <em>not</em> a Person, so “Shared” or “The kids” can own things without appearing in every “Packed by” picker), <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
+          <li><b>Details &amp; ownership</b> (a second panel, all optional) — record what the thing <em>is</em>, who owns it and who packs it: <b>colour</b>, <b>size</b> and <b>manufacturer</b> (dropdowns that grow as you use them, or “＋ Add new…”), <b>model</b>, then the pair that answers the two questions people mix up, side by side: <b>Owner</b> (a dropdown of your <b>Owners</b> list — see <b>Settings → Owners</b> — with <b>＋ Add an owner…</b> to name a new one on the spot and <b>⚙ Manage owners…</b> to rename or remove one without leaving the item) and <b>Packed by</b> (a dropdown of your <b>Packers</b> — see <b>Settings → Packers</b>). <b>Owner</b> is whose the thing <em>is</em>; <b>Packed by</b> is whose job it is to <em>pack</em> it, and it is inherited by every trip built from then on. They are separate lists on purpose, so “Shared” or “The kids” can own things without appearing in every “Packed by” picker. Then <b>condition</b>, <b>quantity owned</b>, <b>price</b> + <b>currency</b>, a <b>purchase / reorder link</b>, and the <b>acquired</b>, <b>warranty-until</b> and <b>expiry / replace-by</b> dates. Since each item lives once in the catalog, these belong to the item itself — set once, the same everywhere it appears.</li>
  <li><b>Not in use</b> (in the same panel) — tick this to <b>retire</b> an item you no longer pack (sold, broken, destroyed, replaced or lost — pick the <b>reason</b> from the dropdown). The item is <b>kept exactly as it is</b> — photos, care record, history and template memberships all stay — but it is <b>never added to a new trip</b>, so old gear stops cluttering your packing lists. It still appears in your template and Care lists, <b>greyed out</b> with a <b>Not in use</b> tag, and the new <b>Not in use</b> filter chip rounds them all up. (This is different from <b>Item condition</b>: “Needs replacing” is a thing you still pack; “Not in use” is one you’ve stopped packing.) Trips you’ve already built are left untouched.</li>
         </ul>
         <p>The <b>Care</b> tab then gathers everything with care info across all your lists, under the heading <b>Maintenance list</b> (below the Containers / All items / Shopping links at the top, and above the <b>All items</b> browser at the bottom). It shows two ways:</p>
@@ -5734,7 +5759,9 @@ function howtoCard() {
  <p>Only items you give care info to appear in those two views — your everyday clothes and toiletries stay out of it. When something's overdue or due soon, a <b>reminder</b> also shows on the <b>Home</b> screen.</p>
  <p>Below that sits <b>All items</b> — a searchable index of <b>every item in every template</b>. Type a name (or a storage place) to filter, then tap a result to jump <b>straight into that item's editor</b> with its <b>Storage &amp; maintenance</b> panel already open — the quickest way to add or update care info without hunting through the Templates tab. Under the search box, <b>quick-filter chips</b> let you isolate a whole category at once — <b>No template</b> (loose items), <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> and <b>Not in use</b>; tap several to combine them, and keep typing to narrow further. The <b>＋ New item</b> button creates an item in any template you pick — or choose <b>“No template · keep as a loose item”</b> to drop it straight into the Loose items bin — and takes you into editing it right away.</p>
  <p>Below the category chips sit two more filter rows, <b>Item condition</b> and <b>Section</b>, which appear whenever they’d actually split the collection. The rule is worth knowing: chips <b>in the same row</b> mean “either of these”, and the <b>rows combine</b> — so <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn, not liquids plus worn things. Each chip’s number is what you’d get if you tapped it, counted against the filters already on, and <b>Show all</b> clears every row at once. (One item that lives in three templates is three rows here — that’s why a section, which belongs to a template, can be filtered at all.)</p>
- <p><b>Sort</b> reorders the whole index — <b>Alphabetically</b>, <b>Container</b>, <b>Where it’s stored</b>, <b>Weight</b>, <b>Manufacturer</b>, <b>Acquired</b>, <b>Warranty until</b> or <b>Section</b> — and <b>▲/▼</b> flips the direction. Anything with that field left blank <b>always sinks to the bottom</b>, whichever direction you choose, so “Manufacturer, Z–A” shows you makers rather than three hundred blanks. <b>Group</b> then breaks the list into headed, <b>collapsible</b> sections — by <b>Container</b>, <b>Where it’s stored</b>, <b>Section</b>, <b>Manufacturer</b>, <b>Item condition</b>, <b>Template</b>, <b>Category</b>, <b>Whose it is</b>, <b>Care status</b> or <b>First letter</b> — each showing how many it holds, with your sort still applying inside each one and the “not set” bucket always last. Tap a group’s header to fold it away. Sort and grouping are <b>remembered on this device</b>; the filter chips deliberately are not, so the index always opens showing everything.</p>
+ <p><b>Sort</b> reorders the whole index — <b>Alphabetically</b>, <b>When</b>, <b>Where — the bag</b>, <b>Where it’s stored</b>, <b>Weight</b>, <b>Manufacturer</b>, <b>Acquired</b>, <b>Warranty until</b> or <b>Section</b> — and <b>▲/▼</b> flips the direction. Anything with that field left blank <b>always sinks to the bottom</b>, whichever direction you choose, so “Manufacturer, Z–A” shows you makers rather than three hundred blanks. <b>When</b> sorts down the <em>timeline</em>, not the alphabet, so Preparations comes before the front door. <b>Group</b> then breaks the list into headed, <b>collapsible</b> sections — by <b>When</b>, <b>Where — the bag</b>, <b>Where it’s stored</b>, <b>Section</b>, <b>Manufacturer</b>, <b>Item condition</b>, <b>Template</b>, <b>Category</b>, <b>Whose it is</b>, <b>Who packs it</b>, <b>Care status</b> or <b>First letter</b> — each showing how many it holds, with your sort still applying inside each one and the “not set” bucket always last. Tap a group’s header to fold it away. Sort and grouping are <b>remembered on this device</b>; the filter chips deliberately are not, so the index always opens showing everything.</p>
+ <p><b>Three of these words mean the same here as they do on a trip.</b> A packing list groups by <b>When / Where / Category</b>, and so does this index — <b>Where — the bag</b> is the container an item goes in, which is exactly what a trip's <b>Where</b> means. It sits deliberately next to <b>Where it’s stored</b>, the other, quite different <em>where</em>: not the bag it travels in, but the cupboard you fetch it from.</p>
+ <p><b>Who packs it</b> groups the catalogue by the person whose job each thing is — group by it, fold everyone else's heading shut, and what is left on screen is your share of the packing, before any trip exists. See <b>Who packs what</b> below.</p>
 
         <h3>Actions — your to-do list</h3>
         <p>The <b>Actions</b> tab (the red one in the bottom bar) is a proper <b>to-do list</b> for the things you need to <em>do</em>, not pack. Actions come in two kinds:</p>
@@ -5755,18 +5782,22 @@ function howtoCard() {
  <p><b>Fixing something mid-pack.</b> Tapping the row itself always means “packed” — that's the whole point of this screen — so editing has its own small <b>pen</b> at the right-hand end of each row. Tap it and the quick editor opens in place: quantity, which bag, when, section, kit, who packs it, weight, the flags and a note. <b>Save</b> and you're back in Packing Mode at the same phase, right where you were. Need more than that? The editor's <b>Edit the full item</b> button opens the item's full editor (conditions, templates, storage &amp; care, photos) — and saving <em>there</em> also brings you straight back here, so a detour never costs you your place. A row you're editing stays on screen even if you tick it.</p>
 
         <h3>Who packs what</h3>
-        <p>Packing with someone? First set up your <b>People</b> in <b>Settings → People</b> — each with a name and a colour (Martin &amp; Anna are there to start; add, rename or recolour anyone). Then on a trip, open an item and choose <b>Packed by</b>. Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row appears at the top of the packing list so you can show <b>Everyone</b>, just one person, or the still-<b>Unassigned</b> items (each with a count). The same filter sits atop <b>Packing Mode</b>, so each of you can pack only your own things. It’s per-trip, and it <b>travels inside a shared trip</b> — send the trip to someone and the items you gave them arrive marked as theirs (a name that isn’t on their People list still shows, just with an auto-picked colour). Renaming a person carries the new name onto every trip they’re already on.</p>
+        <p>Packing with someone? First set up your <b>Packers</b> in <b>Settings → Packers</b> — each with a name and a colour (Martin &amp; Anna are there to start; add, rename or recolour anyone).</p>
+        <p><b>Then say it once, on the item.</b> Open any item, unfold <b>Details &amp; ownership</b>, and beside <b>Owner</b> you'll find <b>Packed by</b>. That is the <b>standing</b> answer — whose job it is to pack that thing, every time — and it sits next to Owner on purpose, because the two questions get asked together and are easy to confuse: <b>Owner</b> is whose the thing <em>is</em>, <b>Packed by</b> is whose job it is to <em>pack</em> it. Your wetsuit can be owned by “Shared” and packed by Anna.</p>
+        <p><b>Every trip then starts already divided.</b> When a trip builds its packing list, each item arrives carrying its usual packer, so you never have to split a trip by hand again. If one particular trip is different — she's packing the tent this time — open the item <em>on that trip</em> and change <b>Packed by</b> there; that changes this trip only and leaves the standing answer alone.</p>
+        <p><b>Seeing only your own things.</b> Assigned items carry a little <b>colour dot</b>, and a <b>“Who packs”</b> chip row sits at the top of the packing list: <b>Everyone</b>, one person, or the still-<b>Unassigned</b> items, each with a live count. Tap your own name and your wife's things drop out of sight. The same filter sits atop <b>Packing Mode</b>, so each of you can step through only your own share, phase by phase. <em>(The row only appears once something on the trip actually has a packer — which, before you could set one on the item itself, meant it stayed hidden until you had assigned things by hand. Fill in a few <b>Packed by</b> fields and it's simply there.)</em> Away from any trip, <b>Care → All items</b> can <b>Group</b> by <b>Who packs it</b>, which splits the whole catalogue into whose job each thing is.</p>
+        <p>The split <b>travels inside a shared trip</b> — send the trip to someone and the items you gave them arrive marked as theirs (a name that isn't on their own Packers list still shows, just with an auto-picked colour). <b>Renaming a packer</b> carries the new name onto everything at once: every item in your catalogue and every trip they are already on.</p>
 
         <h3>When — the stages of a pack</h3>
         <p>Every item carries a <b>When</b>: the stage of the pack it belongs to. It is what your packing list is grouped by, and what <b>Packing Mode</b> walks you through one step at a time. The app starts with seven — <b>Preparations</b>, <b>≥1 week ahead</b>, <b>Day before</b>, <b>Morning list</b>, <b>At the front door</b>, <b>Wear / carry on the day</b> and <b>After / recovery</b> — but the list is <b>yours</b>, in <b>Settings → When</b>. Rename them by typing straight over the name, give each one an <b>emoji</b> and a <b>colour</b>, move them up and down the timeline with <b>▲ ▼</b>, remove ones you never use, or add your own — “Load the car”, “Night before the flight”.</p>
         <p><b>Days ahead</b> is when that stage starts nudging you: set it to 7 and the app begins asking you to pack it a week before you leave. <b>-1</b> means after the trip, which is what <b>After / recovery</b> uses. The <b>to-dos</b> tick marks a stage that holds things to <em>do</em> rather than things to pack — that is what makes <b>Preparations</b> behave differently from the rest.</p>
-        <p><b>Nothing can be lost by any of this.</b> Renaming keeps every item exactly where it was — the app remembers a phase by a hidden name that never changes, so only the words you read are different. Removing a stage that things are filed under makes you say <b>when those things get packed instead</b>, and tells you how many there are — counting your items, the lines on trips you have already built, and your to-dos. There is a <b>Reset to the standard seven</b> if you want the original timeline back.</p>
-        <p><b>This list syncs between your devices</b> — it was the first of the Settings lists to do so, and since v120 your Item conditions, Trip presets, People, Owners and Storage places travel with it. A stage is stamped on every item, so one that existed on only a single device would make the same item read as a different “When” there. Change the timeline on the Mac and the iPhone follows. While one device is still on an older version, anything it doesn't recognise is shown as-is and <b>never quietly moved</b>.</p>
+        <p><b>Nothing can be lost by any of this.</b> Renaming keeps every item exactly where it was — the app remembers a phase by a hidden name that never changes, so only the words you read are different. Removing a stage that things are filed under makes you say <b>when those things get packed instead</b>, and tells you how many there are — counting your items, the lines on trips you have already built, and your to-dos. <em>(There used to be a <b>Reset to the standard seven</b> button here. It was removed in v133: every item in the catalogue points into this timeline, so a single tap that rewrites the whole thing is a lot of damage to leave lying around for a button you would never mean to press. Everything it did is still available a step at a time — rename, reorder, remove, add.)</em></p>
+        <p><b>This list syncs between your devices</b> — it was the first of the Settings lists to do so, and since v120 your Item conditions, Trip presets, Packers, Owners and Storage places travel with it. A stage is stamped on every item, so one that existed on only a single device would make the same item read as a different “When” there. Change the timeline on the Mac and the iPhone follows. While one device is still on an older version, anything it doesn't recognise is shown as-is and <b>never quietly moved</b>.</p>
 
         <h3>Whose things are whose</h3>
         <p><b>Owner</b> — on an item, under <b>Details &amp; ownership</b> — is a dropdown of a list you keep in <b>Settings → Owners</b>. <b>Add</b> a name, <b>rename</b> one (every item that is theirs follows, in one go) or <b>remove</b> one — and if things are theirs, the app asks <b>who they go to</b> first, so an item is never left pointing at somebody who no longer exists. Each name shows how many items are theirs, and the list is ordered <b>biggest owner first</b> so you can see at a glance whose most of the kit is (the dropdowns stay A–Z — there you already know the name you're after). You never have to go to Settings to do it: the same two choices, <b>＋ Add an owner…</b> and <b>⚙ Manage owners…</b>, sit at the bottom of the Owner dropdown itself — in the item editor and in <b>Care → All items · table</b>, where you can assign owners down a whole column.</p>
-        <p><b>Owners are not People.</b> <b>People</b> is who <em>packs</em> on a trip; <b>Owners</b> is who <em>owns</em> the thing at home. Keeping them apart means “Shared”, “The kids” or “The RV” can own gear without ever appearing in a “Packed by” picker. Your People are offered as owners to start with, but naming an owner never creates a person.</p>
-        <p><b>The Owners list travels between your devices</b> (since v120), along with People, Storage places, Item conditions and Trip presets — add a name on the Mac and the iPhone has it. The owner <em>on an item</em> has always travelled with your data, which is why this list could heal itself even before that: a name given on the other device is offered in the dropdown as a name in use, whether or not the roster itself has caught up yet.</p>
+        <p><b>Owners are not Packers.</b> <b>Packed by</b> is whose job it is to <em>pack</em> the thing; <b>Owner</b> is who <em>owns</em> it. The two fields sit side by side under <b>Details &amp; ownership</b> so the pair is obvious at the moment you fill them in — and they stay two separate lists so that “Shared”, “The kids” or “The RV” can own gear without ever appearing in a “Packed by” picker. Your Packers are offered as owners to start with, but naming an owner never creates a packer.</p>
+        <p><b>The Owners list travels between your devices</b> (since v120), along with Packers, Storage places, Item conditions and Trip presets — add a name on the Mac and the iPhone has it. The owner <em>on an item</em> has always travelled with your data, which is why this list could heal itself even before that: a name given on the other device is offered in the dropdown as a name in use, whether or not the roster itself has caught up yet.</p>
 
         <h3>Weather (optional, per trip)</h3>
         <p>Add a <b>destination</b> to a trip, then tap <b>Get forecast</b>. The forecast comes from Open-Meteo (free, no account), is cached on the trip so it still shows offline, and only fetches when you ask and you're online.</p>
@@ -5799,10 +5830,10 @@ function howtoCard() {
  <p>If you use both your Mac and your iPhone: <b>since v120 the condition list travels between them</b>, so a condition you invent on the Mac is on the iPhone with its proper name. Before that it did not, and this was the list it hurt most — an item carries the condition’s internal name and that always travelled, but only the list holds the readable one, so “Failing” arrived as unreadable text. Even then nothing was ever lost: the app deliberately <b>never rewrites a rating it doesn’t recognise</b>, which is also what lets a device still on an older version sit alongside one that isn’t.</p>
 
         <h3>Finding your way round Settings</h3>
-        <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>People: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
+        <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>Packers: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
         <p>Those summary lines are <b>live</b>. Add a person, remove a storage place, delete a trip preset, and the line above the list updates as you do it — you never have to leave Settings and come back to find out whether the change took. That matters because the editors here deliberately redraw <b>only their own list</b> when you make a change, so that renaming something halfway down a long page doesn’t throw away your scroll position.</p>
         <p>Each section has its <b>own colour and icon</b>, fixed for good, so you come to know them by sight rather than by reading. Closed, the colour sits in the little icon tile; <b>open, it takes over the panel</b> — the tile fills in, and the heading, the edge and a faint wash of the background all follow — so you always know which section you are inside. The colour is an <em>identity</em>, not a warning light: it never changes to tell you something is wrong. When something does need attention, the app says so in words, and on the Home screen.</p>
-        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>People</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Item conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
+        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>Packers</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Item conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
@@ -5830,6 +5861,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v133', '2026-08-27 · 14:00 UTC', false, 'Say who packs a thing ONCE — “People” is now “Packers”, and it lives beside Owner',
+      '<b>The question you asked was “how do I see only my own things?”, and the honest answer was: you could, but only after doing the work twice.</b> Assigning a packer was a <b>per-trip</b> job. Nothing in the catalogue remembered that the wetsuit is Anna’s to pack — so every new trip started with all 431 things unassigned, and you had to divide them by hand again. Worse, the <b>“Who packs”</b> filter row only appears once something on the trip <em>has</em> a packer, so on a fresh trip it wasn’t there at all. You went looking for a filter that was hiding because nothing had been assigned, and nothing had been assigned because assigning was per-trip. That is the whole of it.<br><br><b>(1) It is now a property of the item.</b> Open any item, unfold <b>Details &amp; ownership</b>, and <b>Packed by</b> sits <b>directly beside Owner</b> — where you asked for it, and where it belongs, because the two questions get asked in the same breath and are the two most easily confused things in the app: <b>Owner</b> is whose the thing <em>is</em>, <b>Packed by</b> is whose job it is to <em>pack</em> it. A wetsuit can be owned by “Shared” and packed by Anna. Say it once, and <b>every trip built from then on arrives already divided</b> — the filter row is simply there, with live counts, from the moment the list is made. One trip different from the rest? Change <b>Packed by</b> on the item <em>on that trip</em> and the standing answer is left alone, exactly as the bag and the “When” already work.<br><br><b>(2) “People” is now “Packers”.</b> One word, and it says what the list is <em>for</em> rather than what its entries happen to be. “People” told you nothing — the Owners list is people too, which is precisely why the two kept getting muddled. <b>Settings → Packers</b> now sits beside <b>Settings → Owners</b> and the pair reads as the pair it is. Nothing in your data changed and nothing needs re-entering: it is the same list, the same two names, the same colours, still syncing between your devices. Renaming a packer now carries the new name onto <b>every item in the catalogue as well as every trip</b> — before, only the trips followed, which would have stranded the new item-level answers.<br><br><b>(3) Care → All items can group by “Who packs it”.</b> Away from any trip, that splits the whole catalogue by whose job each thing is — fold everyone else’s heading shut and what is left is your share. Useful for dividing things up in the first place, on a wet Sunday rather than the night before a flight.<br><br><b>(4) “When” and “Where” joined Sort and Group on All items.</b> A trip’s packing list has always offered <b>When / Where / Category</b>; this index offered neither of the first two, and called the bag <b>“Container”</b> — one property, two names, depending which screen you were on. It is now <b>“Where — the bag”</b> in both dropdowns, sitting next to <b>“Where it’s stored”</b> so the two <em>wheres</em> are plainly different questions: the bag it travels in, and the cupboard you fetch it from. <b>When</b> is new to both, and sorts <b>down the timeline</b>, not the alphabet — Preparations before the front door, which is the only ordering that means anything. Grouping by <b>When</b> splits an item into a line per template, like Where and Section already do, because the same thing genuinely can be a Day-before job in one template and a Morning one in another.<br><br><b>(5) “Reset to the standard seven” is gone.</b> As you said: never going to be used, and a risk to leave lying around. Every item in the catalogue points into that timeline, so one tap and one OK could have rewritten the thing all 431 of them depend on. Everything it did is still there a step at a time — rename, reorder, <b>remove</b> (which still makes you say where its things go first), add.<br><br><em>A note on the entries below this one: they still say <b>People</b>, because that is what it was called when they were written. History is left as it happened.</em>',
+      'Whose job it is to pack a thing is now something the app remembers about the thing — so every trip starts already split between you, and “show me only my share” is one tap instead of an evening’s work.'),
     v('v132', '2026-08-27 · 09:30 UTC', false, 'The rest of the Settings summary lines keep count as you edit',
       '<b>Finishing a job v130 only half did.</b> When you removed three storage places and the line above them carried on claiming seventeen, that got fixed — but only for <b>Storage places</b>, because that was the list in front of us. The same staleness was sitting in the other sections, waiting.<br><br>Every section in Settings shows a one-line summary of what is inside it — <em>“Martin, Anna”</em>, <em>“2 presets”</em>, <em>“4 conditions · New, Good, Worn, Needs replacing”</em>. Those lines were written <b>when the screen was drawn</b> and then left alone, while the list underneath carried on changing. So you could add a person, watch them appear in the list, and still read the old names on the line directly above — with no way to tell which of the two was telling the truth.<br><br>Checking each one honestly turned up a smaller problem than expected: <b>Item conditions</b>, <b>When</b> and <b>Owners</b> had already been quietly keeping themselves up to date. The two genuinely stale ones were <b>People</b> and <b>Trip presets</b> — and <b>Kits</b>, which was not on the list but had exactly the same fault. All of them now update the moment you add, rename or remove something, along with the small details you would notice if they were wrong: <em>“1 preset”</em> rather than <em>“1 presets”</em>, and the <em>(standard)</em> note dropping off the conditions and the timeline as soon as you customise them.<br><br>The reason this kept coming back is that each section had been fixing the problem <b>its own way</b>, or not at all — six sections, four different answers. They now all call <b>one</b> piece of code, and each section’s summary comes from the <b>same</b> function whether the screen is being drawn for the first time or redrawn after an edit. The two can no longer disagree, because there is no longer a second version to disagree with.',
       'The line above each Settings list always matches the list itself — so you can trust what Settings tells you at a glance, without opening every section to check.'),
@@ -6610,7 +6644,7 @@ async function renderSearch() {
 // The signed-in account, said as a NAME rather than an address:
 // "martin.schabbauer@icloud.com" → "Martin". An address is how you sign in; a
 // name is what you want to read when the app tells you who this device is
-// syncing as. A name already on your People roster wins, so the spelling matches
+// syncing as. A name already on your Packers roster wins, so the spelling matches
 // the one you use everywhere else. Anything that isn't an address is left alone.
 function accountName(user) {
   const raw = String(user || '').trim();
@@ -6697,7 +6731,7 @@ async function syncCard(loaded = {}) {
   const audit = await runListCheck(loaded).catch(() => null);
   const body = st.signedIn
     ? `<p class="data-status">${ic('check', 'sm')}<b>Syncing as ${esc(accountName(st.user))}</b></p>
-       <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on — and so are the lists you make here: <b>When</b>, <b>Item conditions</b>, <b>Trip presets</b>, <b>People</b>, <b>Owners</b> and <b>Storage places</b>. Changes made offline are sent as soon as you're back online.</p>
+       <p class="muted">Your templates, items, trips, to-dos and kits are kept in step across every device you sign in on — and so are the lists you make here: <b>When</b>, <b>Item conditions</b>, <b>Trip presets</b>, <b>Packers</b>, <b>Owners</b> and <b>Storage places</b>. Changes made offline are sent as soon as you're back online.</p>
        <p class="muted sync-note">Photos, the automatic backups, and how each device looks — theme, view, which sections are open — deliberately stay on the device they belong to.</p>`
     : `<p class="data-status">${ic('warn', 'sm')}<b>Not syncing on this device</b></p>
        <p class="muted">Sign in with your e-mail to keep this device in step with your others. You'll get a one-time code by e-mail — there's no password. Everything here keeps working offline either way.</p>`;
@@ -6711,7 +6745,7 @@ async function syncCard(loaded = {}) {
       ${st.signedIn ? '<button class="btn ghost" data-sync="resend">Re-send my lists to my other devices</button>' : ''}
       <button class="btn ghost danger-txt" data-sync="reset">Replace this device with the account copy</button>
     </div>
-    ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Item conditions, Trip presets, People, Owners or Storage places look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
+    ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Item conditions, Trip presets, Packers, Owners or Storage places look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
     <p class="muted sync-note">Use <b>Replace this device</b> only on a device holding the <em>wrong</em> catalogue — it erases what is on this one and takes the account's copy instead. The device with your real catalogue should <b>sign in</b>, not this. It is <b>two steps</b>: it erases and reloads, and then you have to <b>sign in again</b> before anything downloads.</p>
     <h3 class="sync-check-h">Is this device missing anything?</h3>
     <div id="sync-check-slot">${listCheckBlock(audit)}</div>
@@ -6832,7 +6866,7 @@ const SETTINGS_TONES = {
   kits:        '#7c5cd6',  // violet
   people:      '#2f6fe0',  // blue
   places:      '#0a92a6',  // teal (the app's brand)
-  owners:      '#5b7f2a',  // olive — whose the gear is (distinct from People's blue beside it)
+  owners:      '#5b7f2a',  // olive — whose the gear is (distinct from the Packers' blue beside it)
   phases:      '#8a3ffc',  // electric violet — the timeline of a pack
   conditions:  '#b45309',  // burnt amber — wear and lifecycle
   presets:     '#c9821a',  // amber
@@ -7168,10 +7202,10 @@ async function renderSettings() {
     }
   });
 
-  // People — the roster for "who packs what" on a trip.
+  // Packers — the roster for "whose job is it to pack this".
   const peopleCard = h(`<div class="card block">
-    <h2>People</h2>
-    <p class="muted">Who you pack with. Assign an item to a person on a trip (in its editor), then filter the packing list — and <b>Packing Mode</b> — by person, so each of you sees just your things. Names travel with a <b>shared trip</b>, so the split survives when you send it to someone.</p>
+    <h2>Packers</h2>
+    <p class="muted">Who does the packing in your household. Give an item its usual packer in its editor, under <b>Details &amp; ownership</b> → <b>Packed by</b>, and every trip built from then on starts with that answer — change it there for one trip if a particular trip differs. Then filter the packing list — and <b>Packing Mode</b> — by person, so each of you sees just your own things. Names travel with a <b>shared trip</b>, so the split survives when you send it to someone. <b>Not the same as Owners</b>: that is whose the thing <em>is</em>, this is whose job it is to <em>pack</em> it.</p>
     <div class="people-list" data-people></div>
     <div class="btnrow"><button class="btn" data-person="add">${IC.plus}<span>Add person</span></button></div>
   </div>`);
@@ -7187,7 +7221,7 @@ async function renderSettings() {
             <button type="button" class="iconbtn sm" data-person-edit="${esc(p.id)}" aria-label="Rename ${esc(p.name)}" title="Rename">${IC.edit}</button>
             <button type="button" class="iconbtn sm" data-person-del="${esc(p.id)}" aria-label="Remove ${esc(p.name)}" title="Remove">${IC.trash}</button>
           </span></div>`).join('')
-      : '<p class="muted">No people yet — add one to start splitting who packs what.</p>';
+      : '<p class="muted">No packers yet — add one to start splitting who packs what.</p>';
   };
   drawPeople();
   peopleCard.addEventListener('change', async (e) => {
@@ -7209,7 +7243,7 @@ async function renderSettings() {
     await refreshShared();
     drawPeople();
     if (add) {
-      const name = (prompt('Name of the person:', '') || '').trim();
+      const name = (prompt('Name of the packer:', '') || '').trim();
       if (!name) return;
       const people = loadPeople();
       if (people.some((p) => p.name.toLowerCase() === name.toLowerCase())) { alert(`“${name}” is already on the list.`); return; }
@@ -7221,7 +7255,7 @@ async function renderSettings() {
       const people = loadPeople();
       const p = people.find((x) => x.id === edit.dataset.personEdit);
       if (!p) return;
-      const name = (prompt('Rename this person:', p.name) || '').trim();
+      const name = (prompt('Rename this packer:', p.name) || '').trim();
       if (!name || name === p.name) return;
       if (people.some((x) => x.id !== p.id && x.name.toLowerCase() === name.toLowerCase())) { alert(`“${name}” is already on the list.`); return; }
       const old = p.name;
@@ -7229,7 +7263,7 @@ async function renderSettings() {
       // The roster is keyed by the NAME, so a rename creates a new row — say so, or
       // the person would end up on the list twice under both spellings.
       await savePeople(people, { remove: [sharedRowId('people', old)] });
-      // Carry the new name onto every trip entry assigned to the old name.
+      // Carry the new name onto every item and every trip line assigned to the old one.
       const moved = await renamePackerEverywhere(old, name);
       drawPeople();
       if (moved) render();
@@ -7237,7 +7271,7 @@ async function renderSettings() {
       const people = loadPeople();
       const p = people.find((x) => x.id === del.dataset.personDel);
       if (!p) return;
-      if (!confirm(`Remove “${p.name}” from the People list?\n\nItems already assigned to them on a trip keep the name; this just takes them off the roster.`)) return;
+      if (!confirm(`Remove “${p.name}” from the Packers list?\n\nAnything already assigned to them — items in your catalogue and lines on trips you have built — keeps the name; this just takes them off the roster, so they stop being offered in the “Packed by” dropdowns.`)) return;
       if (sharedStored('people')) await deleteShared([p.id]);
       else await savePeople(people.filter((x) => x.id !== p.id), { remove: [p.id] });
       drawPeople();
@@ -7247,7 +7281,7 @@ async function renderSettings() {
   // ---- Owners: whose each thing is ----
   const ownerCard = h(`<div class="card block">
     <h2>Owners</h2>
-    <p class="muted">Whose things are whose — set on an item under <b>Details &amp; ownership</b>, and shown as a tag on its row. This is the same list every <b>Owner</b> dropdown offers, so a name is spelled once and picked everywhere. <b>Rename</b> one and every item that is theirs follows; <b>remove</b> one and you say who its things go to first. Separate from <b>People</b> on purpose: People is who <em>packs</em>, so “Shared” can own things without joining every “Packed by” picker.</p>
+    <p class="muted">Whose things are whose — set on an item under <b>Details &amp; ownership</b>, and shown as a tag on its row. This is the same list every <b>Owner</b> dropdown offers, so a name is spelled once and picked everywhere. <b>Rename</b> one and every item that is theirs follows; <b>remove</b> one and you say who its things go to first. Separate from <b>Packers</b> on purpose, and they sit side by side in the item editor so the difference is plain: a Packer is whose job it is to <em>pack</em> the thing, an Owner is whose the thing <em>is</em> — which is why “Shared”, “The kids” or “The RV” can own gear without ever joining a “Packed by” picker.</p>
   </div>`);
   const ownersEditor = buildOwnersEditor({
     onChanged: () => {
@@ -7260,11 +7294,10 @@ async function renderSettings() {
   // ---- When: the phases of a pack, in timeline order ----
   const phaseCard = h(`<div class="card block">
     <h2>When</h2>
-    <p class="muted">The stages of a pack, in the order they happen — set on an item as its <b>When</b>, and the headings your packing list and <b>Packing Mode</b> are built from. Give each one an <b>emoji</b> and a <b>colour</b>, rename it, drag it up or down the timeline, or add your own. <b>Days ahead</b> is when the app starts nudging you to pack it. Unlike your People, Owners and Item conditions, <b>this list syncs</b> between your devices — it has to, because every item points into it.</p>
+    <p class="muted">The stages of a pack, in the order they happen — set on an item as its <b>When</b>, and the headings your packing list and <b>Packing Mode</b> are built from. Give each one an <b>emoji</b> and a <b>colour</b>, rename it, drag it up or down the timeline, or add your own. <b>Days ahead</b> is when the app starts nudging you to pack it. <b>Removing</b> one asks where its things go first, so nothing is ever stranded. Like your Packers, Owners, Item conditions and Storage places, <b>this list syncs</b> between your devices — and it especially has to, because every item points into it.</p>
     <div class="phase-list" data-phases></div>
     <div class="btnrow">
       <button class="btn" data-phase="add">${IC.plus}<span>Add phase</span></button>
-      <button class="btn ghost" data-phase="reset">${IC.refresh}<span>Reset to the standard seven</span></button>
     </div>
   </div>`);
 
@@ -7340,21 +7373,11 @@ async function renderSettings() {
       await db.savePhases(list);
       drawPhases(); return;
     }
-    if (act === 'reset') {
-      if (!confirm('Put the timeline back to the standard seven?\n\nAnything you added is removed from the list — but nothing filed under it is deleted, and you will be asked where those things go. Items on a standard phase are untouched.')) return;
-      // Removing the added phases one at a time, so each still asks where its
-      // things go — a reset must not be able to strand anything either.
-      for (const p of list.filter((x) => !DEFAULT_PHASES.some((d) => d.id === x.id))) {
-        const used = await countPhaseUsers(p.id);
-        if (used.total) {
-          const to = await pickReplacementPhase(p, used, list.filter((x) => x.id !== p.id));
-          if (to === null) return;                       // cancelled — leave the whole reset alone
-          await movePhaseEverywhere(p.id, to);
-        }
-      }
-      await db.savePhases(DEFAULT_PHASES.map((p) => ({ ...p })));
-      drawPhases(); render(); return;
-    }
+    // v133: "Reset to the standard seven" was removed. It was one tap and one OK
+    // away from rewriting the timeline every item in the catalogue points into,
+    // which is a lot of blast radius for a button nobody was ever going to press
+    // on purpose. Every part of a reset is still available a step at a time —
+    // rename, reorder, remove (which still asks where the things go), add.
 
     const idOf = (k) => btn.dataset[k];
     const move = async (from, to) => {
@@ -8054,7 +8077,9 @@ function pickReplacementCondition(cond, used, others) {
   });
 }
 
-// People roster (who packs what). SHARED between your devices since v120, and
+// The Packers roster (who packs what) — stored under the internal key `people`,
+// which is what it was called until v133 and must stay, because rows have synced
+// under it since v120. SHARED between your devices, and
 // included in backups via collectPrefs.
 //
 // Why it had to move: an assignment stores the packer's NAME on the trip line, and
@@ -8063,7 +8088,7 @@ function pickReplacementCondition(cond, used, others) {
 // blue here and green there.
 //
 // Martin & Anna are the starter roster and they live in the CODE. They are never
-// written into shared data: an account that has never edited People stores no rows
+// written into shared data: an account that has never edited its Packers stores no rows
 // at all, and both devices read the same two from `DEFAULT_PEOPLE`. Seeding them
 // would give the second device two rows to land on top of the first device's.
 function loadPeople() {
@@ -8077,21 +8102,25 @@ async function savePeople(arr, opts = {}) {
 }
 // Has the roster been edited, or is it still the two the app ships with?
 function peopleCustomised() { return sharedCustomised('people'); }
-// The one-line state for the People fold. Shared by the first render and by every
+// The one-line state for the Packers fold. Shared by the first render and by every
 // redraw after an edit, so the two can't disagree.
 function peopleSummary(list = loadPeople()) {
   return list.length
     ? list.map((p) => p.name).join(', ')
     : 'None yet — for splitting who packs what';
 }
+// The roster is stored under the internal key `people` (it has synced under that
+// name since v120 and renaming the key would strand every stored row); "Packers" is
+// what it is CALLED. Keep the two apart when reading this file.
 // ---------- Owners: the "whose is it" roster ----------
 //
-// A real, editable list — like People, Storage places and Conditions — rather than
+// A real, editable list — like Packers, Storage places and Conditions — rather than
 // a set of names scraped from whatever had been typed before. It is the SAME list
 // everywhere Owner appears (the item editor, the All-items table), and it can be
 // added to, renamed and pruned from any of them.
 //
-// Deliberately separate from People: People is who PACKS, Owners is who OWNS, and
+// Deliberately separate from the Packers roster: a Packer is who PACKS, an Owner is
+// who OWNS — the two sit side by side in the item editor for exactly that reason, and
 // "Shared" or "The kids" should own things without turning up in every "Packed by"
 // picker. Naming an owner therefore never creates a person, and vice versa.
 //
@@ -8110,7 +8139,7 @@ function tidyOwnerNames(arr) {
   }
   return [...seen.values()].sort((a, b) => a.localeCompare(b));
 }
-// The roster. With nothing stored it is DERIVED — your People plus every owner
+// The roster. With nothing stored it is DERIVED — your Packers plus every owner
 // already given to something — and writes nothing down: both devices work that out
 // identically from data that does sync, so there is no reason to plant it. The
 // first real edit is what turns it into a list you own.
@@ -8476,19 +8505,31 @@ const asPeople = (arr) => (Array.isArray(arr) ? arr.map(coercePerson).filter((p)
 // names not on it — e.g. from a shared trip).
 const peopleColor = (name) => personColor(name, loadPeople());
 
-// Rename a packer across every trip so a renamed person doesn't strand their
-// assignments under the old name. Returns how many events changed.
+// Rename a packer everywhere so a renamed person doesn't strand their assignments
+// under the old name. TWO places carry a packer name since v133 and both have to
+// move, or a rename half-lands: the standing answer on the CATALOG ITEM (which is
+// what every future trip will inherit) and the frozen one on every TRIP LINE
+// already built. Returns how many things changed, for the toast.
 async function renamePackerEverywhere(oldName, newName) {
   const key = String(oldName || '').trim().toLowerCase();
   if (!key || !newName) return 0;
-  const events = await db.getEvents();
   let changed = 0;
+  const lists = await db.getLists();
+  for (const l of lists) {
+    let touched = false;
+    for (const it of (l.items || [])) {
+      if ((it.packer || '').trim().toLowerCase() === key) { it.packer = newName; touched = true; changed++; }
+    }
+    if (touched) await saveGuard(db.saveList(l));
+  }
+  if (changed) ALL_LISTS = await db.getLists();
+  const events = await db.getEvents();
   for (const ev of events) {
     let touched = false;
     for (const e of (ev.entries || [])) {
-      if ((e.packer || '').trim().toLowerCase() === key) { e.packer = newName; touched = true; }
+      if ((e.packer || '').trim().toLowerCase() === key) { e.packer = newName; touched = true; changed++; }
     }
-    if (touched) { await db.saveEvent(ev); changed++; }
+    if (touched) await db.saveEvent(ev);
   }
   return changed;
 }

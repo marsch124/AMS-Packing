@@ -575,7 +575,7 @@ export function deleteKit(id) { return delOne(KITS, id); }
 // The ONLY user-editable list that lives in the database rather than on the
 // device. It has to: a phase id is stamped on every item, membership, trip entry
 // and to-do, so a phase that existed on only one device would make the same item
-// read as a different "When" there. Everything else (People, Owners, Conditions,
+// read as a different "When" there. Everything else (Packers, Owners, Conditions,
 // storage places) is deliberately per-device; this one is deliberately not.
 //
 // NOTE the field names: `owner` and `realmId` are reserved by the sync addon and
@@ -642,7 +642,7 @@ export async function refreshPhases() { return ensurePhases(); }
 
 // --- The five author-made Settings lists ------------------------------------
 //
-// Conditions · Trip presets · People · Owners · Storage places, all in the one
+// Conditions · Trip presets · Packers · Owners · Storage places, all in the one
 // `shared` store, one row per ENTRY. The shape and the reasoning are in model.js;
 // this is only the storage. Two rules govern everything below:
 //
