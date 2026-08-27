@@ -6296,11 +6296,21 @@ table.grid {
 .grab-acts .grab-del { margin-left: auto; }
 
 /* Holding a button to repeat must not raise iOS's text-selection callout. */
+/* Deliberately bigger than the app's usual small icon buttons: these get
+   pressed and HELD, often in a hurry, and this screen is meant to work with
+   your glasses off. The two-line row has the width to spare. */
 .grab-acts .iconbtn {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
   touch-action: manipulation;
+  width: 46px;
+  height: 46px;
+}
+
+.grab-acts .iconbtn .ic {
+  width: 27px;
+  height: 27px;
 }
 
 /* In edit mode the name IS the field — tap the words to fix a typo. It is drawn
@@ -6355,8 +6365,14 @@ table.grid {
   display: flex;
   gap: 10px;
   align-items: center;
-  margin-top: 6px;
-  /* Clear the fixed tab bar — Done is the last thing on the page, and without
-     this it scrolls to a stop still tucked underneath it. */
+  margin-top: 10px;
+  /* Clear the fixed tab bar — these are the last things on the page, and
+     without this they scroll to a stop still tucked underneath it. */
   margin-bottom: 56px;
 }
+
+/* Done leads and Cancel stays secondary — throwing your edits away should not
+   be the biggest target on the screen. `.btn.lg` sets width:100%, so both need
+   a zero basis for the grow factors to divide the row rather than fight it. */
+.grab-edit-acts .grab-done { flex: 2 1 0; }
+.grab-edit-acts .btn.ghost { flex: 1 1 0; }

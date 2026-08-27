@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v142';
+const APP_VERSION = 'v143';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1440,6 +1440,11 @@ function activitiesPicker(lists, selected, contexts) {
 const GRAB_ITEMS_KEY = 'ams-grab-lists';
 const GRAB_TICKS_KEY = 'ams-grab-ticks';
 const GRAB_RESET_HOURS = 6; // ticks older than this belong to a previous workout
+// Hold ▲/▼ to keep moving: how long a press waits before it starts repeating,
+// and how long each step then takes. Martin found 130ms per step "very, very
+// fast" on the phone — a seven-item list flew past before he could stop.
+const HOLD_START_MS = 380;
+const HOLD_STEP_MS = 260;
 const GRAB_DEFAULT_ITEMS = ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'];
 const GRAB_LISTS = {
   bike: { emoji: '🚴', title: 'Indoor bike' },
@@ -1487,6 +1492,9 @@ async function renderGrab(id) {
   // (edited away in the meantime) is simply dropped.
   let done = loadGrabTicks(id).filter((n) => items.includes(n));
   let editing = false;
+  // Every edit saves the moment you make it, so Cancel needs something to go
+  // back TO: the list exactly as it stood when the pencil was tapped.
+  let asOpened = null;
 
   // Reordering works BY NAME, never by row position. Every step redraws the
   // list, so a hold-to-repeat would otherwise be left pointing at whatever has
@@ -1539,8 +1547,8 @@ async function renderGrab(id) {
     document.addEventListener('pointerup', stopHold);
     document.addEventListener('pointercancel', stopHold);
     holdWait = setTimeout(() => {
-      holdRepeat = setInterval(() => { if (!nudge(name, delta)) stopHold(); }, 130);
-    }, 380);
+      holdRepeat = setInterval(() => { if (!nudge(name, delta)) stopHold(); }, HOLD_STEP_MS);
+    }, HOLD_START_MS);
   };
 
   const wrap = h('<section class="screen grab"></section>');
@@ -1658,14 +1666,33 @@ async function renderGrab(id) {
       });
       body.appendChild(addRow);
       const acts = h('<div class="grab-edit-acts"></div>');
-      const doneBtn = h(`<button type="button" class="btn primary lg">${IC.check}<span>Done</span></button>`);
-      doneBtn.addEventListener('click', () => { editing = false; draw(); });
-      acts.appendChild(doneBtn);
+      const doneBtn = h(`<button type="button" class="btn primary lg grab-done">${IC.check}<span>Done</span></button>`);
+      doneBtn.addEventListener('click', () => { editing = false; asOpened = null; draw(); });
+      const cancelBtn = h(`<button type="button" class="btn ghost lg">${IC.close}<span>Cancel</span></button>`);
+      // No flushRename() here on purpose — Cancel is for throwing work away, not
+      // saving it. A half-typed name does get committed by the field's own blur
+      // as the tap lands, but the revert below runs afterwards and undoes it.
+      cancelBtn.addEventListener('click', () => {
+        const changed = !!asOpened && JSON.stringify(asOpened.items) !== JSON.stringify(items);
+        if (changed && !confirm('Throw away the changes you just made to this list?\n\nIt goes back to how it was when you tapped the pencil.')) return;
+        if (asOpened) {
+          items = asOpened.items.slice();
+          done = asOpened.done.slice();
+          saveGrabItems(id, items); saveGrabTicks(id, done);
+        }
+        editing = false; asOpened = null;
+        draw();
+      });
+      acts.appendChild(doneBtn); acts.appendChild(cancelBtn);
       body.appendChild(acts);
     }
   };
 
-  top.querySelector('.grab-editbtn').addEventListener('click', () => { editing = !editing; draw(); });
+  top.querySelector('.grab-editbtn').addEventListener('click', () => {
+    editing = !editing;
+    asOpened = editing ? { items: items.slice(), done: done.slice() } : null;
+    draw();
+  });
   draw();
   return wrap;
 }
@@ -6085,7 +6112,7 @@ function howtoCard() {
         <ul>
           <li><b>Tap a thing as you pick it up</b> — it ticks off. When everything is in hand the list says <b>“All there — go!”</b>.</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
-          <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. Each list is its own — the bike list and the run list can differ.</li>
+          <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. <b>Done</b> keeps your changes; <b>Cancel</b> puts the list back exactly as it was when you tapped the pencil. Each list is its own — the bike list and the run list can differ.</li>
           <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
         </ul>
 
@@ -6390,6 +6417,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v143', '2026-08-27 · 16:45 UTC', false, 'Half the speed, bigger arrows, and a way out — Cancel',
+      '<b>Three corrections from your first proper go at the new reordering.</b><br><br><b>(1) The hold was far too fast.</b> Your words: “very, very fast”. It was moving roughly eight items a second, which on a seven-item list means the whole thing flies past before you can lift your finger — you overshoot, then have to chase it back. <b>Each step now takes twice as long</b>, a shade over three a second, which is quick enough to be worth holding but slow enough to stop where you meant to. The short pause before it starts repeating is unchanged, so a single tap still moves exactly one step and never accidentally runs away with the list.<br><br><b>(2) The arrows are bigger.</b> Noticeably so — the four move buttons and the remove button have gone from small to <b>comfortably thumb-sized</b>, with the symbols inside them enlarged to match. They were the app’s standard <em>small</em> icon buttons, which is right for a settings panel you use twice a year and wrong for buttons you press and <em>hold</em>. This screen is meant to work with your glasses off, and the two-line row has the width to spare, so there was no reason for them to be small.<br><br><b>(3) There is a Cancel button.</b> As you said — with this many things you can now do to a list, there needs to be a way out. Every change in the editor saves the instant you make it, which is what makes it feel immediate, but it also meant that once you had renamed three things and shuffled the order, there was <b>no way back</b> short of undoing each one by hand. <b>Cancel puts the list back exactly as it was when you tapped the ✎ pencil</b> — every rename, every move, every removal and everything you added, all undone together. Your ticks come back with it, so cancelling mid-workout does not lose track of what you had already picked up.<br><br>It asks first, but <b>only if you actually changed something</b> — open the editor, look around, tap Cancel, and it simply closes without a pointless question. <b>Done</b> sits beside it and keeps everything, as before. And leaving by the <b>←</b> back arrow keeps your changes too: that is the same as Done, on the reasoning that backing out of a screen has never meant “undo” anywhere else in this app.',
+      'Holding an arrow now stops where you meant it to, the buttons are big enough to hit without looking — and an editing session you regret takes one tap to undo instead of ten.'),
     v('v142', '2026-08-27 · 16:00 UTC', false, 'Reordering stops being a tapping exercise — hold the arrow, or jump to the end',
       '<b>You said the reordering was tedious, and the arithmetic agrees with you:</b> moving the last thing on a seven-item list up to the top cost <b>six separate taps</b> of ▲, each one a small, fiddly target. You asked whether long-press-and-drag was possible. It is, but it would have meant hand-written finger-tracking that the iPhone makes genuinely awkward — and, because each row is now a text box (that is what lets you fix a typo), a long press on it fights with the phone’s own text-selection magnifier. So we did the two smaller things that remove the same tedium at a fraction of the risk.<br><br><b>(1) Hold ▲ or ▼ and it keeps going.</b> A tap still moves one step, exactly as before. Hold it for a moment and the item carries on climbing until you let go — or until it reaches the end and stops on its own. That turns six taps into one press.<br><br><b>(2) ⤒ and ⤓ jump straight to the end.</b> One tap sends a thing to the very top or the very bottom, which is usually what you actually wanted: the drink first because it comes from the kitchen, the shoes last because they are by the door.<br><br><b>The row had to change shape to fit them.</b> Four move buttons and a remove button will not sit beside the name on a phone without squeezing everything — and “Drink / water bottle” would have been cut off mid-word. So in edit mode each row is now <b>two lines</b>: the name across the full width, the controls on their own line underneath. The name is easier to read and much easier to type into, and every button is a comfortable size instead of a cramped one. <b>The workout screen itself is untouched</b> — this is only the ✎ editing view.<br><br><b>Remove now sits apart from the rest.</b> With four move buttons in a row, ✕ directly alongside them was a mis-tap waiting to happen while you were shuffling things about. It is pushed to the far right, away from the four.<br><br><b>Two details that took the most care.</b> Each step re-draws the list, which destroys the very button your finger is resting on — so a held press follows <em>the item</em> rather than the position, and keeps moving the same thing even as everything shifts underneath it. And if you were part-way through fixing a typo when you reached for an arrow, the rename is saved <em>first</em>: without that, the move would have used the old name and the redraw would have thrown away what you had just typed.',
       'Getting a list into your order is now one press or one tap instead of six — and the name you are editing has the whole width of the screen to itself.'),
