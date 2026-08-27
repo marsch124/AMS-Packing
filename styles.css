@@ -6258,9 +6258,11 @@ table.grid {
   border-color: var(--ok);
 }
 
+/* A ticked row simply recedes — the green tick and the green ground already say
+   "done" twice over. No strikethrough: it was a third signal saying the same
+   thing, and crossing out words makes them harder to read at a glance. */
 .grab-item.ticked .grab-name {
-  color: var(--muted);
-  text-decoration: line-through;
+  color: color-mix(in srgb, var(--ink) 60%, var(--card));
 }
 
 .grab-name {
@@ -6269,8 +6271,39 @@ table.grid {
   overflow-wrap: anywhere;
 }
 
-.grab-item.editing { cursor: default; }
+.grab-item.editing {
+  cursor: default;
+  gap: 2px;
+  padding-right: 8px;
+}
+
 .grab-item.editing:active { transform: none; }
+.grab-item .iconbtn[disabled] { opacity: .3; pointer-events: none; }
+
+/* In edit mode the name IS the field — tap the words to fix a typo. It is drawn
+   as a plain line of text until you touch it, so the row stays readable rather
+   than looking like a form. */
+.grab-rename {
+  flex: 1;
+  min-width: 0;
+  margin-right: 6px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.grab-rename:hover { border-color: var(--line); }
+
+.grab-rename:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--line));
+  background: var(--card);
+}
 
 .grab-reset { justify-self: start; }
 
@@ -6301,4 +6334,7 @@ table.grid {
   gap: 10px;
   align-items: center;
   margin-top: 6px;
+  /* Clear the fixed tab bar — Done is the last thing on the page, and without
+     this it scrolls to a stop still tucked underneath it. */
+  margin-bottom: 56px;
 }

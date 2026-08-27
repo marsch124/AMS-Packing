@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v140';
+const APP_VERSION = 'v141';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1528,20 +1528,55 @@ async function renderGrab(id) {
       }
       body.appendChild(h(`<p class="muted grab-hint">Tap each thing as you pick it up. Ticks clear themselves after ${GRAB_RESET_HOURS} hours, so the list is fresh for your next workout.</p>`));
     } else {
-      body.appendChild(h('<p class="muted grab-hint">Remove what you never take, add what is missing. This list lives on this device only.</p>'));
-      for (const name of items) {
+      body.appendChild(h('<p class="muted grab-hint">Tap a name to fix a typo · ▲▼ to reorder · ✕ to remove. This list lives on this device only.</p>'));
+      items.forEach((name, i) => {
         const row = h(`<div class="grab-item editing">
-          <span class="grab-name">${esc(name)}</span>
+          <input type="text" class="grab-rename" value="${esc(name)}" maxlength="60" autocomplete="off" aria-label="Name — tap to fix a typo">
+          <button type="button" class="iconbtn sm grab-up" ${i === 0 ? 'disabled' : ''} aria-label="Move ${esc(name)} up" title="Move up">${ic('up','sm')}</button>
+          <button type="button" class="iconbtn sm grab-down" ${i === items.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(name)} down" title="Move down">${ic('down','sm')}</button>
           <button type="button" class="iconbtn grab-del" aria-label="Remove ${esc(name)}" title="Remove">${IC.close}</button>
         </div>`);
+        // `current` tracks the live name, because a rename is saved WITHOUT
+        // redrawing — see commit() below.
+        let current = name;
+        const input = row.querySelector('.grab-rename');
+        // A rename lands when you leave the field (or press Enter), never on
+        // each keystroke, so a half-typed word is never the name. It must not
+        // redraw: blur fires before the click on ▲▼/✕, and rebuilding the row
+        // here would swallow that tap.
+        const commit = () => {
+          const next = input.value.trim();
+          if (next === current) return;
+          if (!next) { input.value = current; return; }
+          if (items.some((n, j) => j !== i && n.toLowerCase() === next.toLowerCase())) {
+            showToast('Already on the list.');
+            input.value = current;
+            return;
+          }
+          const arr = items.slice(); arr[i] = next; items = arr;
+          done = done.map((n) => (n === current ? next : n)); // a tick follows its item
+          saveGrabItems(id, items); saveGrabTicks(id, done);
+          current = next;
+        };
+        input.addEventListener('blur', commit);
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+        const move = (to) => {
+          const next = items.slice();
+          [next[i], next[to]] = [next[to], next[i]];
+          items = next;
+          saveGrabItems(id, items);
+          draw();
+        };
+        row.querySelector('.grab-up').addEventListener('click', () => { if (i > 0) move(i - 1); });
+        row.querySelector('.grab-down').addEventListener('click', () => { if (i < items.length - 1) move(i + 1); });
         row.querySelector('.grab-del').addEventListener('click', () => {
-          items = items.filter((n) => n !== name);
-          done = done.filter((n) => n !== name);
+          items = items.filter((_, j) => j !== i);
+          done = done.filter((n) => n !== current);
           saveGrabItems(id, items); saveGrabTicks(id, done);
           draw();
         });
         body.appendChild(row);
-      }
+      });
       const addRow = h(`<form class="grab-add">
         <input type="text" name="name" placeholder="Add something…" autocomplete="off" maxlength="60">
         <button type="submit" class="btn primary">${IC.plus}<span>Add</span></button>
@@ -1560,15 +1595,7 @@ async function renderGrab(id) {
       const acts = h('<div class="grab-edit-acts"></div>');
       const doneBtn = h(`<button type="button" class="btn primary lg">${IC.check}<span>Done</span></button>`);
       doneBtn.addEventListener('click', () => { editing = false; draw(); });
-      const restore = h(`<button type="button" class="btn ghost">${ic('refresh','sm')}<span>Standard items</span></button>`);
-      restore.addEventListener('click', () => {
-        if (!confirm('Put the standard items back? Your own changes to this list are replaced.')) return;
-        items = GRAB_DEFAULT_ITEMS.slice();
-        done = done.filter((n) => items.includes(n));
-        saveGrabItems(id, items); saveGrabTicks(id, done);
-        draw();
-      });
-      acts.appendChild(doneBtn); acts.appendChild(restore);
+      acts.appendChild(doneBtn);
       body.appendChild(acts);
     }
   };
@@ -5993,7 +6020,7 @@ function howtoCard() {
         <ul>
           <li><b>Tap a thing as you pick it up</b> — it ticks off. When everything is in hand the list says <b>“All there — go!”</b>.</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
-          <li><b>The ✎ pencil edits the list</b>: remove what you never take, add what is missing, or put the standard items back. Each list is its own — the bike list and the run list can differ.</li>
+          <li><b>The ✎ pencil edits the list</b>: remove what you never take, add what is missing, and use the <b>▲▼</b> arrows to put things in the order you actually pick them up. Each list is its own — the bike list and the run list can differ.</li>
           <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
         </ul>
 
@@ -6298,6 +6325,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v141', '2026-08-27 · 15:15 UTC', false, 'Fix a typo, put things in your own order — and a quieter tick',
+      '<b>Three small corrections to the workout grab lists, all from your first look at v140.</b><br><br><b>(1) Tap a name to fix it.</b> Under the <b>✎ pencil</b>, each name is now the field itself — tap the words, correct the typo, and it saves the moment you tap away or press Enter. Before this, the only way to change <em>“Heart-rate strapp”</em> was to delete it and type the whole thing again, which is a silly price for one letter. Your tick follows the rename, so correcting a name mid-workout does not un-tick the thing you have already picked up. Two guards: an empty name is refused (the old one comes back rather than leaving you a blank row), and renaming something onto a name already on the list is refused too, since the list identifies things by name.<br><br><b>(2) ▲▼ arrows put them in your order.</b> The list arrived in the order I guessed, which is nobody’s order. Now you can walk them into the sequence you actually collect them in — the shoes by the door last, the drink from the kitchen first — so the list reads like the route you walk rather than a set of unrelated reminders. The same <b>▲▼</b> pattern the app already uses for <b>Storage places</b> and a template’s <b>Sections</b>, so there is nothing new to learn. Both lists remember their own order.<br><br><b>(3) “Standard items” is gone.</b> You asked for it to go, and it deserved to: it was a single tap that threw away every change you had just made to a list, sitting directly beneath the buttons you use to make those changes. This app has form here — <b>v133</b> removed <b>“Reset to the standard seven”</b> from the timeline for precisely the same reason. A one-tap undo of an afternoon’s work is not a feature, it is a trap. The standard seven still arrive on a device that has never opened the list; from then on the list is simply yours.<br><br><b>(4) The strikethrough on a ticked item is gone.</b> Your words: unnecessary — and right. A ticked row was already saying “done” three times over: the circle fills solid green, the whole row takes a green ground, <em>and</em> the words were crossed out. The first two you can read across the room with your glasses off, which is the point of this screen; the third only made the words harder to read while adding nothing. A ticked row now simply <b>recedes</b> — the name softens back toward the background and lets the green carry the message.',
+      'A typo costs one tap instead of retyping the whole thing, the list can read in the order you actually walk — and a ticked item goes quiet instead of being scribbled out.'),
     v('v140', '2026-08-27 · 14:30 UTC', false, 'Two buttons on Home for the walk to the bike — the workout grab lists',
       '<b>You asked for this one in as many words: an easy way to see the handful of things you need to gather before an indoor bike or treadmill session.</b> Not a packing list — nothing gets packed. It is the headband, the AirPods, the something-to-drink that you carry the few steps to the machine, and the annoyance when one of them is not there and the warm-up waits while you go back for it.<br><br><b>Two big buttons now sit near the top of Home</b> — 🚴 <b>Bike</b> and 🏃 <b>Run</b> — each opening a single small screen: your short list, in big letters, one tap per thing as you pick it up. When the last one ticks, the screen says <b>“All there — go!”</b>. That is the whole feature, on purpose.<br><br><b>The ticks look after themselves.</b> They clear on their own a few hours after you made them, so tomorrow’s workout always opens a fresh, untouched list — there is no “did I reset it?” to remember. A <b>Start over</b> button is there anyway, for a second session or a mis-tap.<br><br><b>The lists are yours to shape.</b> Both start with a sensible guess — headband, AirPods, drink, towel, sports watch, shoes, heart-rate strap — and the <b>✎ pencil</b> in the corner lets you remove what you never take, add what is missing, or put the standard items back. The bike list and the run list are separate, so cycling shoes need not haunt your runs.<br><br><b>And deliberately: none of this goes anywhere near your catalogue.</b> No templates, no items, no trips, no sync — the lists live on this device alone. Grabbing things for a workout is about what is lying around your home, not about the 431-item gear catalogue, and keeping it outside the shared data means this feature can never tangle with the machinery that packs your holidays.',
       'The headband, the drink and the AirPods stop being three separate chances to interrupt a workout — one glance at one small list and you arrive at the machine with everything.'),
