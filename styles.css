@@ -6160,3 +6160,145 @@ table.grid {
 .chk-tbl tr[data-gap] td:last-child { color: var(--check-warn); }
 .sync-check[data-level="broken"] .chk-tbl tr[data-gap] td:last-child { color: var(--check-danger); }
 .chk-note { font-size: .8rem; }
+
+/* ——— Workout grab lists (Home buttons + #/grab/:id) ——————————————————— */
+/* Two oversized, glanceable buttons on Home, and a checklist screen built to
+   be read from arm's length: big rows, one tap per thing, colour as the
+   message (green = in hand). */
+
+.grab-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0 0 16px;
+}
+
+.grab-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 10px 12px;
+  background: color-mix(in srgb, var(--brand) 10%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--brand) 35%, var(--line));
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  color: inherit;
+  font-size: 1.05rem;
+  font-weight: 700;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.grab-btn:active { transform: translateY(1px); }
+
+.grab-emoji {
+  font-size: 2rem;
+  line-height: 1.1;
+}
+
+.grab-body { display: grid; gap: 10px; }
+
+.grab-count {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.grab-done-banner {
+  padding: 16px 14px;
+  border-radius: 14px;
+  text-align: center;
+  font-size: 1.35rem;
+  background: color-mix(in srgb, var(--ok) 16%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--line));
+  color: var(--ok-txt);
+}
+
+.grab-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-height: 60px;
+  padding: 10px 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1.25rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.grab-item:active { transform: translateY(1px); }
+
+.grab-check {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  color: #fff;
+}
+
+.grab-item.ticked {
+  background: color-mix(in srgb, var(--ok) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--line));
+}
+
+.grab-item.ticked .grab-check {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+
+.grab-item.ticked .grab-name {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.grab-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.grab-item.editing { cursor: default; }
+.grab-item.editing:active { transform: none; }
+
+.grab-reset { justify-self: start; }
+
+.grab-hint {
+  margin: 4px 2px 0;
+  font-size: .85rem;
+}
+
+.grab-add {
+  display: flex;
+  gap: 8px;
+}
+
+.grab-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1.05rem;
+}
+
+.grab-edit-acts {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 6px;
+}

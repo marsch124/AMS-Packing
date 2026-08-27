@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v139';
+const APP_VERSION = 'v140';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -156,7 +156,8 @@ function busyEditing() {
   // `.dr-open` = the trip date picker is open. Its trigger is a button, so the
   // activeElement test below would miss it and a background refresh could redraw
   // the whole event form — and the half-typed trip name with it.
-  if (document.querySelector('.editor, .act-editor, .overlay, .dr-open')) return true;
+  // `.grab-editing` = a workout grab list is in edit mode — same protection.
+  if (document.querySelector('.editor, .act-editor, .overlay, .dr-open, .grab-editing')) return true;
   const el = document.activeElement;
   return !!(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 }
@@ -1426,6 +1427,157 @@ function activitiesPicker(lists, selected, contexts) {
 // ============================================================
 // Events list (home)
 // ============================================================
+// ——— Workout grab lists (#/grab/:id) ————————————————————————————————————————
+// The two big buttons on Home lead here: a deliberately tiny "take these few
+// steps to the machine" checklist for an indoor bike or treadmill session.
+// These are NOT packing lists and NOT part of the synced catalogue — they are
+// a per-device convenience, stored in localStorage, so they can never touch
+// the shared data or the sync machinery. Ticks expire on their own after a few
+// hours, so every workout starts with a fresh, untouched list.
+const GRAB_ITEMS_KEY = 'ams-grab-lists';
+const GRAB_TICKS_KEY = 'ams-grab-ticks';
+const GRAB_RESET_HOURS = 6; // ticks older than this belong to a previous workout
+const GRAB_DEFAULT_ITEMS = ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'];
+const GRAB_LISTS = {
+  bike: { emoji: '🚴', title: 'Indoor bike' },
+  run: { emoji: '🏃', title: 'Indoor run' },
+};
+function loadGrabItems(id) {
+  try {
+    const all = JSON.parse(localStorage.getItem(GRAB_ITEMS_KEY) || 'null');
+    if (all && Array.isArray(all[id])) {
+      const items = all[id].filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim());
+      if (items.length) return items;
+    }
+  } catch { /* ignore */ }
+  return GRAB_DEFAULT_ITEMS.slice();
+}
+function saveGrabItems(id, items) {
+  try {
+    let all; try { all = JSON.parse(localStorage.getItem(GRAB_ITEMS_KEY) || '{}') || {}; } catch { all = {}; }
+    all[id] = items;
+    localStorage.setItem(GRAB_ITEMS_KEY, JSON.stringify(all));
+  } catch { /* ignore */ }
+}
+function loadGrabTicks(id) {
+  try {
+    const all = JSON.parse(localStorage.getItem(GRAB_TICKS_KEY) || 'null') || {};
+    const t = all[id];
+    if (!t || !Array.isArray(t.done)) return [];
+    if (!t.at || Date.now() - Date.parse(t.at) > GRAB_RESET_HOURS * 3600 * 1000) return [];
+    return t.done;
+  } catch { return []; }
+}
+function saveGrabTicks(id, done) {
+  try {
+    let all; try { all = JSON.parse(localStorage.getItem(GRAB_TICKS_KEY) || '{}') || {}; } catch { all = {}; }
+    all[id] = { at: new Date().toISOString(), done };
+    localStorage.setItem(GRAB_TICKS_KEY, JSON.stringify(all));
+  } catch { /* ignore */ }
+}
+
+async function renderGrab(id) {
+  const def = GRAB_LISTS[id];
+  if (!def) { location.replace('#/'); return renderHome(); }
+  let items = loadGrabItems(id);
+  // Ticks are matched to items by name; anything ticked that no longer exists
+  // (edited away in the meantime) is simply dropped.
+  let done = loadGrabTicks(id).filter((n) => items.includes(n));
+  let editing = false;
+
+  const wrap = h('<section class="screen grab"></section>');
+  const top = h(`<div class="topbar">
+    <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
+    <h1 class="grow">${def.emoji} ${esc(def.title)}</h1>
+    <button class="iconbtn grab-editbtn" type="button" aria-label="Edit this list" title="Edit this list">${IC.edit}</button>
+  </div>`);
+  wrap.appendChild(top);
+  const body = h('<div class="grab-body"></div>');
+  wrap.appendChild(body);
+
+  const draw = () => {
+    // `.grab-editing` keeps busyEditing() true while the editor is open, so a
+    // background refresh can never redraw this screen out from under an edit.
+    wrap.classList.toggle('grab-editing', editing);
+    body.innerHTML = '';
+
+    if (!editing) {
+      const allDone = items.length > 0 && done.length === items.length;
+      if (allDone) {
+        body.appendChild(h(`<div class="grab-done-banner">🎉 <b>All there — go!</b></div>`));
+      } else {
+        body.appendChild(h(`<p class="grab-count">${done.length} of ${items.length} in hand</p>`));
+      }
+      for (const name of items) {
+        const ticked = done.includes(name);
+        const row = h(`<button type="button" class="grab-item${ticked ? ' ticked' : ''}">
+          <span class="grab-check">${ticked ? IC.check : ''}</span>
+          <span class="grab-name">${esc(name)}</span>
+        </button>`);
+        row.addEventListener('click', () => {
+          done = ticked ? done.filter((n) => n !== name) : [...done, name];
+          saveGrabTicks(id, done);
+          draw();
+        });
+        body.appendChild(row);
+      }
+      if (done.length) {
+        const reset = h(`<button type="button" class="btn ghost grab-reset">${ic('refresh','sm')}<span>Start over</span></button>`);
+        reset.addEventListener('click', () => { done = []; saveGrabTicks(id, done); draw(); });
+        body.appendChild(reset);
+      }
+      body.appendChild(h(`<p class="muted grab-hint">Tap each thing as you pick it up. Ticks clear themselves after ${GRAB_RESET_HOURS} hours, so the list is fresh for your next workout.</p>`));
+    } else {
+      body.appendChild(h('<p class="muted grab-hint">Remove what you never take, add what is missing. This list lives on this device only.</p>'));
+      for (const name of items) {
+        const row = h(`<div class="grab-item editing">
+          <span class="grab-name">${esc(name)}</span>
+          <button type="button" class="iconbtn grab-del" aria-label="Remove ${esc(name)}" title="Remove">${IC.close}</button>
+        </div>`);
+        row.querySelector('.grab-del').addEventListener('click', () => {
+          items = items.filter((n) => n !== name);
+          done = done.filter((n) => n !== name);
+          saveGrabItems(id, items); saveGrabTicks(id, done);
+          draw();
+        });
+        body.appendChild(row);
+      }
+      const addRow = h(`<form class="grab-add">
+        <input type="text" name="name" placeholder="Add something…" autocomplete="off" maxlength="60">
+        <button type="submit" class="btn primary">${IC.plus}<span>Add</span></button>
+      </form>`);
+      addRow.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = addRow.querySelector('input').value.trim();
+        if (!name) return;
+        if (items.some((n) => n.toLowerCase() === name.toLowerCase())) { showToast('Already on the list.'); return; }
+        items = [...items, name];
+        saveGrabItems(id, items);
+        draw();
+        body.querySelector('.grab-add input')?.focus();
+      });
+      body.appendChild(addRow);
+      const acts = h('<div class="grab-edit-acts"></div>');
+      const doneBtn = h(`<button type="button" class="btn primary lg">${IC.check}<span>Done</span></button>`);
+      doneBtn.addEventListener('click', () => { editing = false; draw(); });
+      const restore = h(`<button type="button" class="btn ghost">${ic('refresh','sm')}<span>Standard items</span></button>`);
+      restore.addEventListener('click', () => {
+        if (!confirm('Put the standard items back? Your own changes to this list are replaced.')) return;
+        items = GRAB_DEFAULT_ITEMS.slice();
+        done = done.filter((n) => items.includes(n));
+        saveGrabItems(id, items); saveGrabTicks(id, done);
+        draw();
+      });
+      acts.appendChild(doneBtn); acts.appendChild(restore);
+      body.appendChild(acts);
+    }
+  };
+
+  top.querySelector('.grab-editbtn').addEventListener('click', () => { editing = !editing; draw(); });
+  draw();
+  return wrap;
+}
+
 async function renderHome() {
   const [events, lists, actions] = await Promise.all([db.getEvents(), db.getLists(), db.getActions()]);
   ALL_ACTIONS = actions; // keep the module cache warm for item to-do badges
@@ -1560,6 +1712,14 @@ async function renderHome() {
     });
     wrap.appendChild(nudge);
   }
+
+  // The workout grab lists — two big buttons straight to the tiny "bring these
+  // few things to the machine" checklists. They sit above the trip builder on
+  // purpose: on a workout day this is the only thing you came for.
+  wrap.appendChild(h(`<div class="grab-row">
+    <a class="grab-btn" href="#/grab/bike"><span class="grab-emoji">🚴</span><span>Bike</span></a>
+    <a class="grab-btn" href="#/grab/run"><span class="grab-emoji">🏃</span><span>Run</span></a>
+  </div>`));
 
   wrap.appendChild(h('<p class="muted pad">Set your trip details — your common base and your transport’s kit come in automatically. Tick any extra activities, then press <b>Create Event</b> to build one combined <b>Packing List</b> to pack from.</p>'));
 
@@ -5819,7 +5979,7 @@ function howtoCard() {
         <h3>Getting around</h3>
         <p>Six tabs along the bottom:</p>
         <ul>
-          <li><b>Home</b> — the builder for starting a new trip, plus a compact preview of your few most recent events.</li>
+          <li><b>Home</b> — the builder for starting a new trip, plus a compact preview of your few most recent events. Above the builder sit the two <b>workout grab lists</b> — 🚴 <b>Bike</b> and 🏃 <b>Run</b> (see below).</li>
  <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here. The <b>Map</b> button up top opens the <b>Places visited</b> world map (see below). <b>Long-press</b> (or <b>right-click</b>) a trip card for its quick-actions menu — see <b>Quick actions on a trip</b> below.</li>
           <li><b>Templates</b> — your reusable templates (the building blocks).</li>
           <li><b>Care</b> — everything that needs looking after, as an urgency-ordered list or a month calendar (see <b>Care, storage &amp; maintenance</b> below).</li>
@@ -5827,6 +5987,15 @@ function howtoCard() {
           <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip import, this guide and the version history.</li>
         </ul>
  <p><b>Search.</b> A <b></b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name, <em>and</em> by the original Swedish wording even though that is no longer displayed), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
+
+        <h3>Workout grab lists — 🚴 Bike and 🏃 Run</h3>
+        <p>Two big buttons near the top of <b>Home</b> open a deliberately tiny checklist each: the handful of things to gather before an <b>indoor bike</b> or <b>indoor treadmill</b> session — headband, AirPods, something to drink and so on. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
+        <ul>
+          <li><b>Tap a thing as you pick it up</b> — it ticks off. When everything is in hand the list says <b>“All there — go!”</b>.</li>
+          <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
+          <li><b>The ✎ pencil edits the list</b>: remove what you never take, add what is missing, or put the standard items back. Each list is its own — the bike list and the run list can differ.</li>
+          <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
+        </ul>
 
         <h3>Colour tells you where you are</h3>
         <p>Each of the six tabs has its <b>own colour</b>, and that colour flows through the whole screen — the page heading, the buttons, the chips and progress bars, the back/edit icons, and the tab itself. In the bottom bar <b>every tab always shows its colour</b>, and the one you're currently on fills in solid and goes bold — so a single glance tells you which part of the app you're in:</p>
@@ -6129,6 +6298,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v140', '2026-08-27 · 14:30 UTC', false, 'Two buttons on Home for the walk to the bike — the workout grab lists',
+      '<b>You asked for this one in as many words: an easy way to see the handful of things you need to gather before an indoor bike or treadmill session.</b> Not a packing list — nothing gets packed. It is the headband, the AirPods, the something-to-drink that you carry the few steps to the machine, and the annoyance when one of them is not there and the warm-up waits while you go back for it.<br><br><b>Two big buttons now sit near the top of Home</b> — 🚴 <b>Bike</b> and 🏃 <b>Run</b> — each opening a single small screen: your short list, in big letters, one tap per thing as you pick it up. When the last one ticks, the screen says <b>“All there — go!”</b>. That is the whole feature, on purpose.<br><br><b>The ticks look after themselves.</b> They clear on their own a few hours after you made them, so tomorrow’s workout always opens a fresh, untouched list — there is no “did I reset it?” to remember. A <b>Start over</b> button is there anyway, for a second session or a mis-tap.<br><br><b>The lists are yours to shape.</b> Both start with a sensible guess — headband, AirPods, drink, towel, sports watch, shoes, heart-rate strap — and the <b>✎ pencil</b> in the corner lets you remove what you never take, add what is missing, or put the standard items back. The bike list and the run list are separate, so cycling shoes need not haunt your runs.<br><br><b>And deliberately: none of this goes anywhere near your catalogue.</b> No templates, no items, no trips, no sync — the lists live on this device alone. Grabbing things for a workout is about what is lying around your home, not about the 431-item gear catalogue, and keeping it outside the shared data means this feature can never tangle with the machinery that packs your holidays.',
+      'The headband, the drink and the AirPods stop being three separate chances to interrupt a workout — one glance at one small list and you arrive at the machine with everything.'),
     v('v139', '2026-08-27 · 23:30 UTC', false, 'One Filter button and a “?” instead of ten rows of chrome — All items gives the screen back to your things',
       '<b>You said the <b>Care → All items</b> index “looks visually unstructured”, and the measurement bore it out: before the first item there were roughly <b>ten rows of controls</b>.</b> Six of those rows were filter chips. Eight flag chips on one line. Five condition chips on the next. Then <b>Section</b> — one chip per section name, <b>twenty of them</b>, wrapping over four rows and still ending in a <b>“+10 more”</b> because even four rows could not hold them all. On the phone you scrolled past all of it, every time, to reach a list of items you had not asked to filter.<br><br><b>The chips are all still there. They are behind one button now.</b> Under the search box sits a single <b>Filter</b> button, and beside it — <b>on the same line</b>, where they used to have a row of their own — <b>Sort</b>, the <b>▲/▼</b> direction flip and <b>Group</b>. Six rows became one.<br><br><b>The button tells you what is on without being opened.</b> With nothing filtered it reads plainly <b>Filter</b>. Turn something on and it <b>lights up</b> and counts: <b>Filter · 2</b>. Hover or long-press it and it names them — <em>“Showing only: Liquids, Bathroom cabinet”</em>. That matters more than it sounds: the old chip rows were the only way to see what was narrowing the list, so folding them away without this would have meant a list quietly showing you a third of your things with nothing on screen saying why. The count line underneath still says <b>“12 of 431 items”</b> as well, so there are two independent answers to “why am I not seeing everything?”.<br><br><b>Sections are a list now, not a wall.</b> Inside the panel, <b>Flags</b> and <b>Item condition</b> stay as chips — they are short, fixed sets of familiar words. <b>Section</b> does not: those are your own names, of unpredictable length, and twenty of them as chips wrapped into something you had to read as a puzzle rather than a list. They are now <b>a proper list down a column</b>, one name per line with its count in a straight edge on the right and a tick box on the left, in a box that <b>scrolls</b> instead of growing. Twenty sections take up the same space as five, and the <b>“+10 more”</b> button is gone entirely — nothing is hidden any more, so there is nothing to expand.<br><br><b>Nothing about how the filters work has changed.</b> Chips <b>within</b> a group still mean “either of these”; the groups still <b>combine</b> — <b>Liquids</b> with <b>Worn</b> gives you liquids that are worn. Every count is still what you would actually get if you tapped it, worked out against the filters already on. <b>Clear all</b>, at the top of the panel, still empties all three groups at once. Filters are still deliberately <b>not</b> remembered between visits, so the index always opens showing everything, while <b>Sort</b> and <b>Group</b> still are.<br><br>Close the panel with its <b>×</b>, by tapping <b>Filter</b> again, or with <b>Escape</b>. Your filters stay on either way — shutting the panel puts the controls away, it does not undo anything.<br><br><b>And the four-line paragraph at the top is now a “?”.</b> With the chips folded away it had become the tallest thing above the list — an explanation of what the index is, how an item in three templates is shown once, and which four choices split it into a line per template. That is <b>worth knowing, and worth knowing once</b>; standing there permanently, it charged you four lines of a phone screen on every visit for a sentence you read months ago. It is now a small <b>?</b> beside the item count, which is exactly where the question it answers gets asked — <em>“why does it say 431 items?”</em> — and the same words drop in underneath when you tap it. Nothing was cut. It opens shut every time you come back, because it is a reminder, not a setting.<br><br><b>Ten rows of chrome are now three</b>: the search box, the one line of controls, and the count. Everything below the fold is your things.<br><br><b>One more thing fell out of building this: “Show all” has been standing there permanently, all over the app.</b> Every filter bar — a template’s item list, the <b>Sort out</b> row on a trip’s packing list, the Settings overview — is written to <b>hide</b> its dashed <b>Show all</b> button until you have actually filtered something, since there is nothing to clear before then. None of it was working. The instruction to hide it was being <b>overruled by the chips’ own styling</b>, so the button appeared the moment the row did, offering to undo a filter you had not applied. It is one rule, in one place, and it now behaves everywhere: <b>Show all</b> turns up when there is something to show all of, and not before.',
       'The screen whose job is to show you your things now spends three rows on chrome instead of ten — and when something is hidden, the button says so and says what.'),
@@ -8984,6 +9156,8 @@ async function renderRoute() {
   if (itemEditorReturn && !/^#\/list\/[^/]+\/item\/[^/]+$/.test(hash)) itemEditorReturn = null;
   if (hash === '#/' || hash === '') return renderHome();
   if (hash === '#/new') { location.replace('#/'); return renderHome(); }
+  const grabId = m(/^#\/grab\/([^/]+)$/);
+  if (grabId) return renderGrab(grabId);
   if (hash === '#/events') return renderEvents();
   if (hash === '#/map') return renderMap();
   if (hash === '#/lists') return renderLists();
