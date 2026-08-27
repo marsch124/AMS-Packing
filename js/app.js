@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v143';
+const APP_VERSION = 'v144';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1441,10 +1441,12 @@ const GRAB_ITEMS_KEY = 'ams-grab-lists';
 const GRAB_TICKS_KEY = 'ams-grab-ticks';
 const GRAB_RESET_HOURS = 6; // ticks older than this belong to a previous workout
 // Hold ▲/▼ to keep moving: how long a press waits before it starts repeating,
-// and how long each step then takes. Martin found 130ms per step "very, very
-// fast" on the phone — a seven-item list flew past before he could stop.
+// and how long each step then takes. Tuned on the phone, twice: 130ms was
+// "very, very fast" and 260ms still "a bit too fast". Judge changes here in
+// the hand, not in a browser — a desktop tab throttles repeating timers when
+// it isn't in front, which hides the real speed completely.
 const HOLD_START_MS = 380;
-const HOLD_STEP_MS = 260;
+const HOLD_STEP_MS = 400;
 const GRAB_DEFAULT_ITEMS = ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'];
 const GRAB_LISTS = {
   bike: { emoji: '🚴', title: 'Indoor bike' },
@@ -6417,6 +6419,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v144', '2026-08-27 · 17:15 UTC', false, 'The hold slows down again — two and a half steps a second',
+      'Still a bit too quick at three steps a second, so <b>each step now takes 400 milliseconds</b> — around two and a half a second. Moving something from the bottom of a seven-item list to the top takes about two and a half seconds of holding, which is comfortably faster than tapping six times but slow enough to stop exactly where you meant to.<br><br>Nothing else changed. A single tap still moves one step, and the short pause before a hold starts repeating is the same, so there is still no danger of a quick tap running away with the list.<br><br><em>Worth recording why this took three goes: a hold like this cannot honestly be judged anywhere but in your hand. A browser on the desktop deliberately slows down repeating timers whenever its window is not in front, so the speed I could measure while building it was never the speed you would feel. The two timings now sit on their own, clearly labelled, at the top of that part of the code — so tuning it is a single number, and there is a note there saying not to trust a desktop measurement of it.</em>',
+      'Holding an arrow now moves at a pace you can actually stop on — and the setting is somewhere obvious, should it ever want nudging again.'),
     v('v143', '2026-08-27 · 16:45 UTC', false, 'Half the speed, bigger arrows, and a way out — Cancel',
       '<b>Three corrections from your first proper go at the new reordering.</b><br><br><b>(1) The hold was far too fast.</b> Your words: “very, very fast”. It was moving roughly eight items a second, which on a seven-item list means the whole thing flies past before you can lift your finger — you overshoot, then have to chase it back. <b>Each step now takes twice as long</b>, a shade over three a second, which is quick enough to be worth holding but slow enough to stop where you meant to. The short pause before it starts repeating is unchanged, so a single tap still moves exactly one step and never accidentally runs away with the list.<br><br><b>(2) The arrows are bigger.</b> Noticeably so — the four move buttons and the remove button have gone from small to <b>comfortably thumb-sized</b>, with the symbols inside them enlarged to match. They were the app’s standard <em>small</em> icon buttons, which is right for a settings panel you use twice a year and wrong for buttons you press and <em>hold</em>. This screen is meant to work with your glasses off, and the two-line row has the width to spare, so there was no reason for them to be small.<br><br><b>(3) There is a Cancel button.</b> As you said — with this many things you can now do to a list, there needs to be a way out. Every change in the editor saves the instant you make it, which is what makes it feel immediate, but it also meant that once you had renamed three things and shuffled the order, there was <b>no way back</b> short of undoing each one by hand. <b>Cancel puts the list back exactly as it was when you tapped the ✎ pencil</b> — every rename, every move, every removal and everything you added, all undone together. Your ticks come back with it, so cancelling mid-workout does not lose track of what you had already picked up.<br><br>It asks first, but <b>only if you actually changed something</b> — open the editor, look around, tap Cancel, and it simply closes without a pointless question. <b>Done</b> sits beside it and keeps everything, as before. And leaving by the <b>←</b> back arrow keeps your changes too: that is the same as Done, on the reasoning that backing out of a screen has never meant “undo” anywhere else in this app.',
       'Holding an arrow now stops where you meant it to, the buttons are big enough to hit without looking — and an editing session you regret takes one tap to undo instead of ten.'),
