@@ -6271,23 +6271,45 @@ table.grid {
   overflow-wrap: anywhere;
 }
 
+/* In edit mode a row becomes two lines: the name on its own full-width line,
+   the controls underneath. Five controls will not fit beside the name at phone
+   width without shrinking both, and this screen is meant to be readable with
+   your glasses off. */
 .grab-item.editing {
+  display: block;
   cursor: default;
-  gap: 2px;
-  padding-right: 8px;
+  min-height: 0;
+  padding: 6px 10px 4px;
 }
 
 .grab-item.editing:active { transform: none; }
 .grab-item .iconbtn[disabled] { opacity: .3; pointer-events: none; }
 
+.grab-acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Remove sits apart from the four move buttons, so a mis-tap while reordering
+   can't delete the thing you were moving. */
+.grab-acts .grab-del { margin-left: auto; }
+
+/* Holding a button to repeat must not raise iOS's text-selection callout. */
+.grab-acts .iconbtn {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+
 /* In edit mode the name IS the field — tap the words to fix a typo. It is drawn
    as a plain line of text until you touch it, so the row stays readable rather
    than looking like a form. */
 .grab-rename {
-  flex: 1;
-  min-width: 0;
-  margin-right: 6px;
-  padding: 8px 10px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;

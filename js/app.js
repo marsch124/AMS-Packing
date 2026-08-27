@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v141';
+const APP_VERSION = 'v142';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1232,6 +1232,9 @@ const IC = {
   fwd: svgIcon('<path d="M9 6l6 6-6 6"/>', 2.1),
   up: svgIcon('<path d="M6 15l6-6 6 6"/>', 2.1),
   down: svgIcon('<path d="M6 9l6 6 6-6"/>', 2.1),
+  // A chevron that stops against a bar — "all the way to the top / bottom".
+  totop: svgIcon('<path d="M5 5h14"/><path d="M6 17l6-6 6 6"/>', 2.1),
+  tobottom: svgIcon('<path d="M5 19h14"/><path d="M6 7l6 6 6-6"/>', 2.1),
   close: svgIcon('<path d="M6 6l12 12M18 6L6 18"/>', 2.1),
   check: svgIcon('<path d="M5 12.5l4.5 4.5L19 7"/>', 2.6),
   share: svgIcon('<path d="M12 15V4M8.5 7.5 12 4l3.5 3.5"/><path d="M6 12v6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-6"/>'),
@@ -1485,6 +1488,61 @@ async function renderGrab(id) {
   let done = loadGrabTicks(id).filter((n) => items.includes(n));
   let editing = false;
 
+  // Reordering works BY NAME, never by row position. Every step redraws the
+  // list, so a hold-to-repeat would otherwise be left pointing at whatever has
+  // since moved into that slot — it must keep moving the same thing.
+  const nudge = (name, delta) => {
+    const i = items.indexOf(name);
+    const to = i + delta;
+    if (i < 0 || to < 0 || to >= items.length) return false;
+    const next = items.slice();
+    [next[i], next[to]] = [next[to], next[i]];
+    items = next;
+    saveGrabItems(id, items);
+    draw();
+    return true;
+  };
+  const sendTo = (name, edge) => {
+    const i = items.indexOf(name);
+    if (i < 0 || (edge === 'top' ? i === 0 : i === items.length - 1)) return;
+    const next = items.slice();
+    const [moved] = next.splice(i, 1);
+    if (edge === 'top') next.unshift(moved); else next.push(moved);
+    items = next;
+    saveGrabItems(id, items);
+    draw();
+  };
+  // A half-typed rename must land BEFORE a move. `pointerdown` fires ahead of
+  // `blur`, so without this the move would run against the old name and the
+  // redraw would throw away what was just typed. Each field's save is held here
+  // and CALLED DIRECTLY rather than by blurring the field: a blur event is not
+  // guaranteed to fire (it doesn't when the page itself has lost focus), and a
+  // rename is too easy to lose to leave resting on that.
+  const renameSaves = new WeakMap();
+  const flushRename = () => {
+    const el = document.activeElement;
+    if (el && renameSaves.has(el)) renameSaves.get(el)();
+  };
+  // Hold ▲/▼ to keep moving. Each step rebuilds the list, destroying the button
+  // under the finger — so the release is caught on the document instead, and the
+  // listeners are added and removed with the hold so nothing is left behind.
+  let holdWait = null, holdRepeat = null;
+  const stopHold = () => {
+    clearTimeout(holdWait); clearInterval(holdRepeat);
+    holdWait = holdRepeat = null;
+    document.removeEventListener('pointerup', stopHold);
+    document.removeEventListener('pointercancel', stopHold);
+  };
+  const startHold = (name, delta) => {
+    stopHold();
+    if (!nudge(name, delta)) return; // one step on press; nothing more if it can't move
+    document.addEventListener('pointerup', stopHold);
+    document.addEventListener('pointercancel', stopHold);
+    holdWait = setTimeout(() => {
+      holdRepeat = setInterval(() => { if (!nudge(name, delta)) stopHold(); }, 130);
+    }, 380);
+  };
+
   const wrap = h('<section class="screen grab"></section>');
   const top = h(`<div class="topbar">
     <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
@@ -1528,13 +1586,18 @@ async function renderGrab(id) {
       }
       body.appendChild(h(`<p class="muted grab-hint">Tap each thing as you pick it up. Ticks clear themselves after ${GRAB_RESET_HOURS} hours, so the list is fresh for your next workout.</p>`));
     } else {
-      body.appendChild(h('<p class="muted grab-hint">Tap a name to fix a typo · ▲▼ to reorder · ✕ to remove. This list lives on this device only.</p>'));
+      body.appendChild(h('<p class="muted grab-hint">Tap a name to fix a typo · hold ▲▼ to keep moving · ⤒⤓ jump to the end. This list lives on this device only.</p>'));
       items.forEach((name, i) => {
+        const first = i === 0, last = i === items.length - 1;
         const row = h(`<div class="grab-item editing">
           <input type="text" class="grab-rename" value="${esc(name)}" maxlength="60" autocomplete="off" aria-label="Name — tap to fix a typo">
-          <button type="button" class="iconbtn sm grab-up" ${i === 0 ? 'disabled' : ''} aria-label="Move ${esc(name)} up" title="Move up">${ic('up','sm')}</button>
-          <button type="button" class="iconbtn sm grab-down" ${i === items.length - 1 ? 'disabled' : ''} aria-label="Move ${esc(name)} down" title="Move down">${ic('down','sm')}</button>
-          <button type="button" class="iconbtn grab-del" aria-label="Remove ${esc(name)}" title="Remove">${IC.close}</button>
+          <div class="grab-acts">
+            <button type="button" class="iconbtn sm grab-top" ${first ? 'disabled' : ''} aria-label="Move ${esc(name)} to the top" title="To the top">${ic('totop','sm')}</button>
+            <button type="button" class="iconbtn sm grab-up" ${first ? 'disabled' : ''} aria-label="Move ${esc(name)} up" title="Up — hold to keep moving">${ic('up','sm')}</button>
+            <button type="button" class="iconbtn sm grab-down" ${last ? 'disabled' : ''} aria-label="Move ${esc(name)} down" title="Down — hold to keep moving">${ic('down','sm')}</button>
+            <button type="button" class="iconbtn sm grab-bottom" ${last ? 'disabled' : ''} aria-label="Move ${esc(name)} to the bottom" title="To the bottom">${ic('tobottom','sm')}</button>
+            <button type="button" class="iconbtn grab-del" aria-label="Remove ${esc(name)}" title="Remove">${IC.close}</button>
+          </div>
         </div>`);
         // `current` tracks the live name, because a rename is saved WITHOUT
         // redrawing — see commit() below.
@@ -1558,19 +1621,21 @@ async function renderGrab(id) {
           saveGrabItems(id, items); saveGrabTicks(id, done);
           current = next;
         };
+        renameSaves.set(input, commit);
         input.addEventListener('blur', commit);
-        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
-        const move = (to) => {
-          const next = items.slice();
-          [next[i], next[to]] = [next[to], next[i]];
-          items = next;
-          saveGrabItems(id, items);
-          draw();
-        };
-        row.querySelector('.grab-up').addEventListener('click', () => { if (i > 0) move(i - 1); });
-        row.querySelector('.grab-down').addEventListener('click', () => { if (i < items.length - 1) move(i + 1); });
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); input.blur(); } });
+        // ▲▼ act on press rather than release, so holding can start repeating.
+        for (const [sel, delta] of [['.grab-up', -1], ['.grab-down', 1]]) {
+          row.querySelector(sel).addEventListener('pointerdown', () => {
+            flushRename();
+            startHold(current, delta);
+          });
+        }
+        row.querySelector('.grab-top').addEventListener('click', () => { flushRename(); sendTo(current, 'top'); });
+        row.querySelector('.grab-bottom').addEventListener('click', () => { flushRename(); sendTo(current, 'bottom'); });
         row.querySelector('.grab-del').addEventListener('click', () => {
-          items = items.filter((_, j) => j !== i);
+          flushRename();
+          items = items.filter((n) => n !== current);
           done = done.filter((n) => n !== current);
           saveGrabItems(id, items); saveGrabTicks(id, done);
           draw();
@@ -6020,7 +6085,7 @@ function howtoCard() {
         <ul>
           <li><b>Tap a thing as you pick it up</b> — it ticks off. When everything is in hand the list says <b>“All there — go!”</b>.</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
-          <li><b>The ✎ pencil edits the list</b>: remove what you never take, add what is missing, and use the <b>▲▼</b> arrows to put things in the order you actually pick them up. Each list is its own — the bike list and the run list can differ.</li>
+          <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. Each list is its own — the bike list and the run list can differ.</li>
           <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
         </ul>
 
@@ -6325,6 +6390,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v142', '2026-08-27 · 16:00 UTC', false, 'Reordering stops being a tapping exercise — hold the arrow, or jump to the end',
+      '<b>You said the reordering was tedious, and the arithmetic agrees with you:</b> moving the last thing on a seven-item list up to the top cost <b>six separate taps</b> of ▲, each one a small, fiddly target. You asked whether long-press-and-drag was possible. It is, but it would have meant hand-written finger-tracking that the iPhone makes genuinely awkward — and, because each row is now a text box (that is what lets you fix a typo), a long press on it fights with the phone’s own text-selection magnifier. So we did the two smaller things that remove the same tedium at a fraction of the risk.<br><br><b>(1) Hold ▲ or ▼ and it keeps going.</b> A tap still moves one step, exactly as before. Hold it for a moment and the item carries on climbing until you let go — or until it reaches the end and stops on its own. That turns six taps into one press.<br><br><b>(2) ⤒ and ⤓ jump straight to the end.</b> One tap sends a thing to the very top or the very bottom, which is usually what you actually wanted: the drink first because it comes from the kitchen, the shoes last because they are by the door.<br><br><b>The row had to change shape to fit them.</b> Four move buttons and a remove button will not sit beside the name on a phone without squeezing everything — and “Drink / water bottle” would have been cut off mid-word. So in edit mode each row is now <b>two lines</b>: the name across the full width, the controls on their own line underneath. The name is easier to read and much easier to type into, and every button is a comfortable size instead of a cramped one. <b>The workout screen itself is untouched</b> — this is only the ✎ editing view.<br><br><b>Remove now sits apart from the rest.</b> With four move buttons in a row, ✕ directly alongside them was a mis-tap waiting to happen while you were shuffling things about. It is pushed to the far right, away from the four.<br><br><b>Two details that took the most care.</b> Each step re-draws the list, which destroys the very button your finger is resting on — so a held press follows <em>the item</em> rather than the position, and keeps moving the same thing even as everything shifts underneath it. And if you were part-way through fixing a typo when you reached for an arrow, the rename is saved <em>first</em>: without that, the move would have used the old name and the redraw would have thrown away what you had just typed.',
+      'Getting a list into your order is now one press or one tap instead of six — and the name you are editing has the whole width of the screen to itself.'),
     v('v141', '2026-08-27 · 15:15 UTC', false, 'Fix a typo, put things in your own order — and a quieter tick',
       '<b>Three small corrections to the workout grab lists, all from your first look at v140.</b><br><br><b>(1) Tap a name to fix it.</b> Under the <b>✎ pencil</b>, each name is now the field itself — tap the words, correct the typo, and it saves the moment you tap away or press Enter. Before this, the only way to change <em>“Heart-rate strapp”</em> was to delete it and type the whole thing again, which is a silly price for one letter. Your tick follows the rename, so correcting a name mid-workout does not un-tick the thing you have already picked up. Two guards: an empty name is refused (the old one comes back rather than leaving you a blank row), and renaming something onto a name already on the list is refused too, since the list identifies things by name.<br><br><b>(2) ▲▼ arrows put them in your order.</b> The list arrived in the order I guessed, which is nobody’s order. Now you can walk them into the sequence you actually collect them in — the shoes by the door last, the drink from the kitchen first — so the list reads like the route you walk rather than a set of unrelated reminders. The same <b>▲▼</b> pattern the app already uses for <b>Storage places</b> and a template’s <b>Sections</b>, so there is nothing new to learn. Both lists remember their own order.<br><br><b>(3) “Standard items” is gone.</b> You asked for it to go, and it deserved to: it was a single tap that threw away every change you had just made to a list, sitting directly beneath the buttons you use to make those changes. This app has form here — <b>v133</b> removed <b>“Reset to the standard seven”</b> from the timeline for precisely the same reason. A one-tap undo of an afternoon’s work is not a feature, it is a trap. The standard seven still arrive on a device that has never opened the list; from then on the list is simply yours.<br><br><b>(4) The strikethrough on a ticked item is gone.</b> Your words: unnecessary — and right. A ticked row was already saying “done” three times over: the circle fills solid green, the whole row takes a green ground, <em>and</em> the words were crossed out. The first two you can read across the room with your glasses off, which is the point of this screen; the third only made the words harder to read while adding nothing. A ticked row now simply <b>recedes</b> — the name softens back toward the background and lets the green carry the message.',
       'A typo costs one tap instead of retyping the whole thing, the list can read in the order you actually walk — and a ticked item goes quiet instead of being scribbled out.'),
