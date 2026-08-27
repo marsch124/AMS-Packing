@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v144';
+const APP_VERSION = 'v145';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1441,12 +1441,15 @@ const GRAB_ITEMS_KEY = 'ams-grab-lists';
 const GRAB_TICKS_KEY = 'ams-grab-ticks';
 const GRAB_RESET_HOURS = 6; // ticks older than this belong to a previous workout
 // Hold ▲/▼ to keep moving: how long a press waits before it starts repeating,
-// and how long each step then takes. Tuned on the phone, twice: 130ms was
-// "very, very fast" and 260ms still "a bit too fast". Judge changes here in
-// the hand, not in a browser — a desktop tab throttles repeating timers when
-// it isn't in front, which hides the real speed completely.
+// and how long each step then takes. Tuned on the phone across four passes —
+// 130 → 260 → 400 → 600 — because every one of the first three was still too
+// quick to stop on the row you wanted. 600ms is deliberately longer than the
+// ~250ms it takes to see a thing and react to it, which is what makes it
+// controllable rather than merely slower. Judge any change here IN THE HAND:
+// a desktop tab throttles repeating timers whenever it isn't in front, so the
+// speed measured in a browser is never the speed felt on the phone.
 const HOLD_START_MS = 380;
-const HOLD_STEP_MS = 400;
+const HOLD_STEP_MS = 600;
 const GRAB_DEFAULT_ITEMS = ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'];
 const GRAB_LISTS = {
   bike: { emoji: '🚴', title: 'Indoor bike' },
@@ -6419,6 +6422,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v145', '2026-08-27 · 17:40 UTC', false, 'The hold slows down once more — one step every six-tenths of a second',
+      'Slower again: <b>each step now takes 600 milliseconds</b>, so a little under two a second. This is a bigger jump than the last one, on purpose — the previous three settings were all still faster than you could reliably stop on the row you wanted.<br><br><b>There is a reason 600 is the number.</b> It takes roughly a quarter of a second to see something happen and react to it, so any step shorter than that is one you physically cannot stop on — you will always overshoot by at least one. At 600ms each step is comfortably longer than your reaction, which is what makes it <em>controllable</em> rather than just <em>slower</em>. On a seven-item list a full run from bottom to top now takes about three and a half seconds.<br><br>As always, nothing else changed: a single tap still moves exactly one step, and the pause before a hold starts repeating is untouched. If you would rather not hold at all, <b>⤒</b> and <b>⤓</b> still send a thing to the top or bottom in one tap.',
+      'The hold is now slower than your own reaction time, which is the point at which it stops overshooting and starts landing where you meant.'),
     v('v144', '2026-08-27 · 17:15 UTC', false, 'The hold slows down again — two and a half steps a second',
       'Still a bit too quick at three steps a second, so <b>each step now takes 400 milliseconds</b> — around two and a half a second. Moving something from the bottom of a seven-item list to the top takes about two and a half seconds of holding, which is comfortably faster than tapping six times but slow enough to stop exactly where you meant to.<br><br>Nothing else changed. A single tap still moves one step, and the short pause before a hold starts repeating is the same, so there is still no danger of a quick tap running away with the list.<br><br><em>Worth recording why this took three goes: a hold like this cannot honestly be judged anywhere but in your hand. A browser on the desktop deliberately slows down repeating timers whenever its window is not in front, so the speed I could measure while building it was never the speed you would feel. The two timings now sit on their own, clearly labelled, at the top of that part of the code — so tuning it is a single number, and there is a note there saying not to trust a desktop measurement of it.</em>',
       'Holding an arrow now moves at a pace you can actually stop on — and the setting is somewhere obvious, should it ever want nudging again.'),
