@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v145';
+const APP_VERSION = 'v146';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1489,6 +1489,40 @@ function saveGrabTicks(id, done) {
   } catch { /* ignore */ }
 }
 
+// The moment the LAST thing is ticked: the whole screen blinks green and the
+// phone buzzes. The "All there — go!" banner sits at the top of the list, and
+// with a long list you are usually at the BOTTOM when the last tick lands — so
+// the signal has to be one you cannot miss wherever you are looking.
+//
+// The buzz needs two routes. Android has navigator.vibrate; the iPhone does
+// not (Safari has never supported it), but flipping a native switch control
+// fires the phone's haptic tick — so an invisible one is clicked three times.
+// Both are best-effort inside try/catch: worst case the flash alone carries
+// the message. Must be called from within the tap's own event handler — the
+// iPhone only allows the haptic as part of a real user gesture.
+function grabCompleteFeedback() {
+  try {
+    if (navigator.vibrate) {
+      navigator.vibrate([30, 60, 30, 60, 90]);
+    } else {
+      const lab = document.createElement('label');
+      lab.setAttribute('aria-hidden', 'true');
+      lab.style.cssText = 'position:fixed;top:-99px;left:-99px;width:1px;height:1px;overflow:hidden;';
+      const sw = document.createElement('input');
+      sw.type = 'checkbox';
+      sw.setAttribute('switch', '');
+      lab.appendChild(sw);
+      document.body.appendChild(lab);
+      for (const at of [0, 140, 280]) setTimeout(() => lab.click(), at);
+      setTimeout(() => lab.remove(), 450);
+    }
+  } catch { /* ignore */ }
+  const flash = h('<div class="grab-flash" aria-hidden="true"></div>');
+  flash.addEventListener('animationend', () => flash.remove());
+  document.body.appendChild(flash);
+  setTimeout(() => flash.remove(), 2500); // safety net if the animation never runs
+}
+
 async function renderGrab(id) {
   const def = GRAB_LISTS[id];
   if (!def) { location.replace('#/'); return renderHome(); }
@@ -1588,7 +1622,11 @@ async function renderGrab(id) {
         row.addEventListener('click', () => {
           done = ticked ? done.filter((n) => n !== name) : [...done, name];
           saveGrabTicks(id, done);
+          // Celebrate only on the tick that FINISHES the list — never when
+          // un-ticking, and never on redrawing an already-complete list.
+          const finished = !ticked && done.length === items.length;
           draw();
+          if (finished) grabCompleteFeedback();
         });
         body.appendChild(row);
       }
@@ -6115,7 +6153,7 @@ function howtoCard() {
         <h3>Workout grab lists — 🚴 Bike and 🏃 Run</h3>
         <p>Two big buttons near the top of <b>Home</b> open a deliberately tiny checklist each: the handful of things to gather before an <b>indoor bike</b> or <b>indoor treadmill</b> session — headband, AirPods, something to drink and so on. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
         <ul>
-          <li><b>Tap a thing as you pick it up</b> — it ticks off. When everything is in hand the list says <b>“All there — go!”</b>.</li>
+          <li><b>Tap a thing as you pick it up</b> — it ticks off. The moment the last one ticks, <b>the whole screen blinks green and the phone gives a buzz</b>, and the list says <b>“All there — go!”</b> — so you get the signal even when the banner at the top is scrolled out of view.</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
           <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. <b>Done</b> keeps your changes; <b>Cancel</b> puts the list back exactly as it was when you tapped the pencil. Each list is its own — the bike list and the run list can differ.</li>
           <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
@@ -6422,6 +6460,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v146', '2026-08-30 · 13:05 UTC', false, 'The last tick blinks the whole screen green — and the phone buzzes',
+      '<b>You spotted the flaw in “All there — go!”: it lives at the top of the list, and when the last thing you tick is near the bottom, the celebration happens off-screen.</b> You finish the list and nothing you can see acknowledges it — the one moment the screen has something worth saying, it says it somewhere you are not looking.<br><br><b>Now the moment the last thing ticks, the whole screen blinks green</b> — three soft pulses over about a second and a half, laid over everything, wherever you happen to be on the list. There is no missing it, which is the point: it is the “grab your drink and go” signal, readable from the corner of your eye with your glasses off. The pulses are deliberately gentle and deliberately slow — well under the flicker rate that can trouble photosensitive eyes — and if your phone is set to reduce motion, it becomes a single calm green swell instead of a blink. It only fires on <b>the tick that finishes the list</b>: un-ticking and re-ticking something on an already-finished list does not set it off again, and neither does simply opening a list you completed earlier.<br><br><b>And the phone buzzes in your hand at the same time.</b> This took more care than it sounds, because the iPhone famously does not let web apps use the normal vibration feature — Android phones do, and on those you get a proper little buzz-buzz-buzz pattern. On the iPhone the app instead borrows the crisp haptic “tick” you feel when flipping a switch in Settings, firing it three times in quick succession. It is subtler than a true vibration, but it is a real physical tap in your hand, and combined with the green flash the message is unambiguous. On a device with neither, the flash alone carries it.<br><br>Nothing else about the grab lists changed: the banner still appears at the top as before, ticks still clear themselves after a few hours, and the little per-tick feedback is exactly as it was.',
+      'Finishing the list is now impossible to miss — the screen flashes green and the phone taps your hand, even when the “All there — go!” banner is scrolled out of sight.'),
     v('v145', '2026-08-27 · 17:40 UTC', false, 'The hold slows down once more — one step every six-tenths of a second',
       'Slower again: <b>each step now takes 600 milliseconds</b>, so a little under two a second. This is a bigger jump than the last one, on purpose — the previous three settings were all still faster than you could reliably stop on the row you wanted.<br><br><b>There is a reason 600 is the number.</b> It takes roughly a quarter of a second to see something happen and react to it, so any step shorter than that is one you physically cannot stop on — you will always overshoot by at least one. At 600ms each step is comfortably longer than your reaction, which is what makes it <em>controllable</em> rather than just <em>slower</em>. On a seven-item list a full run from bottom to top now takes about three and a half seconds.<br><br>As always, nothing else changed: a single tap still moves exactly one step, and the pause before a hold starts repeating is untouched. If you would rather not hold at all, <b>⤒</b> and <b>⤓</b> still send a thing to the top or bottom in one tap.',
       'The hold is now slower than your own reaction time, which is the point at which it stops overshooting and starts landing where you meant.'),
