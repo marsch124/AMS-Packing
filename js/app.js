@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v147';
+const APP_VERSION = 'v148';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1489,38 +1489,19 @@ function saveGrabTicks(id, done) {
   } catch { /* ignore */ }
 }
 
-// The moment the LAST thing is ticked: the whole screen blinks green and the
-// phone buzzes. The "All there — go!" banner sits at the top of the list, and
-// with a long list you are usually at the BOTTOM when the last tick lands — so
-// the signal has to be one you cannot miss wherever you are looking.
+// The moment the LAST thing is ticked: the whole screen blinks green. The
+// "All there — go!" banner sits at the top of the list, and with a long list
+// you are usually at the BOTTOM when the last tick lands — so the signal has
+// to be one you cannot miss wherever you are looking.
 //
-// The buzz needs two routes. Android has navigator.vibrate; the iPhone does
-// not (Safari has never supported it), but flipping a native switch control
-// fires the phone's haptic tick — so an invisible one is clicked three times.
-// Both are best-effort inside try/catch: worst case the flash alone carries
-// the message. Must be called from within the tap's own event handler — the
-// iPhone only allows the haptic as part of a real user gesture.
+// A buzz rides along where the phone has one to give: Android's
+// navigator.vibrate. The iPhone has no vibration API, and the switch-control
+// haptic workaround was tried twice (v146 three ticks on timers, v147 ten
+// ticks with the first fired synchronously inside the gesture) and produced
+// nothing on the device — so it was retired in v148 rather than left as dead
+// code. The flash alone carries the message there.
 function grabCompleteFeedback() {
-  try {
-    if (navigator.vibrate) {
-      navigator.vibrate([30, 60, 30, 60, 90]);
-    } else {
-      const lab = document.createElement('label');
-      lab.setAttribute('aria-hidden', 'true');
-      lab.style.cssText = 'position:fixed;top:-99px;left:-99px;width:1px;height:1px;overflow:hidden;';
-      const sw = document.createElement('input');
-      sw.type = 'checkbox';
-      sw.setAttribute('switch', '');
-      lab.appendChild(sw);
-      document.body.appendChild(lab);
-      // The first flip happens synchronously, INSIDE the finishing tap itself —
-      // the iPhone is pickiest about haptics being part of a real gesture. The
-      // rest are spread so ten ticks span the same ~1.4s as the green blink.
-      sw.click();
-      for (let i = 1; i < 10; i++) setTimeout(() => sw.click(), i * 150);
-      setTimeout(() => lab.remove(), 1600);
-    }
-  } catch { /* ignore */ }
+  try { if (navigator.vibrate) navigator.vibrate([30, 60, 30, 60, 90]); } catch { /* ignore */ }
   const flash = h('<div class="grab-flash" aria-hidden="true"></div>');
   flash.addEventListener('animationend', () => flash.remove());
   document.body.appendChild(flash);
@@ -6157,7 +6138,7 @@ function howtoCard() {
         <h3>Workout grab lists — 🚴 Bike and 🏃 Run</h3>
         <p>Two big buttons near the top of <b>Home</b> open a deliberately tiny checklist each: the handful of things to gather before an <b>indoor bike</b> or <b>indoor treadmill</b> session — headband, AirPods, something to drink and so on. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
         <ul>
-          <li><b>Tap a thing as you pick it up</b> — it ticks off. The moment the last one ticks, <b>the whole screen blinks green</b> (and the phone taps along, where it allows a web app to), and the list says <b>“All there — go!”</b> — so you get the signal even when the banner at the top is scrolled out of view.</li>
+          <li><b>Tap a thing as you pick it up</b> — it ticks off. The moment the last one ticks, <b>the whole screen blinks green</b> and the list says <b>“All there — go!”</b> — so you get the signal even when the banner at the top is scrolled out of view. (On phones that let a web app vibrate — Android, not the iPhone — a buzz rides along too.)</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
           <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. <b>Done</b> keeps your changes; <b>Cancel</b> puts the list back exactly as it was when you tapped the pencil. Each list is its own — the bike list and the run list can differ.</li>
           <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
@@ -6464,6 +6445,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v148', '2026-08-30 · 14:00 UTC', false, 'The buzz experiment closes — the green blink carries the moment on its own',
+      '<b>Your verdict on v147: “Flash yes. Haptic no.”</b> That settles it. The iPhone was asked twice, the second time exactly the way it insists on — the very first tap fired inside your own finger-tap, ten of them riding along with the blink — and it still declined. Apple simply does not let a web app tap your hand, whatever the folklore says about the switch trick, and there is no third way to ask that is worth trying.<br><br><b>So the experiment is retired, with a clear conscience.</b> The invisible switch machinery from v146 and v147 is removed — not because it did any harm, but because code that provably does nothing on the one phone this app lives on is clutter, and clutter is where future confusion breeds. A short note stays behind in the code saying what was tried and why it is gone, so neither of us reopens this in six months wondering whether it was ever attempted.<br><br><b>What remains is what you said actually works:</b> the moment the last thing ticks, the whole screen blinks green — unmissable from anywhere on the list — and on an Android phone (should this app ever live on one) a real buzz still rides along, because there the vibration feature genuinely exists.<br><br>Nothing else changed. This is a tidy-up release: same blink, same lists, same everything — minus one machine that was silently doing nothing.',
+      'The app stops pretending the iPhone might buzz — the green blink, which you confirmed does the job, is the celebration, and the code now says only what is true.'),
     v('v147', '2026-08-30 · 13:30 UTC', false, 'One more try at the buzz — ten taps, riding along with the blink',
       '<b>Your verdict on v146: the green blink is doing its job, and you felt nothing in your hand.</b> Fair enough — the visual is the signal that matters, and it works. But you gave the buzz one more chance (“if you want to try, why not”), so this is that one more try, done properly rather than half-heartedly.<br><br><b>Two things changed about the iPhone tap.</b> First, <b>the very first tap now fires inside your finger-tap itself</b> — the iPhone is strict about a web app only being allowed a haptic as part of a genuine touch, and v146 queued even the first one on a timer, a hair <em>after</em> the touch, which may be exactly why nothing came through. Second, <b>there are now ten taps instead of three</b>, spread evenly across the same second and a half as the green blink — so if they land at all, the screen pulses and the hand taps together as one celebration rather than three shy ticks you could miss.<br><br><b>And if they still do not land, nothing is lost.</b> The whole attempt is invisible and silent — no delay, no flicker, no side effect. The blink carries the moment on its own, exactly as you said. This is a free experiment: either your next finished list taps along in your hand, or v147 simply looks and behaves exactly like v146 and we let the vibration idea rest with a clear conscience.<br><br>Android phones are untouched by all this — they have a proper vibration feature and got a real buzz in v146 already.',
       'The buzz gets its one fair chance — timed the way the iPhone insists on — and if it still stays silent, the app is none the worse for having tried.'),
