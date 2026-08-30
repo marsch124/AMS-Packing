@@ -6214,6 +6214,36 @@ table.grid {
   color: var(--ok-txt);
 }
 
+/* The last tick blinks the WHOLE screen green: the done-banner sits at the top,
+   and on a long list you are usually at the bottom when it lands. A fixed
+   overlay above everything; taps pass straight through it. Three soft pulses
+   over ~1.4s stays well under the three-flashes-per-second photosensitivity
+   line; with reduced motion it is a single gentle swell instead. Removed by
+   its own animationend (plus a timeout safety net in the JS). */
+.grab-flash {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  pointer-events: none;
+  background: var(--ok);
+  opacity: 0;
+}
+@keyframes grab-flash-blink {
+  0%, 100% { opacity: 0; }
+  12%, 46%, 80% { opacity: .5; }
+  29%, 63% { opacity: .06; }
+}
+@keyframes grab-flash-swell {
+  0%, 100% { opacity: 0; }
+  40% { opacity: .35; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .grab-flash { animation: grab-flash-blink 1.4s ease both; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .grab-flash { animation: grab-flash-swell .9s ease both; }
+}
+
 .grab-item {
   display: flex;
   align-items: center;
