@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v149';
+const APP_VERSION = 'v150';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1621,7 +1621,7 @@ async function renderGrab(id) {
     }, HOLD_START_MS);
   };
 
-  const wrap = h('<section class="screen grab"></section>');
+  const wrap = h(`<section class="screen grab grab-c-${id}"></section>`);
   const top = h(`<div class="topbar">
     <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
     <h1 class="grow grab-title"><span class="grab-icon">${def.icon}</span>${esc(def.title)}</h1>
@@ -1911,7 +1911,7 @@ async function renderHome() {
   // list is one entry there. They sit above the trip builder on purpose: on a
   // workout day this is the only thing you came for.
   wrap.appendChild(h(`<div class="grab-row">${Object.entries(GRAB_LISTS).map(([gid, d]) =>
-    `<a class="grab-btn" href="#/grab/${gid}"><span class="grab-icon">${d.icon}</span><span>${d.label}</span></a>`).join('')}</div>`));
+    `<a class="grab-btn grab-c-${gid}" href="#/grab/${gid}"><span class="grab-icon">${d.icon}</span><span>${d.label}</span></a>`).join('')}</div>`));
 
   wrap.appendChild(h('<p class="muted pad">Set your trip details — your common base and your transport’s kit come in automatically. Tick any extra activities, then press <b>Create Event</b> to build one combined <b>Packing List</b> to pack from.</p>'));
 
@@ -6181,7 +6181,7 @@ function howtoCard() {
  <p><b>Search.</b> A <b></b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name, <em>and</em> by the original Swedish wording even though that is no longer displayed), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
 
         <h3>Workout grab lists — Bike, Run and Swim</h3>
-        <p>One compact row of buttons near the top of <b>Home</b> — <b>Bike</b>, <b>Run</b> and <b>Swim</b>, each with its own hand-drawn doodle icon — opens a deliberately tiny checklist each: the handful of things to gather before an <b>indoor bike</b> or <b>treadmill</b> session, or to take along to the pool — headband, AirPods, goggles, something to drink and so on. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
+        <p>One compact row of buttons near the top of <b>Home</b> — <b>Bike</b> in yellow, <b>Run</b> in green and <b>Swim</b> in blue, each with its own hand-drawn doodle icon — opens a deliberately tiny checklist each: the handful of things to gather before an <b>indoor bike</b> or <b>treadmill</b> session, or to take along to the pool — headband, AirPods, goggles, something to drink and so on. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
         <ul>
           <li><b>Tap a thing as you pick it up</b> — it ticks off. The moment the last one ticks, <b>the whole screen blinks green</b> and the list says <b>“All there — go!”</b> — so you get the signal even when the banner at the top is scrolled out of view. (On phones that let a web app vibrate — Android, not the iPhone — a buzz rides along too.)</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
@@ -6490,6 +6490,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v150', '2026-08-30 · 15:20 UTC', false, 'The three lists get their colours — Bike yellow, Run green, Swim blue',
+      '<b>Your colour assignment, applied exactly as given: Run green, Bike yellow, Swim blue.</b><br><br>Each button on Home now wears its list’s colour three ways at once — the doodle is drawn in it, the button’s background takes a soft wash of it, and the border a slightly firmer line of it. The word stays in the app’s ordinary ink, because the label is the part you read and colour is the part you recognise. Open a list and its doodle in the title bar carries the same colour, so the screen you land on confirms the button you pressed.<br><br>The shades took a moment’s care rather than being the crayon-box versions: a straight yellow line on a pale background all but disappears, so Bike’s yellow is a darker, golden marker-pen tone that still reads unmistakably as yellow; Run’s green is the very green the app already uses for “done” and “in hand”, so the language stays consistent; Swim’s blue is a clear pool-water blue. All three are mid-tones on purpose — dark enough to draw on the light card, bright enough to draw on the dark one, so the colours survive dark mode without a second set.<br><br>A quiet practical gain rides along: the three buttons no longer tell apart only by reading them. A glance at colour alone — yellow, green, blue — finds the right one, which is exactly the speed this row is meant to work at.',
+      'Each list is now recognisable from across the room by colour alone — and the doodles look even more like someone drew them for you, because now they’re drawn in coloured pen.'),
     v('v149', '2026-08-30 · 14:45 UTC', false, 'A Swim list joins Bike and Run — one neat row, with hand-drawn icons',
       '<b>Three things you asked for, all on the grab lists you said you love.</b><br><br><b>(1) Swim is the third list.</b> Same idea as the other two — a deliberately tiny checklist of what to gather before heading out — starting with a guess that fits a pool rather than a treadmill: swim trunks, goggles, swim cap, towel, something to drink, sports watch, flip-flops. Shape it with the ✎ pencil exactly like the others; from the first edit it is simply yours. Bike and Run keep whatever you have already made of them — a new list arriving changes nothing about the old ones.<br><br><b>(2) The buttons shrank to one line.</b> Two big stacked-label buttons were fine when there were two; three of them would have started eating the Home screen from the top. The row is now three compact buttons side by side, icon beside the word instead of above it, and it stays one line even on a narrow phone — below a certain width the lettering gives a little rather than the row wrapping.<br><br><b>(3) The icons are hand-drawn.</b> The 🚴 and 🏃 emoji are gone; in their place are little single-stroke doodles — a wobbly-wheeled bicycle, a runner mid-stride trailing speed lines, a swimmer’s head and reaching arm above two squiggly waves. Drawn freehand on purpose: nothing about grabbing your goggles is corporate, and a slightly crooked wheel says so. A quiet bonus over emoji: they are drawn in the app’s own ink colour, so they match everything around them and follow dark mode properly, which emoji never did. The same doodle now heads each list’s own screen too, where the emoji used to sit.<br><br>Everything about how the lists <em>work</em> — the tick that blinks the screen green, ticks clearing themselves after a few hours, the editor — is exactly as it was.',
       'The pool gets the same three-seconds-to-check treat as the bike and the treadmill — and the row of buttons got smaller, friendlier and better-dressed while making room for it.'),
