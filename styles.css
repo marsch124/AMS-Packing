@@ -6173,14 +6173,18 @@ table.grid {
   margin: 0 0 16px;
 }
 
-/* Each list wears its own colour — Martin's mapping: Bike yellow, Run green,
-   Swim blue. One custom property per list, set by a grab-c-<id> class carried
-   by both the Home button and the list's own screen, so the doodle, the
-   button tint and the border all draw from the same pot. Mid-tone shades on
-   purpose: they read on the light card and the dark one alike. */
-.grab-c-bike { --grabc: #c99700; }
-.grab-c-run  { --grabc: #2e9e6b; }
-.grab-c-swim { --grabc: #3a86d4; }
+/* Each list wears a colour — factory mapping: Swim blue, Bike yellow, Run
+   green, but every list can pick its own in the ✎ editor. One custom property
+   per tone, set by a grab-c-<tone> class carried by both the Home button and
+   the list's own screen, so the doodle, the button tint and the border all
+   draw from the same pot. Mid-tone shades on purpose: they read on the light
+   card and the dark one alike. */
+.grab-c-blue   { --grabc: #3a86d4; }
+.grab-c-yellow { --grabc: #c99700; }
+.grab-c-green  { --grabc: #2e9e6b; }
+.grab-c-red    { --grabc: #cf5b52; }
+.grab-c-purple { --grabc: #8a63c9; }
+.grab-c-teal   { --grabc: #17969b; }
 
 .grab-btn {
   display: flex;
@@ -6221,6 +6225,61 @@ table.grid {
 
 .grab-title { display: flex; align-items: center; gap: 8px; }
 .grab-title .grab-icon { width: 30px; height: 30px; }
+
+/* The look editor at the top of ✎ edit mode: name, doodle gallery, colours. */
+.grab-look {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--grabc, var(--brand)) 7%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--grabc, var(--brand)) 30%, var(--line));
+  border-radius: 14px;
+}
+.grab-look-name { display: flex; align-items: center; gap: 10px; font-weight: 700; }
+.grab-look-name input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--ink);
+}
+.grab-icon-pick {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.grab-icon-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.grab-icon-opt .grab-icon { width: 30px; height: 30px; }
+.grab-icon-opt.sel {
+  border-color: var(--grabc, var(--brand));
+  background: color-mix(in srgb, var(--grabc, var(--brand)) 14%, var(--card));
+  box-shadow: 0 0 0 1px var(--grabc, var(--brand));
+}
+.grab-tone-pick { display: flex; gap: 10px; }
+.grab-tone-opt {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--grabc);
+  border: 2px solid color-mix(in srgb, var(--grabc) 55%, var(--card));
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.grab-tone-opt.sel { box-shadow: 0 0 0 3px var(--card), 0 0 0 5px var(--grabc); }
 
 .grab-body { display: grid; gap: 10px; }
 
