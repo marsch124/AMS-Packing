@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v151';
+const APP_VERSION = 'v152';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1543,19 +1543,22 @@ function saveGrabItems(id, items) {
     localStorage.setItem(GRAB_ITEMS_KEY, JSON.stringify(all));
   } catch { /* ignore */ }
 }
-function loadGrabTicks(id) {
+// Ticks and "not this time" skips live in ONE record with ONE clock, on
+// purpose: a skip is a fact about this session, exactly like a tick, so the
+// six-hour self-reset and the Start-over button clear both together and the
+// skipped thing is back on the next workout's list.
+function loadGrabState(id) {
   try {
     const all = JSON.parse(localStorage.getItem(GRAB_TICKS_KEY) || 'null') || {};
     const t = all[id];
-    if (!t || !Array.isArray(t.done)) return [];
-    if (!t.at || Date.now() - Date.parse(t.at) > GRAB_RESET_HOURS * 3600 * 1000) return [];
-    return t.done;
-  } catch { return []; }
+    if (!t || !t.at || Date.now() - Date.parse(t.at) > GRAB_RESET_HOURS * 3600 * 1000) return { done: [], skipped: [] };
+    return { done: Array.isArray(t.done) ? t.done : [], skipped: Array.isArray(t.skip) ? t.skip : [] };
+  } catch { return { done: [], skipped: [] }; }
 }
-function saveGrabTicks(id, done) {
+function saveGrabState(id, done, skipped) {
   try {
     let all; try { all = JSON.parse(localStorage.getItem(GRAB_TICKS_KEY) || '{}') || {}; } catch { all = {}; }
-    all[id] = { at: new Date().toISOString(), done };
+    all[id] = { at: new Date().toISOString(), done, skip: skipped };
     localStorage.setItem(GRAB_TICKS_KEY, JSON.stringify(all));
   } catch { /* ignore */ }
 }
@@ -1583,10 +1586,16 @@ async function renderGrab(id) {
   const def = GRAB_LISTS[id];
   if (!def) { location.replace('#/'); return renderHome(); }
   let items = loadGrabItems(id);
-  // Ticks are matched to items by name; anything ticked that no longer exists
-  // (edited away in the meantime) is simply dropped.
-  let done = loadGrabTicks(id).filter((n) => items.includes(n));
+  // Ticks and skips are matched to items by name; anything referring to an
+  // item that no longer exists (edited away in the meantime) is simply dropped.
+  const state = loadGrabState(id);
+  let done = state.done.filter((n) => items.includes(n));
+  let skipped = state.skipped.filter((n) => items.includes(n));
   let editing = false;
+  // "Complete" means every item you are actually taking is in hand — skipped
+  // things don't count against you, but a list that is ALL skips is not done.
+  const active = () => items.filter((n) => !skipped.includes(n));
+  const complete = () => { const a = active(); return a.length > 0 && a.every((n) => done.includes(n)); };
   // Every edit saves the moment you make it, so Cancel needs something to go
   // back TO: the list exactly as it stood when the pencil was tapped.
   let asOpened = null;
@@ -1663,35 +1672,69 @@ async function renderGrab(id) {
     body.innerHTML = '';
 
     if (!editing) {
-      const allDone = items.length > 0 && done.length === items.length;
-      if (allDone) {
+      if (complete()) {
         body.appendChild(h(`<div class="grab-done-banner">🎉 <b>All there — go!</b></div>`));
       } else {
-        body.appendChild(h(`<p class="grab-count">${done.length} of ${items.length} in hand</p>`));
+        body.appendChild(h(`<p class="grab-count">${done.length} of ${active().length} in hand${skipped.length ? ` · ${skipped.length} skipped` : ''}</p>`));
       }
+      // Any change below celebrates only on the ACTION that finishes the list
+      // — the tick that completes it, or the skip that excuses the last
+      // missing thing. Never when undoing, never on a redraw.
+      const changed = (mutate) => {
+        const was = complete();
+        mutate();
+        saveGrabState(id, done, skipped);
+        const finished = !was && complete();
+        draw();
+        if (finished) grabCompleteFeedback();
+      };
       for (const name of items) {
         const ticked = done.includes(name);
-        const row = h(`<button type="button" class="grab-item${ticked ? ' ticked' : ''}">
-          <span class="grab-check">${ticked ? IC.check : ''}</span>
-          <span class="grab-name">${esc(name)}</span>
-        </button>`);
-        row.addEventListener('click', () => {
-          done = ticked ? done.filter((n) => n !== name) : [...done, name];
-          saveGrabTicks(id, done);
-          // Celebrate only on the tick that FINISHES the list — never when
-          // un-ticking, and never on redrawing an already-complete list.
-          const finished = !ticked && done.length === items.length;
-          draw();
-          if (finished) grabCompleteFeedback();
-        });
+        const isSkipped = skipped.includes(name);
+        const row = h(`<div class="grab-item${ticked ? ' ticked' : ''}${isSkipped ? ' skipped' : ''}">
+          <button type="button" class="grab-main">
+            <span class="grab-check">${ticked ? IC.check : ''}</span>
+            <span class="grab-name">${esc(name)}</span>
+            ${isSkipped ? '<span class="grab-skip-note">not this time</span>' : ''}
+          </button>
+          <button type="button" class="grab-skip" aria-label="${isSkipped ? `Take ${esc(name)} along after all` : `Leave ${esc(name)} behind, just this once`}" title="${isSkipped ? 'Take it along after all' : 'Not this time'}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12,3.9 C16.4,3.7 20.2,7.4 20.1,11.9 C20,16.4 16.3,20.1 11.9,20 C7.5,19.9 3.9,16.2 4,11.8 C4.1,7.5 7.7,4 12.3,4.1"/><path d="M6.8,17.4 L17.4,6.7"/></svg>
+          </button>
+        </div>`);
+        // A tap anywhere on a skipped row brings the thing back — a skip is a
+        // light decision and coming back from it should be even lighter.
+        row.querySelector('.grab-main').addEventListener('click', () => changed(() => {
+          if (isSkipped) skipped = skipped.filter((n) => n !== name);
+          else done = ticked ? done.filter((n) => n !== name) : [...done, name];
+        }));
+        row.querySelector('.grab-skip').addEventListener('click', () => changed(() => {
+          if (isSkipped) { skipped = skipped.filter((n) => n !== name); }
+          else { skipped = [...skipped, name]; done = done.filter((n) => n !== name); }
+        }));
         body.appendChild(row);
       }
-      if (done.length) {
+      // "Ready to go" — the deliberate way out. Complete: one green blink and
+      // back to Home (the flash overlays the whole window, so it carries
+      // across the screen change). Not complete: it names what is missing and
+      // stays put.
+      const ready = h(`<button type="button" class="btn primary lg grab-ready">${IC.check}<span>Ready to go</span></button>`);
+      ready.addEventListener('click', () => {
+        if (complete()) {
+          grabCompleteFeedback();
+          setTimeout(() => { location.hash = '#/'; }, 350);
+          return;
+        }
+        const missing = active().filter((n) => !done.includes(n));
+        if (!missing.length) { showToast('Nothing left to take — everything is skipped.'); return; }
+        showToast(missing.length <= 3 ? `Not yet — still missing: ${missing.join(', ')}.` : `Not yet — ${missing.length} things still missing.`);
+      });
+      body.appendChild(ready);
+      if (done.length || skipped.length) {
         const reset = h(`<button type="button" class="btn ghost grab-reset">${ic('refresh','sm')}<span>Start over</span></button>`);
-        reset.addEventListener('click', () => { done = []; saveGrabTicks(id, done); draw(); });
+        reset.addEventListener('click', () => { done = []; skipped = []; saveGrabState(id, done, skipped); draw(); });
         body.appendChild(reset);
       }
-      body.appendChild(h(`<p class="muted grab-hint">Tap each thing as you pick it up. Ticks clear themselves after ${GRAB_RESET_HOURS} hours, so the list is fresh for your next workout.</p>`));
+      body.appendChild(h(`<p class="muted grab-hint">Tap each thing as you pick it up — or tap ⊘ to leave something behind, just this once. Ticks and skips clear themselves after ${GRAB_RESET_HOURS} hours, so the list is fresh and whole for your next workout.</p>`));
     } else {
       body.appendChild(h('<p class="muted grab-hint">Tap a name to fix a typo · hold ▲▼ to keep moving · ⤒⤓ jump to the end. This list lives on this device only.</p>'));
       items.forEach((name, i) => {
@@ -1725,7 +1768,8 @@ async function renderGrab(id) {
           }
           const arr = items.slice(); arr[i] = next; items = arr;
           done = done.map((n) => (n === current ? next : n)); // a tick follows its item
-          saveGrabItems(id, items); saveGrabTicks(id, done);
+          skipped = skipped.map((n) => (n === current ? next : n)); // and so does a skip
+          saveGrabItems(id, items); saveGrabState(id, done, skipped);
           current = next;
         };
         renameSaves.set(input, commit);
@@ -1744,7 +1788,8 @@ async function renderGrab(id) {
           flushRename();
           items = items.filter((n) => n !== current);
           done = done.filter((n) => n !== current);
-          saveGrabItems(id, items); saveGrabTicks(id, done);
+          skipped = skipped.filter((n) => n !== current);
+          saveGrabItems(id, items); saveGrabState(id, done, skipped);
           draw();
         });
         body.appendChild(row);
@@ -1777,7 +1822,8 @@ async function renderGrab(id) {
         if (asOpened) {
           items = asOpened.items.slice();
           done = asOpened.done.slice();
-          saveGrabItems(id, items); saveGrabTicks(id, done);
+          skipped = asOpened.skipped.slice();
+          saveGrabItems(id, items); saveGrabState(id, done, skipped);
         }
         editing = false; asOpened = null;
         draw();
@@ -1789,7 +1835,7 @@ async function renderGrab(id) {
 
   top.querySelector('.grab-editbtn').addEventListener('click', () => {
     editing = !editing;
-    asOpened = editing ? { items: items.slice(), done: done.slice() } : null;
+    asOpened = editing ? { items: items.slice(), done: done.slice(), skipped: skipped.slice() } : null;
     draw();
   });
   draw();
@@ -6209,6 +6255,8 @@ function howtoCard() {
         <p>Six compact buttons near the top of <b>Home</b>, in two rows of three — <b>Swim</b> in blue, <b>Bike</b> in yellow, <b>Run</b> in green; the top row is the <b>indoor</b> version of each, and the bottom row the <b>outdoor</b> one, wearing the same hand-drawn doodle <b>plus a little sun</b>. Each opens a deliberately tiny checklist: the handful of things to gather before that exact session — goggles for the pool, a helmet and a spare tube for the road, sunscreen for an outdoor run. All six are separate lists, each shapeable with its ✎ pencil. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
         <ul>
           <li><b>Tap a thing as you pick it up</b> — it ticks off. The moment the last one ticks, <b>the whole screen blinks green</b> and the list says <b>“All there — go!”</b> — so you get the signal even when the banner at the top is scrolled out of view. (On phones that let a web app vibrate — Android, not the iPhone — a buzz rides along too.)</li>
+          <li><b>⊘ Not this time</b> — the small ⊘ on each row leaves that thing behind <b>just for this session</b>: it stops counting toward “all there”, without touching the list itself. Tap the row (or the ⊘ again) to take it along after all. Skips clear with the ticks — the self-reset or <b>Start over</b> — so next time the full list is back.</li>
+          <li><b>Ready to go</b> — the green button at the bottom double-checks the list: if everything you’re taking is in hand it blinks the screen green and takes you back <b>Home</b>; if not, it tells you exactly what is still missing and stays put.</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
           <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. <b>Done</b> keeps your changes; <b>Cancel</b> puts the list back exactly as it was when you tapped the pencil. Each list is its own — the bike list and the run list can differ.</li>
           <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
@@ -6515,6 +6563,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v152', '2026-08-30 · 17:00 UTC', false, '“Ready to go” and “not this time” — two ideas from your fellow user',
+      '<b>Credit where due: both of these came from the friend sitting next to you, and both are exactly the kind of small, real improvement that comes from watching someone actually use a thing.</b><br><br><b>(1) A green “Ready to go” button now sits at the bottom of every grab list.</b> It is the deliberate way out the lists never had. Tap it and the app double-checks the list for you: if everything you are taking is in hand, <b>the whole screen blinks green and you land back on Home</b> — grab the bag and walk. If something is still missing, nothing moves: a small message names <b>exactly what is absent</b> (“Not yet — still missing: Towel, Goggles.”), or just counts them when it is more than three. The automatic blink on the final tick is still there, untouched; the button is for the moment you <em>think</em> you are done and want the app to agree before you leave the room.<br><br><b>(2) Every row has a small ⊘ — “not this time”.</b> Some days the water bottle stays home. Until now the list had no way to say so: you either ticked a thing you were not taking (a lie) or left it unticked and never reached “All there — go!” (a nag). Tap the ⊘ and the row <b>steps aside</b> — faded, dashed edge, marked <em>not this time</em> — and simply stops counting. The count line says so too: “4 of 6 in hand · 1 skipped”. Changed your mind? Tap the row anywhere and it is back.<br><br><b>The part that makes a skip trustworthy is what it does NOT do.</b> It never touches the list itself — nothing is removed, nothing to re-add, nothing to remember. A skip lives with the ticks, under the same clock: the quiet reset a few hours later, or <b>Start over</b>, clears both — so tomorrow’s list is always the <b>full</b> list, water bottle back in its place, asking again like nothing happened. Temporary means temporary.<br><br>One honest edge case: if you skip <em>everything</em>, the list refuses to call that “ready” — an empty departure is probably a mistake, and the button says so instead of celebrating it.',
+      'The list now understands the two things every real departure has: a moment where you ask “am I actually ready?”, and a thing you are deliberately leaving on the shelf today.'),
     v('v151', '2026-08-30 · 16:00 UTC', false, 'Six lists now — the outdoor row joins in, each with a little sun',
       '<b>Two asks in one go: your order, and an outdoor twin for every list.</b><br><br><b>(1) The order is now yours: Swim, Bike, Run.</b> Blue first, then yellow, then green, exactly as you listed them.<br><br><b>(2) Every list has an outdoor twin.</b> The row of three is now <b>two rows of three</b> — the top row is the indoor Swim, Bike and Run you already have; the bottom row is <b>Outdoor Swim, Outdoor Bike and Outdoor Run</b>. Same words on the buttons, as you asked — what tells them apart is the icon: each outdoor doodle is the same drawing <b>with a little hand-drawn sun</b> tucked into whichever corner that doodle leaves empty. One rule, learnt once: <b>sun means outdoors.</b> The colours pair up too — both Swims are blue, both Bikes yellow, both Runs green — so a pair reads as the same activity at a glance.<br><br><b>(3) Each outdoor list starts with an outdoor guess.</b> Going outside changes what matters: the outdoor bike list starts with a <b>helmet</b>, <b>sunglasses</b>, <b>gloves</b> and a <b>spare tube and pump</b>; the outdoor run with a <b>cap</b> and <b>sunscreen</b>; the outdoor swim with a <b>wetsuit</b> and a <b>safety buoy</b> alongside the goggles. As ever these are only starting guesses — the ✎ pencil makes each list yours, and all six remember themselves separately.<br><br><b>And the part that took actual care: your three existing lists are untouched.</b> Everything you have shaped on Bike, Run and Swim — names fixed, order walked into place, things added and removed — is stored on the phone under each list’s name, and those names did not change. The three newcomers arrived <em>beside</em> your lists, not on top of them. Opening the app after this update, the top row is exactly the three lists you left, tick history and all.',
       'The walk to the front door gets the same three-second check as the walk to the bike — and one little sun, learnt once, tells the two rows apart forever.'),
