@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v150';
+const APP_VERSION = 'v151';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1451,21 +1451,42 @@ const GRAB_RESET_HOURS = 6; // ticks older than this belong to a previous workou
 const HOLD_START_MS = 380;
 const HOLD_STEP_MS = 600;
 // Each list gets its own starter guess — a swim needs none of the treadmill
-// kit. Only ever used on a device that has never edited that list.
+// kit, and heading outdoors changes what matters (helmet, sunscreen, a spare
+// tube). Only ever used on a device that has never edited that list. The
+// indoor ids stay 'swim'/'bike'/'run' ON PURPOSE: they are the localStorage
+// keys, and renaming them would orphan the lists already shaped on the phone.
 const GRAB_DEFAULT_ITEMS = {
+  swim: ['Swim trunks', 'Goggles', 'Swim cap', 'Towel', 'Drink / water bottle', 'Sports watch', 'Flip-flops'],
   bike: ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'],
   run: ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'],
-  swim: ['Swim trunks', 'Goggles', 'Swim cap', 'Towel', 'Drink / water bottle', 'Sports watch', 'Flip-flops'],
+  'swim-out': ['Swim trunks', 'Goggles', 'Wetsuit', 'Safety buoy', 'Towel', 'Drink / water bottle', 'Sports watch'],
+  'bike-out': ['Helmet', 'Sunglasses', 'Cycling gloves', 'Drink / water bottle', 'Spare tube & pump', 'iPhone', 'Sports watch'],
+  'run-out': ['Shoes', 'Cap', 'Sunglasses', 'Sunscreen', 'iPhone', 'Drink / water bottle', 'Sports watch'],
 };
 // The icons are hand-drawn on purpose — wobbly single-stroke doodles rather
-// than emoji, in the app's own ink colour so they follow light/dark mode.
-// Each is one <svg> of freehand paths; stroke="currentColor" is what lets the
-// CSS recolour them.
+// than emoji, recoloured by CSS through stroke="currentColor". Each activity
+// has ONE base doodle; its outdoor twin is the same drawing with a little
+// freehand sun added in whichever corner that doodle leaves empty — so the
+// pairs read as the same activity at a glance, and sun = outdoors.
 const GRAB_SVG = (paths) => `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
-const GRAB_LISTS = {
-  bike: {
-    label: 'Bike', title: 'Indoor bike',
-    icon: GRAB_SVG(`
+const GRAB_SUN = (x, y, s = 1) => `
+      <path d="M${x},${y - 4.2 * s} C${x + 2.4 * s},${y - 4.4 * s} ${x + 4.4 * s},${y - 2.4 * s} ${x + 4.3 * s},${y} C${x + 4.2 * s},${y + 2.4 * s} ${x + 2.2 * s},${y + 4.3 * s} ${x - 0.2 * s},${y + 4.2 * s} C${x - 2.5 * s},${y + 4.1 * s} ${x - 4.4 * s},${y + 2.1 * s} ${x - 4.3 * s},${y - 0.1 * s} C${x - 4.2 * s},${y - 2.3 * s} ${x - 2.3 * s},${y - 4.1 * s} ${x + 0.4 * s},${y - 4 * s}"/>
+      <path d="M${x - 0.1 * s},${y - 9.6 * s} L${x + 0.2 * s},${y - 6.9 * s}"/>
+      <path d="M${x + 6.7 * s},${y - 6.7 * s} L${x + 4.9 * s},${y - 4.9 * s}"/>
+      <path d="M${x + 9.5 * s},${y + 0.2 * s} L${x + 6.8 * s},${y}"/>
+      <path d="M${x + 6.5 * s},${y + 6.8 * s} L${x + 4.8 * s},${y + 5 * s}"/>
+      <path d="M${x - 6.8 * s},${y - 6.5 * s} L${x - 5 * s},${y - 4.8 * s}"/>
+      <path d="M${x - 9.4 * s},${y + 0.1 * s} L${x - 6.7 * s},${y - 0.1 * s}"/>
+      <path d="M${x - 6.4 * s},${y + 6.7 * s} L${x - 4.8 * s},${y + 4.9 * s}"/>
+      <path d="M${x + 0.1 * s},${y + 9.4 * s} L${x - 0.1 * s},${y + 6.7 * s}"/>`;
+const GRAB_DOODLES = {
+  swim: `
+      <path d="M35,16.6 C38.2,16.4 40.8,19 40.7,22.1 C40.6,25.3 38,27.8 34.8,27.7 C31.7,27.6 29.2,25 29.3,21.9 C29.4,18.9 31.9,16.7 35.5,16.9"/>
+      <path d="M40,24 C45.5,18 51.5,15.5 56.5,17 C58.7,17.8 59.7,19.8 59.4,22"/>
+      <path d="M29.5,24.5 C24,27 19,31 15.5,35.5"/>
+      <path d="M6,42.5 C11,40 16,45 21,42.5 C26,40 31,45 36,42.5 C41,40 46,45 51,42.5 C54.5,40.8 58,43.5 60,42.8"/>
+      <path d="M10,51.5 C15,49 20,54 25,51.5 C30,49 35,54 40,51.5 C45,49 50,54 55,51.5"/>`,
+  bike: `
       <path d="M15,35.4 C20.6,35 25.3,39.6 25,45.2 C24.7,50.6 20.1,54.9 14.7,54.6 C9.4,54.3 5.2,49.7 5.5,44.4 C5.8,39.2 10.2,35.2 15.9,35.8"/>
       <path d="M49,35.2 C54.7,35 59.2,39.5 58.9,45 C58.6,50.5 54,54.8 48.6,54.4 C43.3,54 39.2,49.5 39.5,44.2 C39.8,39 44.3,35 49.8,35.7"/>
       <path d="M15,45 C18.5,38.5 22.5,32 27,27.5"/>
@@ -1474,11 +1495,11 @@ const GRAB_LISTS = {
       <path d="M27.5,27.2 C33,26.2 38.5,25.8 43.6,26.2"/>
       <path d="M49,45 C47.5,38.6 46,32.3 44.3,26.3"/>
       <path d="M44.3,26.3 C43.5,23.2 41,21.6 38.4,22.3"/>
-      <path d="M23.5,25.6 C26,24.8 28.6,24.8 30.8,25.5"/>`),
-  },
-  run: {
-    label: 'Run', title: 'Indoor run',
-    icon: GRAB_SVG(`
+      <path d="M23.5,25.6 C26,24.8 28.6,24.8 30.8,25.5"/>`,
+  // The runner is split: body, then the three speed lines. The outdoor twin
+  // trades the TOP speed line for the sun — the runner's only free corner is
+  // where those lines live, and a sun kissing his head read as a flower.
+  runBody: `
       <path d="M38,7.6 C41.2,7.4 43.8,10 43.7,13.1 C43.6,16.3 41,18.8 37.8,18.7 C34.7,18.6 32.2,16 32.3,12.9 C32.4,9.9 34.9,7.7 38.5,7.9"/>
       <path d="M36,19.5 C33.5,25.5 31.5,30.5 29.5,36"/>
       <path d="M34,24 C38.5,26 42.5,28.5 46,32"/>
@@ -1486,20 +1507,24 @@ const GRAB_LISTS = {
       <path d="M29.5,36 C33.5,39 37.5,43 40,48.5"/>
       <path d="M40,48.5 C41.5,50 43.5,50.8 45.5,50.6"/>
       <path d="M30,36.5 C26,38.5 22.8,42.3 21.5,47"/>
-      <path d="M21.5,47 C20.2,48.8 18,49.6 15.8,49.3"/>
-      <path d="M8,20 C10,19.6 12,19.5 14,19.7"/>
+      <path d="M21.5,47 C20.2,48.8 18,49.6 15.8,49.3"/>`,
+  runLineTop: `
+      <path d="M8,20 C10,19.6 12,19.5 14,19.7"/>`,
+  runLines: `
       <path d="M6,27.5 C8.4,27.4 10.8,27.4 13,27.6"/>
-      <path d="M8,35 C10,34.8 12,34.9 14,35.2"/>`),
-  },
-  swim: {
-    label: 'Swim', title: 'Swim',
-    icon: GRAB_SVG(`
-      <path d="M35,16.6 C38.2,16.4 40.8,19 40.7,22.1 C40.6,25.3 38,27.8 34.8,27.7 C31.7,27.6 29.2,25 29.3,21.9 C29.4,18.9 31.9,16.7 35.5,16.9"/>
-      <path d="M40,24 C45.5,18 51.5,15.5 56.5,17 C58.7,17.8 59.7,19.8 59.4,22"/>
-      <path d="M29.5,24.5 C24,27 19,31 15.5,35.5"/>
-      <path d="M6,42.5 C11,40 16,45 21,42.5 C26,40 31,45 36,42.5 C41,40 46,45 51,42.5 C54.5,40.8 58,43.5 60,42.8"/>
-      <path d="M10,51.5 C15,49 20,54 25,51.5 C30,49 35,54 40,51.5 C45,49 50,54 55,51.5"/>`),
-  },
+      <path d="M8,35 C10,34.8 12,34.9 14,35.2"/>`,
+};
+GRAB_DOODLES.run = GRAB_DOODLES.runBody + GRAB_DOODLES.runLineTop + GRAB_DOODLES.runLines;
+// Definition order IS the Home-row order (Martin's: Swim, Bike, Run — indoor
+// row first, outdoor row beneath). `tone` picks the colour class, shared by
+// each indoor/outdoor pair.
+const GRAB_LISTS = {
+  swim: { label: 'Swim', title: 'Indoor swim', tone: 'swim', icon: GRAB_SVG(GRAB_DOODLES.swim) },
+  bike: { label: 'Bike', title: 'Indoor bike', tone: 'bike', icon: GRAB_SVG(GRAB_DOODLES.bike) },
+  run: { label: 'Run', title: 'Indoor run', tone: 'run', icon: GRAB_SVG(GRAB_DOODLES.run) },
+  'swim-out': { label: 'Swim', title: 'Outdoor swim', tone: 'swim', icon: GRAB_SVG(GRAB_DOODLES.swim + GRAB_SUN(11, 11)) },
+  'bike-out': { label: 'Bike', title: 'Outdoor bike', tone: 'bike', icon: GRAB_SVG(GRAB_DOODLES.bike + GRAB_SUN(12, 12)) },
+  'run-out': { label: 'Run', title: 'Outdoor run', tone: 'run', icon: GRAB_SVG(GRAB_DOODLES.runBody + GRAB_DOODLES.runLines + GRAB_SUN(11, 12, 0.9)) },
 };
 function loadGrabItems(id) {
   try {
@@ -1621,7 +1646,7 @@ async function renderGrab(id) {
     }, HOLD_START_MS);
   };
 
-  const wrap = h(`<section class="screen grab grab-c-${id}"></section>`);
+  const wrap = h(`<section class="screen grab grab-c-${def.tone}"></section>`);
   const top = h(`<div class="topbar">
     <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
     <h1 class="grow grab-title"><span class="grab-icon">${def.icon}</span>${esc(def.title)}</h1>
@@ -1911,7 +1936,7 @@ async function renderHome() {
   // list is one entry there. They sit above the trip builder on purpose: on a
   // workout day this is the only thing you came for.
   wrap.appendChild(h(`<div class="grab-row">${Object.entries(GRAB_LISTS).map(([gid, d]) =>
-    `<a class="grab-btn grab-c-${gid}" href="#/grab/${gid}"><span class="grab-icon">${d.icon}</span><span>${d.label}</span></a>`).join('')}</div>`));
+    `<a class="grab-btn grab-c-${d.tone}" href="#/grab/${gid}" aria-label="${esc(d.title)}"><span class="grab-icon">${d.icon}</span><span>${d.label}</span></a>`).join('')}</div>`));
 
   wrap.appendChild(h('<p class="muted pad">Set your trip details — your common base and your transport’s kit come in automatically. Tick any extra activities, then press <b>Create Event</b> to build one combined <b>Packing List</b> to pack from.</p>'));
 
@@ -6180,8 +6205,8 @@ function howtoCard() {
         </ul>
  <p><b>Search.</b> A <b></b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name, <em>and</em> by the original Swedish wording even though that is no longer displayed), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
 
-        <h3>Workout grab lists — Bike, Run and Swim</h3>
-        <p>One compact row of buttons near the top of <b>Home</b> — <b>Bike</b> in yellow, <b>Run</b> in green and <b>Swim</b> in blue, each with its own hand-drawn doodle icon — opens a deliberately tiny checklist each: the handful of things to gather before an <b>indoor bike</b> or <b>treadmill</b> session, or to take along to the pool — headband, AirPods, goggles, something to drink and so on. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
+        <h3>Workout grab lists — Swim, Bike and Run, indoors and out</h3>
+        <p>Six compact buttons near the top of <b>Home</b>, in two rows of three — <b>Swim</b> in blue, <b>Bike</b> in yellow, <b>Run</b> in green; the top row is the <b>indoor</b> version of each, and the bottom row the <b>outdoor</b> one, wearing the same hand-drawn doodle <b>plus a little sun</b>. Each opens a deliberately tiny checklist: the handful of things to gather before that exact session — goggles for the pool, a helmet and a spare tube for the road, sunscreen for an outdoor run. All six are separate lists, each shapeable with its ✎ pencil. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
         <ul>
           <li><b>Tap a thing as you pick it up</b> — it ticks off. The moment the last one ticks, <b>the whole screen blinks green</b> and the list says <b>“All there — go!”</b> — so you get the signal even when the banner at the top is scrolled out of view. (On phones that let a web app vibrate — Android, not the iPhone — a buzz rides along too.)</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
@@ -6490,6 +6515,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v151', '2026-08-30 · 16:00 UTC', false, 'Six lists now — the outdoor row joins in, each with a little sun',
+      '<b>Two asks in one go: your order, and an outdoor twin for every list.</b><br><br><b>(1) The order is now yours: Swim, Bike, Run.</b> Blue first, then yellow, then green, exactly as you listed them.<br><br><b>(2) Every list has an outdoor twin.</b> The row of three is now <b>two rows of three</b> — the top row is the indoor Swim, Bike and Run you already have; the bottom row is <b>Outdoor Swim, Outdoor Bike and Outdoor Run</b>. Same words on the buttons, as you asked — what tells them apart is the icon: each outdoor doodle is the same drawing <b>with a little hand-drawn sun</b> tucked into whichever corner that doodle leaves empty. One rule, learnt once: <b>sun means outdoors.</b> The colours pair up too — both Swims are blue, both Bikes yellow, both Runs green — so a pair reads as the same activity at a glance.<br><br><b>(3) Each outdoor list starts with an outdoor guess.</b> Going outside changes what matters: the outdoor bike list starts with a <b>helmet</b>, <b>sunglasses</b>, <b>gloves</b> and a <b>spare tube and pump</b>; the outdoor run with a <b>cap</b> and <b>sunscreen</b>; the outdoor swim with a <b>wetsuit</b> and a <b>safety buoy</b> alongside the goggles. As ever these are only starting guesses — the ✎ pencil makes each list yours, and all six remember themselves separately.<br><br><b>And the part that took actual care: your three existing lists are untouched.</b> Everything you have shaped on Bike, Run and Swim — names fixed, order walked into place, things added and removed — is stored on the phone under each list’s name, and those names did not change. The three newcomers arrived <em>beside</em> your lists, not on top of them. Opening the app after this update, the top row is exactly the three lists you left, tick history and all.',
+      'The walk to the front door gets the same three-second check as the walk to the bike — and one little sun, learnt once, tells the two rows apart forever.'),
     v('v150', '2026-08-30 · 15:20 UTC', false, 'The three lists get their colours — Bike yellow, Run green, Swim blue',
       '<b>Your colour assignment, applied exactly as given: Run green, Bike yellow, Swim blue.</b><br><br>Each button on Home now wears its list’s colour three ways at once — the doodle is drawn in it, the button’s background takes a soft wash of it, and the border a slightly firmer line of it. The word stays in the app’s ordinary ink, because the label is the part you read and colour is the part you recognise. Open a list and its doodle in the title bar carries the same colour, so the screen you land on confirms the button you pressed.<br><br>The shades took a moment’s care rather than being the crayon-box versions: a straight yellow line on a pale background all but disappears, so Bike’s yellow is a darker, golden marker-pen tone that still reads unmistakably as yellow; Run’s green is the very green the app already uses for “done” and “in hand”, so the language stays consistent; Swim’s blue is a clear pool-water blue. All three are mid-tones on purpose — dark enough to draw on the light card, bright enough to draw on the dark one, so the colours survive dark mode without a second set.<br><br>A quiet practical gain rides along: the three buttons no longer tell apart only by reading them. A glance at colour alone — yellow, green, blue — finds the right one, which is exactly the speed this row is meant to work at.',
       'Each list is now recognisable from across the room by colour alone — and the doodles look even more like someone drew them for you, because now they’re drawn in coloured pen.'),
