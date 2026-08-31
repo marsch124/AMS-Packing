@@ -1,14 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!-- The app icon, drawn by the same freehand pen as the in-app doodles:
        a rucksack out walking — mountains behind, sun up, birds about.
-       Warm persimmon ground, cream ink. The rucksack body is FILLED with the
+       Light-green ground, deep forest-green ink (cream would wash out on a
+       light ground). The rucksack body is FILLED with the
        ground shade so it genuinely stands in front of the mountains rather
        than letting their slopes run through it. Everything sits inside the
        central maskable-safe circle so round-cropped launchers keep the whole
        scene. icon-192.png / icon-512.png are rendered from this file. -->
-  <rect width="512" height="512" fill="#dd6b45"/>
-  <circle cx="256" cy="248" r="196" fill="#e37b52"/>
-  <g fill="none" stroke="#fff4e0" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
+  <rect width="512" height="512" fill="#a7d69b"/>
+  <circle cx="256" cy="248" r="196" fill="#b9e0ac"/>
+  <g fill="none" stroke="#2f6b45" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
     <!-- mountains, sun, birds — the world behind. The peaks sit high so they
          peek over the rucksack's shoulders instead of slashing across it. -->
     <path d="M112,278 C142,222 168,188 194,156 C212,184 227,208 242,234"/>
@@ -26,8 +27,8 @@
   </g>
   <!-- the rucksack body: filled to occlude the mountains, then stroked -->
   <path d="M176,262 C159,294 151,342 155,390 C157,407 168,417 186,419 C232,425 280,425 326,419 C344,417 355,407 357,390 C361,342 353,294 336,262 C298,247 214,247 176,262"
-        fill="#e37b52" stroke="#fff4e0" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
-  <g fill="none" stroke="#fff4e0" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
+        fill="#b9e0ac" stroke="#2f6b45" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="none" stroke="#2f6b45" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
     <!-- flap, straps, pocket, button -->
     <path d="M178,264 C182,300 192,315 217,321 C246,328 266,328 295,321 C320,315 330,300 334,264"/>
     <path d="M225,303 C224,316 224,328 226,340"/>
