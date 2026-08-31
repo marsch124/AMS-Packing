@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v153';
+const APP_VERSION = 'v154';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1439,6 +1439,7 @@ function activitiesPicker(lists, selected, contexts) {
 // hours, so every workout starts with a fresh, untouched list.
 const GRAB_ITEMS_KEY = 'ams-grab-lists';
 const GRAB_TICKS_KEY = 'ams-grab-ticks';
+const GRAB_META_KEY = 'ams-grab-meta'; // per-list look overrides: {label, icon, tone}
 const GRAB_RESET_HOURS = 6; // ticks older than this belong to a previous workout
 // Hold ▲/▼ to keep moving: how long a press waits before it starts repeating,
 // and how long each step then takes. Tuned on the phone across four passes —
@@ -1515,17 +1516,107 @@ const GRAB_DOODLES = {
       <path d="M8,35 C10,34.8 12,34.9 14,35.2"/>`,
 };
 GRAB_DOODLES.run = GRAB_DOODLES.runBody + GRAB_DOODLES.runLineTop + GRAB_DOODLES.runLines;
-// Definition order IS the Home-row order (Martin's: Swim, Bike, Run — indoor
-// row first, outdoor row beneath). `tone` picks the colour class, shared by
-// each indoor/outdoor pair.
-const GRAB_LISTS = {
-  swim: { label: 'Swim', title: 'Indoor swim', tone: 'swim', icon: GRAB_SVG(GRAB_DOODLES.swim) },
-  bike: { label: 'Bike', title: 'Indoor bike', tone: 'bike', icon: GRAB_SVG(GRAB_DOODLES.bike) },
-  run: { label: 'Run', title: 'Indoor run', tone: 'run', icon: GRAB_SVG(GRAB_DOODLES.run) },
-  'swim-out': { label: 'Swim', title: 'Outdoor swim', tone: 'swim', icon: GRAB_SVG(GRAB_DOODLES.swim + GRAB_SUN(11, 11)) },
-  'bike-out': { label: 'Bike', title: 'Outdoor bike', tone: 'bike', icon: GRAB_SVG(GRAB_DOODLES.bike + GRAB_SUN(12, 12)) },
-  'run-out': { label: 'Run', title: 'Outdoor run', tone: 'run', icon: GRAB_SVG(GRAB_DOODLES.runBody + GRAB_DOODLES.runLines + GRAB_SUN(11, 12, 0.9)) },
+// More doodles for the icon gallery — every grab button's look can be changed
+// (name, doodle, colour), so the set goes beyond sport: a briefcase for a
+// business trip, a plane, mountains, a golf flag, a dumbbell, a paw for the
+// dog walk. All freehand, same pen.
+GRAB_DOODLES.briefcase = `
+      <path d="M11,27.5 C10.4,33.5 10.2,44.5 11.2,50.4 C25,52 39,52 52.8,50.6 C53.8,44.3 53.7,33.4 53,27.2 C39,25.7 25,25.8 11,27.5"/>
+      <path d="M25.2,25.8 C25.1,20.5 27.2,17.6 32,17.4 C36.9,17.3 39.1,20.1 39.1,25.4"/>
+      <path d="M11.5,37.8 C25,39.4 39,39.4 52.6,37.9"/>
+      <path d="M32.1,36.2 C32.2,38 32.2,40 32.1,41.8"/>`;
+GRAB_DOODLES.plane = `
+      <path d="M7,41 C22,33.5 40,23.5 57,13.5"/>
+      <path d="M57,13.5 C50.2,25 42.3,36.2 33.2,46.6"/>
+      <path d="M33.2,46.6 C31.2,42.5 29.4,39.8 26,37.2"/>
+      <path d="M26,37.2 C19.6,38.8 13.2,40.1 7,41"/>
+      <path d="M55,15.5 C45.5,24.5 36,31.5 27,36.5"/>`;
+GRAB_DOODLES.mountain = `
+      <path d="M6,50 C13.5,38 20,28 26,18"/>
+      <path d="M26,18 C29.8,24.8 33,30.2 36,36"/>
+      <path d="M30,44 C35.8,34.2 40.8,27 46,20"/>
+      <path d="M46,20 C50.8,29 54.8,38.5 58,49"/>
+      <path d="M6,50.5 C23,52.2 41,52 58,49.5"/>
+      <path d="M20.5,27.5 C22,29 23.5,29.4 25,28 C26.5,26.6 27.6,26.6 29,28.1"/>`;
+GRAB_DOODLES.golf = `
+      <path d="M24,8.5 C24.3,20 24.4,32 24.2,45.5"/>
+      <path d="M24.5,9 C30.8,10.4 36.8,12 43,14.5 C36.9,17.1 30.8,18.6 24.5,19.6"/>
+      <path d="M8,51 C20,48 36,48 50,51"/>
+      <path d="M40,42.2 C42,42 43.6,43.4 43.6,45.2 C43.6,47 42,48.5 40.1,48.4 C38.2,48.3 36.8,46.8 36.9,45 C37,43.3 38.4,42.2 40.4,42.4"/>`;
+GRAB_DOODLES.dumbbell = `
+      <path d="M21.5,32 C28.5,31.6 35.5,31.6 42.5,32"/>
+      <path d="M17.5,20.5 C14,21 13.2,25.5 13.2,32 C13.2,38.5 14,43 17.5,43.5 C21,43 21.8,38.5 21.8,32 C21.8,25.5 21,21 17.8,20.6"/>
+      <path d="M46.5,20.5 C43,21 42.2,25.5 42.2,32 C42.2,38.5 43,43 46.5,43.5 C50,43 50.8,38.5 50.8,32 C50.8,25.5 50,21 46.8,20.6"/>
+      <path d="M8.6,25.5 C7.5,27.4 7.4,36.4 8.5,38.3"/>
+      <path d="M55.4,25.5 C56.5,27.4 56.6,36.4 55.5,38.3"/>`;
+GRAB_DOODLES.paw = `
+      <path d="M32,36.5 C38.5,36.3 43.6,40.8 43.4,46.2 C43.2,51.5 37.5,54 31.8,53.9 C26.2,53.8 20.8,51 20.7,45.8 C20.6,40.6 25.8,36.6 32.4,36.7"/>
+      <path d="M18,24.6 C20.4,24.4 22.3,26.3 22.2,28.7 C22.1,31.1 20.1,33 17.8,32.9 C15.5,32.8 13.7,30.8 13.8,28.5 C13.9,26.3 15.7,24.7 18.3,24.8"/>
+      <path d="M28.5,15.6 C30.9,15.4 32.8,17.3 32.7,19.7 C32.6,22.1 30.6,24 28.3,23.9 C26,23.8 24.2,21.8 24.3,19.5 C24.4,17.3 26.2,15.7 28.8,15.8"/>
+      <path d="M40.5,17.6 C42.9,17.4 44.8,19.3 44.7,21.7 C44.6,24.1 42.6,26 40.3,25.9 C38,25.8 36.2,23.8 36.3,21.5 C36.4,19.3 38.2,17.7 40.8,17.8"/>
+      <path d="M49.5,27.6 C51.9,27.4 53.8,29.3 53.7,31.7 C53.6,34.1 51.6,36 49.3,35.9 C47,35.8 45.2,33.8 45.3,31.5 C45.4,29.3 47.2,27.7 49.8,27.8"/>`;
+// The gallery every list's ✎ editor can pick from. Keys are what gets stored,
+// so they must stay stable once shipped.
+const GRAB_ICONS = {
+  swim: { name: 'Swim', svg: GRAB_SVG(GRAB_DOODLES.swim) },
+  bike: { name: 'Bike', svg: GRAB_SVG(GRAB_DOODLES.bike) },
+  run: { name: 'Run', svg: GRAB_SVG(GRAB_DOODLES.run) },
+  'swim-sun': { name: 'Swim, outdoors', svg: GRAB_SVG(GRAB_DOODLES.swim + GRAB_SUN(11, 11)) },
+  'bike-sun': { name: 'Bike, outdoors', svg: GRAB_SVG(GRAB_DOODLES.bike + GRAB_SUN(12, 12)) },
+  'run-sun': { name: 'Run, outdoors', svg: GRAB_SVG(GRAB_DOODLES.runBody + GRAB_DOODLES.runLines + GRAB_SUN(11, 12, 0.9)) },
+  briefcase: { name: 'Business trip', svg: GRAB_SVG(GRAB_DOODLES.briefcase) },
+  plane: { name: 'Plane', svg: GRAB_SVG(GRAB_DOODLES.plane) },
+  mountain: { name: 'Mountains', svg: GRAB_SVG(GRAB_DOODLES.mountain) },
+  golf: { name: 'Golf', svg: GRAB_SVG(GRAB_DOODLES.golf) },
+  dumbbell: { name: 'Gym', svg: GRAB_SVG(GRAB_DOODLES.dumbbell) },
+  paw: { name: 'Dog walk', svg: GRAB_SVG(GRAB_DOODLES.paw) },
 };
+// The colours a list can wear. Mid-tones on purpose — legible on the light
+// card and the dark one alike.
+const GRAB_TONES = ['blue', 'yellow', 'green', 'red', 'purple', 'teal'];
+// Definition order IS the Home-row order (Martin's: Swim, Bike, Run — indoor
+// row first, outdoor row beneath). These are only the FACTORY looks: each
+// list's name, doodle and colour can be changed in its ✎ editor, and the
+// overrides live on this device in GRAB_META_KEY.
+const GRAB_LISTS = {
+  swim: { label: 'Swim', title: 'Indoor swim', tone: 'blue', icon: 'swim' },
+  bike: { label: 'Bike', title: 'Indoor bike', tone: 'yellow', icon: 'bike' },
+  run: { label: 'Run', title: 'Indoor run', tone: 'green', icon: 'run' },
+  'swim-out': { label: 'Swim', title: 'Outdoor swim', tone: 'blue', icon: 'swim-sun' },
+  'bike-out': { label: 'Bike', title: 'Outdoor bike', tone: 'yellow', icon: 'bike-sun' },
+  'run-out': { label: 'Run', title: 'Outdoor run', tone: 'green', icon: 'run-sun' },
+};
+function loadGrabMeta(id) {
+  try {
+    const all = JSON.parse(localStorage.getItem(GRAB_META_KEY) || 'null') || {};
+    return (all[id] && typeof all[id] === 'object') ? all[id] : {};
+  } catch { return {}; }
+}
+function saveGrabMeta(id, meta) {
+  try {
+    let all; try { all = JSON.parse(localStorage.getItem(GRAB_META_KEY) || '{}') || {}; } catch { all = {}; }
+    all[id] = meta;
+    localStorage.setItem(GRAB_META_KEY, JSON.stringify(all));
+  } catch { /* ignore */ }
+}
+// A list's effective look: the factory setting with this device's overrides
+// on top. A custom name serves as both the button label and the screen title
+// (the factory "Indoor …" prefix only makes sense for the factory activity).
+function getGrabDef(id) {
+  const base = GRAB_LISTS[id];
+  if (!base) return null;
+  const m = loadGrabMeta(id);
+  const iconKey = GRAB_ICONS[m.icon] ? m.icon : base.icon;
+  const tone = GRAB_TONES.includes(m.tone) ? m.tone : base.tone;
+  const label = (typeof m.label === 'string' && m.label.trim()) ? m.label.trim() : '';
+  return {
+    label: label || base.label,
+    title: label || base.title,
+    tone,
+    iconKey,
+    icon: GRAB_ICONS[iconKey].svg,
+  };
+}
 function loadGrabItems(id) {
   try {
     const all = JSON.parse(localStorage.getItem(GRAB_ITEMS_KEY) || 'null');
@@ -1583,8 +1674,10 @@ function grabCompleteFeedback() {
 }
 
 async function renderGrab(id) {
-  const def = GRAB_LISTS[id];
+  let def = getGrabDef(id);
   if (!def) { location.replace('#/'); return renderHome(); }
+  // The look is edited live, so meta is working state like items/done are.
+  let meta = loadGrabMeta(id);
   let items = loadGrabItems(id);
   // Ticks and skips are matched to items by name; anything referring to an
   // item that no longer exists (edited away in the meantime) is simply dropped.
@@ -1658,10 +1751,18 @@ async function renderGrab(id) {
   const wrap = h(`<section class="screen grab grab-c-${def.tone}"></section>`);
   const top = h(`<div class="topbar">
     <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
-    <h1 class="grow grab-title"><span class="grab-icon">${def.icon}</span>${esc(def.title)}</h1>
+    <h1 class="grow grab-title"><span class="grab-icon">${def.icon}</span><span class="grab-title-text">${esc(def.title)}</span></h1>
     <button class="iconbtn grab-editbtn" type="button" aria-label="Edit this list" title="Edit this list">${IC.edit}</button>
   </div>`);
   wrap.appendChild(top);
+  // Re-derive the look and repaint the title bar — called after every look
+  // edit so the screen answers the change immediately.
+  const applyLook = () => {
+    def = getGrabDef(id);
+    for (const t of GRAB_TONES) wrap.classList.toggle(`grab-c-${t}`, t === def.tone);
+    top.querySelector('.grab-title .grab-icon').innerHTML = def.icon;
+    top.querySelector('.grab-title-text').textContent = def.title;
+  };
   const body = h('<div class="grab-body"></div>');
   wrap.appendChild(body);
 
@@ -1736,6 +1837,37 @@ async function renderGrab(id) {
       }
       body.appendChild(h(`<p class="muted grab-hint">Tap each thing as you pick it up — or tap ⊘ to leave something behind, just this once. Ticks and skips clear themselves after ${GRAB_RESET_HOURS} hours, so the list is fresh and whole for your next workout.</p>`));
     } else {
+      // ——— The list's look: its name, its doodle, its colour. Saved the
+      // moment you tap, like every other edit here; Cancel reverts the lot.
+      const look = h(`<div class="grab-look">
+        <label class="grab-look-name"><span>Name</span><input type="text" class="grab-label-in" maxlength="14" autocomplete="off" placeholder="${esc(GRAB_LISTS[id].label)}" value="${esc(meta.label || '')}"></label>
+        <div class="grab-icon-pick" role="group" aria-label="Choose an icon">${Object.entries(GRAB_ICONS).map(([key, ic2]) =>
+          `<button type="button" class="grab-icon-opt${def.iconKey === key ? ' sel' : ''}" data-icon="${key}" aria-label="${esc(ic2.name)}" title="${esc(ic2.name)}"><span class="grab-icon">${ic2.svg}</span></button>`).join('')}</div>
+        <div class="grab-tone-pick" role="group" aria-label="Choose a colour">${GRAB_TONES.map((t) =>
+          `<button type="button" class="grab-tone-opt grab-c-${t}${def.tone === t ? ' sel' : ''}" data-tone="${t}" aria-label="${esc(t)}" title="${esc(t)}"></button>`).join('')}</div>
+      </div>`);
+      // The name lands on leaving the field or Enter, like item renames do.
+      // An emptied field means "back to the standard name".
+      const labelIn = look.querySelector('.grab-label-in');
+      const commitLabel = () => {
+        const next = labelIn.value.trim();
+        if ((meta.label || '') === next) return;
+        if (next) meta.label = next; else delete meta.label;
+        saveGrabMeta(id, meta); applyLook();
+      };
+      labelIn.addEventListener('blur', commitLabel);
+      labelIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commitLabel(); labelIn.blur(); } });
+      look.querySelectorAll('.grab-icon-opt').forEach((btn) => btn.addEventListener('click', () => {
+        meta.icon = btn.dataset.icon;
+        saveGrabMeta(id, meta); applyLook();
+        look.querySelectorAll('.grab-icon-opt').forEach((b) => b.classList.toggle('sel', b === btn));
+      }));
+      look.querySelectorAll('.grab-tone-opt').forEach((btn) => btn.addEventListener('click', () => {
+        meta.tone = btn.dataset.tone;
+        saveGrabMeta(id, meta); applyLook();
+        look.querySelectorAll('.grab-tone-opt').forEach((b) => b.classList.toggle('sel', b === btn));
+      }));
+      body.appendChild(look);
       body.appendChild(h('<p class="muted grab-hint">Tap a name to fix a typo · hold ▲▼ to keep moving · ⤒⤓ jump to the end. This list lives on this device only.</p>'));
       items.forEach((name, i) => {
         const first = i === 0, last = i === items.length - 1;
@@ -1817,13 +1949,16 @@ async function renderGrab(id) {
       // saving it. A half-typed name does get committed by the field's own blur
       // as the tap lands, but the revert below runs afterwards and undoes it.
       cancelBtn.addEventListener('click', () => {
-        const changed = !!asOpened && JSON.stringify(asOpened.items) !== JSON.stringify(items);
+        const changed = !!asOpened && (JSON.stringify(asOpened.items) !== JSON.stringify(items)
+          || JSON.stringify(asOpened.meta) !== JSON.stringify(meta));
         if (changed && !confirm('Throw away the changes you just made to this list?\n\nIt goes back to how it was when you tapped the pencil.')) return;
         if (asOpened) {
           items = asOpened.items.slice();
           done = asOpened.done.slice();
           skipped = asOpened.skipped.slice();
-          saveGrabItems(id, items); saveGrabState(id, done, skipped);
+          meta = { ...asOpened.meta };
+          saveGrabItems(id, items); saveGrabState(id, done, skipped); saveGrabMeta(id, meta);
+          applyLook();
         }
         editing = false; asOpened = null;
         draw();
@@ -1835,7 +1970,7 @@ async function renderGrab(id) {
 
   top.querySelector('.grab-editbtn').addEventListener('click', () => {
     editing = !editing;
-    asOpened = editing ? { items: items.slice(), done: done.slice(), skipped: skipped.slice() } : null;
+    asOpened = editing ? { items: items.slice(), done: done.slice(), skipped: skipped.slice(), meta: { ...meta } } : null;
     draw();
   });
   draw();
@@ -1981,8 +2116,10 @@ async function renderHome() {
   // "bring these few things" checklists, built from GRAB_LISTS so adding a
   // list is one entry there. They sit above the trip builder on purpose: on a
   // workout day this is the only thing you came for.
-  wrap.appendChild(h(`<div class="grab-row">${Object.entries(GRAB_LISTS).map(([gid, d]) =>
-    `<a class="grab-btn grab-c-${d.tone}" href="#/grab/${gid}" aria-label="${esc(d.title)}"><span class="grab-icon">${d.icon}</span><span>${d.label}</span></a>`).join('')}</div>`));
+  wrap.appendChild(h(`<div class="grab-row">${Object.keys(GRAB_LISTS).map((gid) => {
+    const d = getGrabDef(gid);
+    return `<a class="grab-btn grab-c-${d.tone}" href="#/grab/${gid}" aria-label="${esc(d.title)}"><span class="grab-icon">${d.icon}</span><span>${esc(d.label)}</span></a>`;
+  }).join('')}</div>`));
 
   wrap.appendChild(h('<p class="muted pad">Set your trip details — your common base and your transport’s kit come in automatically. Tick any extra activities, then press <b>Create Event</b> to build one combined <b>Packing List</b> to pack from.</p>'));
 
@@ -6258,6 +6395,7 @@ function howtoCard() {
           <li><b>⊘ Not this time</b> — the small ⊘ on each row leaves that thing behind <b>just for this session</b>: it stops counting toward “all there”, without touching the list itself. Tap the row (or the ⊘ again) to take it along after all. Skips clear with the ticks — the self-reset or <b>Start over</b> — so next time the full list is back.</li>
           <li><b>Ready to go</b> — the green button at the bottom double-checks the list: if everything you’re taking is in hand it blinks the screen green and takes you back <b>Home</b>; if not, it tells you exactly what is still missing and stays put.</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
+          <li><b>The ✎ pencil also restyles the button itself</b>: give the list your own <b>name</b> (up to 14 letters — “Biz trip”, say), pick any of the <b>twelve hand-drawn doodles</b> (briefcase, plane, mountains, golf, gym, dog walk, and the six sport ones), and choose one of <b>six colours</b>. The Home button and the list’s own title change together; emptying the name field brings the standard name back, and <b>Cancel</b> undoes look changes along with everything else.</li>
           <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. <b>Done</b> keeps your changes; <b>Cancel</b> puts the list back exactly as it was when you tapped the pencil. Each list is its own — the bike list and the run list can differ.</li>
           <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
         </ul>
@@ -6563,6 +6701,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v154', '2026-08-30 · 18:15 UTC', false, 'Make a grab button your own — name, doodle and colour, all editable',
+      '<b>Another one for Shaun: he wondered whether a grab button could become something else entirely — his business trip, say, instead of a run.</b> Now it can. Every one of the six buttons is a blank slate wearing a factory suggestion.<br><br><b>Open any grab list, tap the ✎ pencil, and the top of the editor is now about the button itself.</b> Three choices, each saved the instant you make it:<br><br><b>(1) A name of your own</b> — up to fourteen letters, used on the Home button and as the list’s title alike. Type “Biz trip” and that is what the button says. Empty the field and the standard name comes back — the factory name is the placeholder, so it is never forgotten.<br><br><b>(2) A doodle from the gallery.</b> All drawn by the same hand as the originals: the six sport ones (with and without their little sun), and six new — a <b>briefcase</b> (drawn with Shaun in mind), a <b>paper plane</b>, <b>mountains</b>, a <b>golf flag</b>, a <b>dumbbell</b> and a <b>dog’s paw</b>. Twelve to choose from, and the one in use is ringed.<br><br><b>(3) A colour.</b> The familiar blue, yellow and green — now joined by <b>red, purple and teal</b>, so six lists need never share if you would rather they didn’t. The doodle, the button’s wash and the screen’s title all change together.<br><br><b>The guard-rails you would expect are there.</b> <b>Cancel</b> in the editor throws look changes away together with everything else, back to how it stood when you tapped the pencil. And like the lists themselves, the looks live <b>on this device only</b> — so Shaun’s phone can have a red briefcase where your green runner stands, and neither of you ever sees the other’s taste.<br><br>The list behind the button is untouched by any of this: same items, same ticks, same skips, same Ready to go. Restyling the door does not rearrange the room.',
+      'A grab button stops being one of six fixed sports and becomes whatever you reach for often — with its own name, its own doodle and its own colour, per device.'),
     v('v153', '2026-08-30 · 17:30 UTC', false, 'The v152 credit gets a name — Shaun',
       'A one-word release, and a deserved one: the v152 entry below now credits its two ideas to your fellow user <b>Shaun</b> by name, rather than anonymously. Nothing else changed anywhere in the app.',
       'The history says who actually thought of it.'),
