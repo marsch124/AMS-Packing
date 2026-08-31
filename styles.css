@@ -6173,14 +6173,23 @@ table.grid {
   margin: 0 0 16px;
 }
 
+/* Each list wears its own colour — Martin's mapping: Bike yellow, Run green,
+   Swim blue. One custom property per list, set by a grab-c-<id> class carried
+   by both the Home button and the list's own screen, so the doodle, the
+   button tint and the border all draw from the same pot. Mid-tone shades on
+   purpose: they read on the light card and the dark one alike. */
+.grab-c-bike { --grabc: #c99700; }
+.grab-c-run  { --grabc: #2e9e6b; }
+.grab-c-swim { --grabc: #3a86d4; }
+
 .grab-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 7px;
   padding: 9px 6px;
-  background: color-mix(in srgb, var(--brand) 10%, var(--card));
-  border: 1px solid color-mix(in srgb, var(--brand) 35%, var(--line));
+  background: color-mix(in srgb, var(--grabc, var(--brand)) 12%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--grabc, var(--brand)) 40%, var(--line));
   border-radius: 14px;
   box-shadow: var(--shadow);
   color: inherit;
@@ -6191,13 +6200,15 @@ table.grid {
 
 .grab-btn:active { transform: translateY(1px); }
 
-/* The hand-drawn doodle icons. Inline SVG stroked in currentColor, so they
-   take the ink colour of wherever they sit and follow light/dark mode. */
+/* The hand-drawn doodle icons. Inline SVG stroked in currentColor; where a
+   list colour is in scope (a grab-c-* ancestor) the doodle takes it, and
+   falls back to the surrounding ink colour otherwise. */
 .grab-icon {
   display: inline-flex;
   flex: none;
   width: 28px;
   height: 28px;
+  color: var(--grabc, currentColor);
 }
 .grab-icon svg { width: 100%; height: 100%; }
 
