@@ -6270,27 +6270,86 @@ table.grid {
   .grab-flash { animation: grab-flash-swell .9s ease both; }
 }
 
+/* A row is a container of two buttons: the big tick area, and the small ⊘
+   "not this time" toggle on the right. (It used to be one <button>; a button
+   cannot legally contain another.) */
 .grab-item {
   display: flex;
   align-items: center;
-  gap: 14px;
   width: 100%;
   min-height: 60px;
-  padding: 10px 16px;
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: 14px;
   box-shadow: var(--shadow);
   color: var(--ink);
-  font: inherit;
   font-size: 1.25rem;
   font-weight: 600;
+}
+
+.grab-item:active { transform: translateY(1px); }
+
+.grab-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 60px;
+  padding: 10px 4px 10px 16px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
 
-.grab-item:active { transform: translateY(1px); }
+.grab-skip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-right: 6px;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  color: color-mix(in srgb, var(--ink) 32%, var(--card));
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.grab-skip svg { width: 22px; height: 22px; }
+
+/* A skipped row steps aside: dashed edge, everything faded, a small
+   "not this time" tag — and the ⊘ lights up as the way back. */
+.grab-item.skipped { border-style: dashed; box-shadow: none; background: transparent; }
+.grab-item.skipped .grab-check { border-style: dashed; opacity: .55; }
+.grab-item.skipped .grab-name {
+  color: color-mix(in srgb, var(--ink) 42%, var(--card));
+  font-style: italic;
+}
+.grab-item.skipped .grab-skip { color: var(--ink); }
+.grab-skip-note {
+  flex: none;
+  font-size: .78rem;
+  font-weight: 600;
+  font-style: italic;
+  color: color-mix(in srgb, var(--ink) 45%, var(--card));
+  white-space: nowrap;
+}
+
+/* "Ready to go" is the green door out — same green as done/in-hand. Written
+   as .btn.primary.grab-ready so it outweighs .btn.primary's own background. */
+.btn.primary.grab-ready {
+  margin-top: 4px;
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+  justify-content: center;
+}
 
 .grab-check {
   flex: none;
