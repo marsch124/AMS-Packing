@@ -39,7 +39,7 @@ import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v148';
+const APP_VERSION = 'v149';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1450,10 +1450,56 @@ const GRAB_RESET_HOURS = 6; // ticks older than this belong to a previous workou
 // speed measured in a browser is never the speed felt on the phone.
 const HOLD_START_MS = 380;
 const HOLD_STEP_MS = 600;
-const GRAB_DEFAULT_ITEMS = ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'];
+// Each list gets its own starter guess — a swim needs none of the treadmill
+// kit. Only ever used on a device that has never edited that list.
+const GRAB_DEFAULT_ITEMS = {
+  bike: ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'],
+  run: ['Headband', 'AirPods', 'Drink / water bottle', 'Towel', 'Sports watch', 'Shoes', 'Heart-rate strap'],
+  swim: ['Swim trunks', 'Goggles', 'Swim cap', 'Towel', 'Drink / water bottle', 'Sports watch', 'Flip-flops'],
+};
+// The icons are hand-drawn on purpose — wobbly single-stroke doodles rather
+// than emoji, in the app's own ink colour so they follow light/dark mode.
+// Each is one <svg> of freehand paths; stroke="currentColor" is what lets the
+// CSS recolour them.
+const GRAB_SVG = (paths) => `<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const GRAB_LISTS = {
-  bike: { emoji: '🚴', title: 'Indoor bike' },
-  run: { emoji: '🏃', title: 'Indoor run' },
+  bike: {
+    label: 'Bike', title: 'Indoor bike',
+    icon: GRAB_SVG(`
+      <path d="M15,35.4 C20.6,35 25.3,39.6 25,45.2 C24.7,50.6 20.1,54.9 14.7,54.6 C9.4,54.3 5.2,49.7 5.5,44.4 C5.8,39.2 10.2,35.2 15.9,35.8"/>
+      <path d="M49,35.2 C54.7,35 59.2,39.5 58.9,45 C58.6,50.5 54,54.8 48.6,54.4 C43.3,54 39.2,49.5 39.5,44.2 C39.8,39 44.3,35 49.8,35.7"/>
+      <path d="M15,45 C18.5,38.5 22.5,32 27,27.5"/>
+      <path d="M27,27.5 C29.5,33 31.5,38.5 33,43.5"/>
+      <path d="M15,45 C21,44.6 27,44.2 33,43.8"/>
+      <path d="M27.5,27.2 C33,26.2 38.5,25.8 43.6,26.2"/>
+      <path d="M49,45 C47.5,38.6 46,32.3 44.3,26.3"/>
+      <path d="M44.3,26.3 C43.5,23.2 41,21.6 38.4,22.3"/>
+      <path d="M23.5,25.6 C26,24.8 28.6,24.8 30.8,25.5"/>`),
+  },
+  run: {
+    label: 'Run', title: 'Indoor run',
+    icon: GRAB_SVG(`
+      <path d="M38,7.6 C41.2,7.4 43.8,10 43.7,13.1 C43.6,16.3 41,18.8 37.8,18.7 C34.7,18.6 32.2,16 32.3,12.9 C32.4,9.9 34.9,7.7 38.5,7.9"/>
+      <path d="M36,19.5 C33.5,25.5 31.5,30.5 29.5,36"/>
+      <path d="M34,24 C38.5,26 42.5,28.5 46,32"/>
+      <path d="M33.5,25 C29.5,26.5 25.5,26 22,24"/>
+      <path d="M29.5,36 C33.5,39 37.5,43 40,48.5"/>
+      <path d="M40,48.5 C41.5,50 43.5,50.8 45.5,50.6"/>
+      <path d="M30,36.5 C26,38.5 22.8,42.3 21.5,47"/>
+      <path d="M21.5,47 C20.2,48.8 18,49.6 15.8,49.3"/>
+      <path d="M8,20 C10,19.6 12,19.5 14,19.7"/>
+      <path d="M6,27.5 C8.4,27.4 10.8,27.4 13,27.6"/>
+      <path d="M8,35 C10,34.8 12,34.9 14,35.2"/>`),
+  },
+  swim: {
+    label: 'Swim', title: 'Swim',
+    icon: GRAB_SVG(`
+      <path d="M35,16.6 C38.2,16.4 40.8,19 40.7,22.1 C40.6,25.3 38,27.8 34.8,27.7 C31.7,27.6 29.2,25 29.3,21.9 C29.4,18.9 31.9,16.7 35.5,16.9"/>
+      <path d="M40,24 C45.5,18 51.5,15.5 56.5,17 C58.7,17.8 59.7,19.8 59.4,22"/>
+      <path d="M29.5,24.5 C24,27 19,31 15.5,35.5"/>
+      <path d="M6,42.5 C11,40 16,45 21,42.5 C26,40 31,45 36,42.5 C41,40 46,45 51,42.5 C54.5,40.8 58,43.5 60,42.8"/>
+      <path d="M10,51.5 C15,49 20,54 25,51.5 C30,49 35,54 40,51.5 C45,49 50,54 55,51.5"/>`),
+  },
 };
 function loadGrabItems(id) {
   try {
@@ -1463,7 +1509,7 @@ function loadGrabItems(id) {
       if (items.length) return items;
     }
   } catch { /* ignore */ }
-  return GRAB_DEFAULT_ITEMS.slice();
+  return (GRAB_DEFAULT_ITEMS[id] || []).slice();
 }
 function saveGrabItems(id, items) {
   try {
@@ -1578,7 +1624,7 @@ async function renderGrab(id) {
   const wrap = h('<section class="screen grab"></section>');
   const top = h(`<div class="topbar">
     <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
-    <h1 class="grow">${def.emoji} ${esc(def.title)}</h1>
+    <h1 class="grow grab-title"><span class="grab-icon">${def.icon}</span>${esc(def.title)}</h1>
     <button class="iconbtn grab-editbtn" type="button" aria-label="Edit this list" title="Edit this list">${IC.edit}</button>
   </div>`);
   wrap.appendChild(top);
@@ -1860,13 +1906,12 @@ async function renderHome() {
     wrap.appendChild(nudge);
   }
 
-  // The workout grab lists — two big buttons straight to the tiny "bring these
-  // few things to the machine" checklists. They sit above the trip builder on
-  // purpose: on a workout day this is the only thing you came for.
-  wrap.appendChild(h(`<div class="grab-row">
-    <a class="grab-btn" href="#/grab/bike"><span class="grab-emoji">🚴</span><span>Bike</span></a>
-    <a class="grab-btn" href="#/grab/run"><span class="grab-emoji">🏃</span><span>Run</span></a>
-  </div>`));
+  // The workout grab lists — one compact row of buttons straight to the tiny
+  // "bring these few things" checklists, built from GRAB_LISTS so adding a
+  // list is one entry there. They sit above the trip builder on purpose: on a
+  // workout day this is the only thing you came for.
+  wrap.appendChild(h(`<div class="grab-row">${Object.entries(GRAB_LISTS).map(([gid, d]) =>
+    `<a class="grab-btn" href="#/grab/${gid}"><span class="grab-icon">${d.icon}</span><span>${d.label}</span></a>`).join('')}</div>`));
 
   wrap.appendChild(h('<p class="muted pad">Set your trip details — your common base and your transport’s kit come in automatically. Tick any extra activities, then press <b>Create Event</b> to build one combined <b>Packing List</b> to pack from.</p>'));
 
@@ -6135,8 +6180,8 @@ function howtoCard() {
         </ul>
  <p><b>Search.</b> A <b></b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name, <em>and</em> by the original Swedish wording even though that is no longer displayed), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
 
-        <h3>Workout grab lists — 🚴 Bike and 🏃 Run</h3>
-        <p>Two big buttons near the top of <b>Home</b> open a deliberately tiny checklist each: the handful of things to gather before an <b>indoor bike</b> or <b>indoor treadmill</b> session — headband, AirPods, something to drink and so on. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
+        <h3>Workout grab lists — Bike, Run and Swim</h3>
+        <p>One compact row of buttons near the top of <b>Home</b> — <b>Bike</b>, <b>Run</b> and <b>Swim</b>, each with its own hand-drawn doodle icon — opens a deliberately tiny checklist each: the handful of things to gather before an <b>indoor bike</b> or <b>treadmill</b> session, or to take along to the pool — headband, AirPods, goggles, something to drink and so on. These are <b>not packing lists</b> and never touch your catalogue, templates or trips; they exist because forgetting your headband three steps from the bike is exactly as annoying as forgetting it at the airport.</p>
         <ul>
           <li><b>Tap a thing as you pick it up</b> — it ticks off. The moment the last one ticks, <b>the whole screen blinks green</b> and the list says <b>“All there — go!”</b> — so you get the signal even when the banner at the top is scrolled out of view. (On phones that let a web app vibrate — Android, not the iPhone — a buzz rides along too.)</li>
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
@@ -6445,6 +6490,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v149', '2026-08-30 · 14:45 UTC', false, 'A Swim list joins Bike and Run — one neat row, with hand-drawn icons',
+      '<b>Three things you asked for, all on the grab lists you said you love.</b><br><br><b>(1) Swim is the third list.</b> Same idea as the other two — a deliberately tiny checklist of what to gather before heading out — starting with a guess that fits a pool rather than a treadmill: swim trunks, goggles, swim cap, towel, something to drink, sports watch, flip-flops. Shape it with the ✎ pencil exactly like the others; from the first edit it is simply yours. Bike and Run keep whatever you have already made of them — a new list arriving changes nothing about the old ones.<br><br><b>(2) The buttons shrank to one line.</b> Two big stacked-label buttons were fine when there were two; three of them would have started eating the Home screen from the top. The row is now three compact buttons side by side, icon beside the word instead of above it, and it stays one line even on a narrow phone — below a certain width the lettering gives a little rather than the row wrapping.<br><br><b>(3) The icons are hand-drawn.</b> The 🚴 and 🏃 emoji are gone; in their place are little single-stroke doodles — a wobbly-wheeled bicycle, a runner mid-stride trailing speed lines, a swimmer’s head and reaching arm above two squiggly waves. Drawn freehand on purpose: nothing about grabbing your goggles is corporate, and a slightly crooked wheel says so. A quiet bonus over emoji: they are drawn in the app’s own ink colour, so they match everything around them and follow dark mode properly, which emoji never did. The same doodle now heads each list’s own screen too, where the emoji used to sit.<br><br>Everything about how the lists <em>work</em> — the tick that blinks the screen green, ticks clearing themselves after a few hours, the editor — is exactly as it was.',
+      'The pool gets the same three-seconds-to-check treat as the bike and the treadmill — and the row of buttons got smaller, friendlier and better-dressed while making room for it.'),
     v('v148', '2026-08-30 · 14:00 UTC', false, 'The buzz experiment closes — the green blink carries the moment on its own',
       '<b>Your verdict on v147: “Flash yes. Haptic no.”</b> That settles it. The iPhone was asked twice, the second time exactly the way it insists on — the very first tap fired inside your own finger-tap, ten of them riding along with the blink — and it still declined. Apple simply does not let a web app tap your hand, whatever the folklore says about the switch trick, and there is no third way to ask that is worth trying.<br><br><b>So the experiment is retired, with a clear conscience.</b> The invisible switch machinery from v146 and v147 is removed — not because it did any harm, but because code that provably does nothing on the one phone this app lives on is clutter, and clutter is where future confusion breeds. A short note stays behind in the code saying what was tried and why it is gone, so neither of us reopens this in six months wondering whether it was ever attempted.<br><br><b>What remains is what you said actually works:</b> the moment the last thing ticks, the whole screen blinks green — unmissable from anywhere on the list — and on an Android phone (should this app ever live on one) a real buzz still rides along, because there the vibration feature genuinely exists.<br><br>Nothing else changed. This is a tidy-up release: same blink, same lists, same everything — minus one machine that was silently doing nothing.',
       'The app stops pretending the iPhone might buzz — the green blink, which you confirmed does the job, is the celebration, and the code now says only what is true.'),
