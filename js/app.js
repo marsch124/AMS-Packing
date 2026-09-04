@@ -14,6 +14,7 @@ import {
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
   encodeGrabShare, decodeGrabShare,
+  encodeListShare, decodeListShare, listFromShare, decodeTripLink,
   deriveWeather, weatherSuggestions, weatherGear, WEATHER_CONDITIONS,
   placesVisited, eventsNeedingCoords, coerceGeo, tripPath, mostVisited,
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
@@ -41,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v157';
+const APP_VERSION = 'v158';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2037,6 +2038,115 @@ function shareGrabList(id) {
   const close = openModal(body);
 }
 
+// ——— Sharing a template (QR code + link, paste to import) ————————————————
+// The same trick as a grab list, one storey up: a whole template — its cover,
+// group, sections and every item with the conditions that decide when it comes
+// along — packed into a deep link (#/l/<code>) drawn as a QR code. A template
+// is far bigger than a grab list, so the QR often will not fit; the link always
+// does the job, and the modal says so plainly rather than showing nothing.
+function listShareLink(list) {
+  const code = encodeListShare(list);
+  return { code, link: location.origin + location.pathname + location.search + '#/l/' + code };
+}
+
+function shareList(list) {
+  let share;
+  try { share = listShareLink(list); } catch (err) { showToast(err.message || 'Nothing to share yet.'); return; }
+  const { link } = share;
+  let qr = '';
+  try { qr = QR.toSvg(link, { level: 'L', dark: '#10232a', light: '#ffffff' }); } catch { qr = ''; }
+  const n = (list.items || []).length;
+  // Messaging apps handle a few thousand characters happily; a very long one is
+  // worth a word of warning, since a cut link is worse than an obvious refusal.
+  const longLink = link.length > 4000;
+  const body = h(`<div class="modal">
+    <h2><span class="cover-dot" style="background:${esc(listColor(list))}">${esc(listEmoji(list))}</span>Share “${esc(list.name)}”</h2>
+    <p class="modal-sub">${n} item${n === 1 ? '' : 's'} travel inside the link, each with its conditions, category, phase and section. Photos and care records stay here — they belong to your things, not to the recipe.</p>
+    ${qr ? `<div class="share-qr">${qr}</div>` : '<p class="share-qr-none">This template is too big for a QR code — send the link instead.</p>'}
+    <div class="share-link" aria-label="Share link">${esc(link)}</div>
+    <div class="modal-actions">
+      ${navigator.share ? `<button class="btn primary lg" data-s="sheet">${IC.share}<span>Share link…</span></button>` : ''}
+      <button class="btn ${navigator.share ? 'ghost' : 'primary'} lg" data-s="copy">${IC.link}<span>Copy link</span></button>
+    </div>
+    <p class="modal-status" role="status"></p>
+    ${longLink ? '<p class="muted small">This is a <b>long link</b> — a big template makes a big link. Send it in a message or a note, where it survives in one piece; a few apps shorten very long links, and a cut one will not open.</p>' : ''}
+    <p class="muted small">Installed app on the iPhone? Its storage is separate from Safari’s, so there paste the link under <b>Settings → Shared trips &amp; grab lists → Paste</b>.</p>
+    <button class="btn ghost" data-s="close">Close</button>
+  </div>`);
+  const status = $('.modal-status', body);
+  const say = (msg) => { status.textContent = msg; };
+  body.addEventListener('click', async (e) => {
+    const s = e.target.closest('[data-s]')?.dataset.s;
+    if (!s) return;
+    if (s === 'close') { close(); return; }
+    if (s === 'copy') {
+      try { await navigator.clipboard.writeText(link); say('Link copied. Paste it into a message — opening it offers the template.'); }
+      catch { say('Could not copy automatically — select the link above and copy it by hand.'); }
+      return;
+    }
+    if (s === 'sheet') {
+      try { await navigator.share({ title: `AMS Packing — ${list.name}`, text: `Packing template “${list.name}” from AMS Packing`, url: link }); close(); }
+      catch (err) { if (err && err.name !== 'AbortError') say('Sharing was cancelled or unavailable — copy the link instead.'); }
+    }
+  });
+  const close = openModal(body);
+}
+
+// The receiving end of a shared template (#/l/<code>): show what arrived and
+// let the person add it as a new template — or, if one of the same name is
+// already here, replace that one instead. Nothing is written until a choice is
+// made and confirmed, so an accidental tap on a link changes nothing.
+async function renderImportList(data) {
+  let shared;
+  try { shared = decodeListShare(data); }
+  catch (err) {
+    return h(`<section class="screen"><div class="empty"><p class="empty-t">That template link didn’t work</p><p class="empty-s">${esc(err.message || 'The link may be incomplete or damaged.')}</p><a class="btn primary" href="#/">Go home</a></div></section>`);
+  }
+  const lists = await db.getLists();
+  const same = lists.find((l) => !l.role && (l.name || '').trim().toLowerCase() === shared.name.trim().toLowerCase());
+  const name = shared.name || 'Shared template';
+  const wrap = h('<section class="screen"></section>');
+  wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a><h1 class="grow">Shared template</h1></div>`));
+  // What arrived, then the decision, and only then the full list of things —
+  // a 38-item template would otherwise push the buttons off the screen.
+  wrap.appendChild(h(`<div class="card block">
+    <div class="grab-import-head"><span class="cover-dot" style="background:${esc(shared.color || '#8aa')}">${esc(shared.emoji || '📋')}</span><b>${esc(name)}</b><span class="muted">${shared.items.length} item${shared.items.length === 1 ? '' : 's'}${shared.sections.length ? ` · ${shared.sections.length} section${shared.sections.length === 1 ? '' : 's'}` : ''}</span></div>
+  </div>`));
+  wrap.appendChild(h(`<p class="muted pad">Someone sent you this template. Adding it makes a <b>new template</b> here with all of its items — your own templates are untouched.${same ? ` You already have one called “${esc(same.name)}”; you can replace that one instead.` : ''}</p>`));
+  const actions = h(`<div class="btnrow pad">
+    <button class="btn primary lg" data-a="add">${IC.plus}<span>Add as a new template</span></button>
+    ${same ? `<button class="btn ghost lg" data-a="replace">${IC.share}<span>Replace “${esc(same.name)}”</span></button>` : ''}
+  </div>`);
+  actions.addEventListener('click', async (e) => {
+    const a = e.target.closest('[data-a]')?.dataset.a;
+    if (!a) return;
+    if (a === 'add') {
+      const list = listFromShare(shared);
+      await db.saveList(list);
+      showToast(`“${list.name}” added — ${list.items.length} item${list.items.length === 1 ? '' : 's'}.`);
+      location.replace(`#/list/${list.id}`);
+      return;
+    }
+    if (a === 'replace' && same) {
+      if (!confirm(`Replace “${same.name}”?\n\nIts ${(same.items || []).length} item${(same.items || []).length === 1 ? '' : 's'} are swapped for the ${shared.items.length} shared ones. Trips already made keep what they already hold.`)) return;
+      // Keep the template's identity and birthday; everything else is replaced.
+      const keep = { id: same.id };
+      if (same.createdAt) keep.createdAt = same.createdAt;
+      const fresh = listFromShare(shared, keep);
+      await db.saveList(fresh);
+      showToast(`“${fresh.name}” replaced — ${fresh.items.length} item${fresh.items.length === 1 ? '' : 's'}.`);
+      location.replace(`#/list/${fresh.id}`);
+    }
+  });
+  wrap.appendChild(actions);
+  wrap.appendChild(h(`<a class="btn ghost lg grab-import-skip" href="#/">${IC.close}<span>Not now</span></a>`));
+  wrap.appendChild(h(`<div class="card block">
+    <h2>What is on it</h2>
+    <ul class="grab-import-items tpl-import-items">${shared.items.map((it) => `<li>${esc(it.name)}${it.qty ? ` <span class="muted">${esc(it.qty)}</span>` : ''}</li>`).join('')}</ul>
+  </div>`));
+  return wrap;
+}
+
 // The receiving end of a shared grab list (#/g/<code>): show what arrived and
 // let the person choose which of the six Home buttons should hold it. Nothing
 // is written until a button is picked and confirmed, so an accidental tap on a
@@ -2086,11 +2196,13 @@ function renderImportGrab(data) {
 
 // Settings → Paste. An installed app on the iPhone keeps its own storage, so a
 // link opened in Safari lands in Safari's copy of the app, not the installed
-// one. Pasting the link (or the bare code) here is the way in.
-function pasteGrabShare() {
+// one. Pasting the link (or the bare code) here is the way in — for any of the
+// three things that travel this way: a grab list, a template or a whole trip.
+// The kind is worked out from the code itself, so there is nothing to choose.
+function pasteSharedLink() {
   const body = h(`<div class="modal">
-    <h2>Paste a grab-list link or code</h2>
-    <p class="modal-sub">Paste the link (or just the code) someone shared with you. You then pick which Home button the list should go on.</p>
+    <h2>Paste a shared link or code</h2>
+    <p class="modal-sub">Paste the link (or just the code) someone shared with you — a grab list, a packing template or a whole trip. The app works out which it is and shows you what arrived before anything is saved.</p>
     <textarea class="modal-link modal-paste" rows="4" placeholder="Paste here…" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
     <div class="modal-actions"><button class="btn primary lg" data-s="import">${IC.share}<span>Import</span></button></div>
     <p class="modal-status" role="status"></p>
@@ -2112,14 +2224,27 @@ function pasteGrabShare() {
       try { text = (await navigator.clipboard.readText() || '').trim(); ta.value = text; } catch { /* declined */ }
     }
     if (!text) { say('Nothing pasted yet.'); ta.focus(); return; }
-    try { decodeGrabShare(text); }
-    catch (err) { say(err.message || 'That is not a grab-list link.'); return; }
-    const code = (text.match(/#\/g\/([A-Za-z0-9_-]+)/) || [])[1] || text;
+    const route = sharedRouteFor(text);
+    if (!route) { say('That is not an AMS Packing link or code — it should be a grab list, a template or a trip.'); return; }
     close();
-    location.assign(`#/g/${code}`);
+    location.assign(route);
   });
   const close = openModal(body);
   setTimeout(() => ta.focus(), 50);
+}
+
+// Which of the three shared things is this text, and where should it go? Each
+// decoder is asked in turn; the first that recognises the code wins. Returns ''
+// when nothing does.
+function sharedRouteFor(text) {
+  const bare = String(text || '').trim();
+  const grab = (bare.match(/#\/g\/([A-Za-z0-9_-]+)/) || [])[1] || bare;
+  try { decodeGrabShare(grab); return `#/g/${grab}`; } catch { /* not a grab list */ }
+  const tpl = (bare.match(/#\/l\/([A-Za-z0-9_-]+)/) || [])[1] || bare;
+  try { decodeListShare(tpl); return `#/l/${tpl}`; } catch { /* not a template */ }
+  const trip = (bare.match(/#\/t\/([A-Za-z0-9_-]+)/) || [])[1] || bare;
+  try { decodeTripLink(trip); return `#/t/${trip}`; } catch { /* not a trip */ }
+  return '';
 }
 
 async function renderHome() {
@@ -4100,10 +4225,17 @@ function shareTrip(ev) {
   const fullLink = link ? location.origin + location.pathname + location.search + link : null;
   const file = new File([json], filename, { type: 'application/json' });
   const canShareFile = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+  // A trip carries its whole packing list, so it usually outgrows a QR code —
+  // short ones still fit, and the link or the file covers the rest.
+  let qr = '';
+  if (fullLink) { try { qr = QR.toSvg(fullLink, { level: 'L', dark: '#10232a', light: '#ffffff' }); } catch { qr = ''; } }
 
   const body = h(`<div class="modal">
     <h2>Share “${esc(ev.name)}”</h2>
     <p class="modal-sub">Send this whole trip — its full packing list travels inside. The other person imports it; nothing is uploaded anywhere.</p>
+    ${qr ? `<div class="share-qr">${qr}</div><p class="muted small">Scan it with a phone camera to open the trip there.</p>`
+      : `<p class="share-qr-none">${fullLink ? 'This trip is too big for a QR code — send the link or the file.' : 'This trip is too big for a link or a QR code — send the file.'}</p>`}
+    ${fullLink ? `<div class="share-link" aria-label="Share link">${esc(fullLink)}</div>` : ''}
     <div class="modal-actions">
       ${canShareFile ? `<button class="btn primary lg" data-s="sheet">${IC.share}<span>Share…</span></button>` : ''}
       <button class="btn ghost lg" data-s="link"${fullLink ? '' : ' disabled'}>${IC.link}<span>${fullLink ? 'Copy link' : 'Link too large — use a file'}</span></button>
@@ -4899,7 +5031,8 @@ async function renderList(listId, openItemId) {
   wrap.appendChild(h(`<div class="topbar">
     <a class="iconbtn" href="${isContainer ? '#/maintenance' : '#/lists'}" aria-label="Back">${IC.back}</a>
     <h1 class="grow">${esc(list.name)}</h1>
-    ${noTemplateChrome ? '' : `<button class="iconbtn" data-rename aria-label="Rename">${IC.edit}</button>
+    ${noTemplateChrome ? '' : `<button class="iconbtn" data-share aria-label="Share template">${IC.share}</button>
+    <button class="iconbtn" data-rename aria-label="Rename">${IC.edit}</button>
     <button class="iconbtn" data-del aria-label="Delete template">${IC.trash}</button>`}
   </div>`));
   if (isLoose) {
@@ -4985,6 +5118,7 @@ async function renderList(listId, openItemId) {
     const added = batchAddItems(list);
     added.then((n) => { if (n > 0) { openItem = null; draw(); } });
   });
+  wrap.querySelector('[data-share]')?.addEventListener('click', () => shareList(list));
   wrap.querySelector('[data-cover]')?.addEventListener('click', async () => {
     const changed = await openCoverEditor(list);
     if (changed) render();
@@ -6484,6 +6618,8 @@ function howtoCard() {
  <p>Open a template to add or edit its items. (Items imported from your original Swedish lists still carry that wording underneath — it is <b>no longer shown</b> anywhere, since it only repeated what the English name already said, but it is kept, and <b>search still finds an item by it</b>.) At the top of a template’s item list sit <b>quick-filter chips</b> — <b>Liquids</b>, <b>Charging</b>, <b>Restricted</b>, <b>Has care</b>, <b>Photo</b> — so you can isolate one kind of thing within that list (tap several to combine; <b>Show all</b> clears). Only the categories present in that template appear, each with a count. The same chips are on the Care tab’s <b>All items</b> index — behind its <b>Filter</b> button — for filtering across every template at once.</p>
         <p><b>Sections.</b> A template can be split into named <b>sections</b> to give a clear overview — for a Diving list, say <b>Lights</b>, <b>Rig</b>, <b>Drysuit-related</b>, <b>Regulators</b>. Use the <b>Sections</b> button on a template to add, rename, reorder or delete them, then set an item’s section in its editor under <b>“② In this list”</b>. The list then shows counted section blocks in your chosen order, with anything unassigned under <b>Ungrouped</b>. A section is remembered <b>per template</b>, so the same item can sit in different sections in different lists. When you <b>add an item to another template</b>, its section comes along <b>by name</b> — if that template has a section called the same thing the item lands in it, otherwise it arrives under <b>Ungrouped</b> for you to file (it never creates a section in a list you’ve arranged yourself). Sections also flow onto a trip’s Packing List — pick <b>Section</b> in the trip’s <b>Group by</b> row (it appears once a trip has any sectioned items); same-named sections from different lists merge, and unsectioned items gather under <b>Everything else</b>.</p>
 
+        <p><b>Share a template.</b> The <b>share arrow</b> in a template's title bar hands the whole recipe to another phone: its name, cover, group, sections and every item with the conditions, category, phase, bag, weight and flags that decide when and where it is packed. Up comes a <b>QR code</b> (for a short template) and a <b>link</b> (always) — scan or send it, and the other phone shows what arrived and offers to <b>add it as a new template</b>, or to <b>replace</b> one of the same name. Nothing is uploaded: the whole template travels inside the link. What deliberately stays behind is anything that belongs to <em>your</em> physical things rather than to the recipe — photos, care records and service history. Because an installed app on the iPhone keeps its own storage, there is also <b>Paste</b> under <b>Settings → Shared trips &amp; grab lists</b>, which takes a grab list, a template or a trip and works out which it is.</p>
+
         <h3>Which bag an item goes in</h3>
         <p>You own <b>one</b> of each thing, so the app stores it once and every template points at that one item. But the <b>bag</b> it travels in genuinely does depend on the trip — on a hike everything goes in the hiking backpack, on a flight in the checked luggage. So “which bag” is answered in <b>three places</b>, and the most specific one wins:</p>
         <ol>
@@ -6799,7 +6935,7 @@ function howtoCard() {
         <p>After a trip, open <b>Trip review</b> and mark what you didn't use. The app remembers, per item, how often it was packed vs actually used. <b>Refine</b> (from the Templates tab) then suggests dropping items you keep packing but never use — you decide Keep or Drop.</p>
 
         <h3>Sharing a trip</h3>
-        <p>From a trip, tap <b>Share</b>. The whole trip — its full packing list — travels inside a file or a link; nothing is uploaded. The other person opens the link (it imports on its own) or imports the file from Settings. Every import becomes a fresh, unpacked copy.</p>
+        <p>From a trip, tap <b>Share</b>. The whole trip — its full packing list — travels inside a <b>QR code</b>, a <b>link</b> or a <b>file</b>; nothing is uploaded. The other person scans the code or opens the link (it imports on its own), or imports the file from Settings. Every import becomes a fresh, unpacked copy. A trip carries a lot, so the QR code only appears for a small one and the link for a middling one — for a big trip the file is the way, and the dialog says which of the three is available.</p>
 
         <h3>Spreadsheet export</h3>
         <p><b>Excel</b> exports a trip as an .xlsx (phase, container, item, qty, packed, note). Settings can export every event at once.</p>
@@ -6847,6 +6983,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v158', '2026-09-04 · 16:30 UTC', false, 'Templates and trips travel by QR code too',
+      '<b>Sharing grew up from the grab lists to the two things you actually build the app around.</b><br><br><b>A template can now be handed to another phone.</b> Open any template and tap the new <b>share arrow</b> in its title bar: up comes a <b>QR code</b> and a <b>link</b> carrying the whole recipe — the name, cover and group, its sections, and every item with the conditions, category, phase, bag, weight and flags that decide when and where it gets packed. The other phone shows what arrived and offers two honest choices: <b>add it as a new template</b> (your own are untouched), or, if you already have one by that name, <b>replace that one</b> after a confirmation. What stays behind is everything that belongs to <em>your</em> things rather than to the recipe: photos, care records and service history.<br><br><b>A trip now offers a QR code as well as a link and a file.</b> A trip carries its entire packing list, so it is usually too big for a QR code — when it fits, the code is there; when it does not, the dialog says so and points at the link or the file instead. No more guessing which of the three will work.<br><br><b>And one paste box now does all three.</b> The old “Paste a grab-list link” under <b>Settings → Shared trips &amp; grab lists</b> is now <b>“Paste a shared link or code”</b>: give it a grab list, a template or a trip and it works out which it is on its own. That matters on the iPhone, where an <b>installed</b> app keeps its own storage and a link opened in Safari lands in Safari\'s copy.',
+      'Set a template up once — on the Mac, in peace — and hand it to the phone, or to whoever you pack with, in one scan.'),
     v('v157', '2026-09-04 · 11:55 UTC', false, 'Share a grab list as a QR code or a link',
       '<b>The workout grab lists can now travel between phones</b> — the same way AMS PomoTimer shares its timer templates. Open any grab list and tap the new <b>share arrow</b> beside the pencil: up comes a <b>QR code</b> and a <b>link</b> that carry the whole list — its name, doodle, colour and everything on it. Scan the code with a phone camera, or send the link by message, and the other phone is <b>offered the list</b>: it shows what arrived and asks which of the six Home buttons it should go on. That button’s list is replaced (after a confirmation), the other five stay as they are, and nothing is ever uploaded anywhere — the list is inside the link itself.<br><br>One iPhone wrinkle handled: an <b>installed</b> app keeps its own storage, so a link opened in Safari lands in Safari’s copy, not the app on your home screen. For that there is a new <b>Paste</b> button under <b>Settings → Shared trips &amp; grab lists</b> — paste the link (or just the code), tap Import, pick a button. The QR code is drawn by the app itself, offline, with no outside library.',
       'Set up a grab list once and hand it to the other phone — or to a friend — in one scan.'),
@@ -8116,9 +8255,9 @@ async function renderSettings() {
       <button class="btn" data-t="importtrip">Import a trip file</button>
     </div>
     <input type="file" accept="application/json,.json" hidden>
-    <p class="muted">Got a <b>workout grab list</b> as a link or a QR code? Opening the link in Safari offers it to Safari’s copy of the app — the <b>installed app keeps its own storage</b>, so in there paste the link (or the code) here instead.</p>
+    <p class="muted">Got a <b>grab list</b>, a <b>packing template</b> or a <b>trip</b> as a link or a QR code? Opening the link in Safari offers it to Safari’s copy of the app — the <b>installed app keeps its own storage</b>, so in there paste the link (or the code) here instead.</p>
     <div class="btnrow">
-      <button class="btn" data-t="pastegrab">${IC.link}<span>Paste a grab-list link or code</span></button>
+      <button class="btn" data-t="pasteshare">${IC.link}<span>Paste a shared link or code</span></button>
     </div>
   </div>`);
 
@@ -8682,7 +8821,7 @@ async function renderSettings() {
   const tripFile = trips.querySelector('input[type=file]');
   trips.addEventListener('click', (e) => {
     if (e.target.closest('[data-t="importtrip"]')) tripFile.click();
-    if (e.target.closest('[data-t="pastegrab"]')) pasteGrabShare();
+    if (e.target.closest('[data-t="pasteshare"]')) pasteSharedLink();
   });
   tripFile.addEventListener('change', async () => {
     const f = tripFile.files[0]; if (!f) return;
@@ -8718,7 +8857,7 @@ async function renderSettings() {
   wrap.appendChild(foldCard('places', places, placesSummary(places2), { icon: 'box' }));
   wrap.appendChild(foldCard('conditions', condCard, conditionsSummary(), { icon: 'swap' }));
   wrap.appendChild(foldCard('presets', presetCard, presetsSummary(presets2), { icon: 'star' }));
-  wrap.appendChild(foldCard('sharedtrips', trips, 'Import a trip file, or paste a shared grab list', { icon: 'share' }));
+  wrap.appendChild(foldCard('sharedtrips', trips, 'Import a trip file, or paste a shared link', { icon: 'share' }));
 
   wrap.appendChild(settingsGroup('Appearance', 'theme'));
   wrap.appendChild(foldCard('theme', theme, themeLabel, { icon: 'moon' }));
@@ -9779,6 +9918,8 @@ async function renderRoute() {
   if (tripLink) return renderImportTrip(tripLink);
   const grabLink = m(/^#\/g\/(.+)$/);
   if (grabLink) return renderImportGrab(grabLink);
+  const listLink = m(/^#\/l\/(.+)$/);
+  if (listLink) return renderImportList(listLink);
   const eventEdit = m(/^#\/event\/([^/]+)\/edit$/);
   if (eventEdit) { const ev = await db.getEvent(eventEdit); return renderEventForm(ev); }
   const eventReview = m(/^#\/event\/([^/]+)\/review$/);

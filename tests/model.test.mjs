@@ -8,6 +8,7 @@ import {
   buildTripBundle, parseTripBundle, encodeTripLink, decodeTripLink,
   toBase64Url, fromBase64Url, TRIP_LINK_MAX,
   encodeGrabShare, decodeGrabShare, GRAB_SHARE_NAME_MAX, GRAB_SHARE_ITEM_MAX, GRAB_SHARE_ITEMS_MAX,
+  encodeListShare, decodeListShare, listFromShare, LIST_SHARE_ITEMS_MAX,
   weatherCode, deriveWeather, weatherSuggestions, pendingWeatherItems, weatherGear, coerceEvent, WEATHER_THRESHOLDS,
   PHASE_IDS, CATEGORIES, CONTAINERS, GROUP_IDS,
   coerceItem, normalizeMaintenance, hasCare, maintenanceStatus, maintenanceList, maintenanceSummary,
@@ -3019,4 +3020,113 @@ test('auditDeviceLists: nothing to compare against is "off", never a warning', (
 test('AUDIT_LABELS: every audited kind has a name to show', () => {
   for (const k of AUDITABLE_KINDS) assert.equal(typeof AUDIT_LABELS[k], 'string');
   for (const k of AUDITABLE_KINDS) assert.ok(AUDIT_LABELS[k].length > 0);
+});
+
+// --- Sharing a template (#/l/<code>) ---------------------------------------
+
+function sharableList() {
+  const sections = [{ id: 'sec-a', name: 'On me' }, { id: 'sec-b', name: 'In the bag' }];
+  return newList({
+    name: 'Trail run', emoji: '🏃', color: '#2e7d32', group: 'GA', defaultContainer: 'Duffel',
+    sections,
+    items: [
+      newItem({
+        name: 'Trail shoes', swedish: 'Terrängskor', qty: '1 pair', category: 'Clothing', phase: 'week',
+        seasons: ['summer'], contexts: ['outdoor'], weather: ['rain'], sub: ['Spare laces'],
+        section: 'sec-a', kit: 'Run kit', storage: 'Hall cupboard', packer: 'Martin', note: 'The grippy ones',
+        weight: 620, shortList: true, perNight: false, liquid: false,
+      }),
+      newItem({ name: 'Head torch', category: 'Tech', charging: true, chargeType: 'usb-c', section: 'sec-b', restricted: true }),
+      newItem({ name: 'Gels', consumable: true, perNight: true, section: 'sec-b' }),
+    ],
+  });
+}
+
+test('encodeListShare/decodeListShare: a template survives the round trip', () => {
+  const list = sharableList();
+  const shared = decodeListShare(encodeListShare(list));
+  assert.equal(shared.name, 'Trail run');
+  assert.equal(shared.emoji, '🏃');
+  assert.equal(shared.color, '#2e7d32');
+  assert.equal(shared.group, 'GA');
+  assert.equal(shared.defaultContainer, 'Duffel');
+  assert.deepEqual(shared.sections, ['On me', 'In the bag']);
+  assert.deepEqual(shared.items.map((i) => i.name), ['Trail shoes', 'Head torch', 'Gels']);
+  const shoes = shared.items[0];
+  assert.equal(shoes.swedish, 'Terrängskor');
+  assert.equal(shoes.qty, '1 pair');
+  assert.equal(shoes.category, 'Clothing');
+  assert.deepEqual(shoes.seasons, ['summer']);
+  assert.deepEqual(shoes.weather, ['rain']);
+  assert.deepEqual(shoes.sub, ['Spare laces']);
+  assert.equal(shoes.kit, 'Run kit');
+  assert.equal(shoes.storage, 'Hall cupboard');
+  assert.equal(shoes.packer, 'Martin');
+  assert.equal(shoes.note, 'The grippy ones');
+  assert.equal(shoes.weight, 620);
+  assert.equal(shoes.shortList, true);
+  assert.equal(shoes.liquid, false);
+  // sections travel by NAME, so the receiving device can rebuild its own ids
+  assert.equal(shoes.section, 'On me');
+  assert.equal(shared.items[1].charging, true);
+  assert.equal(shared.items[1].chargeType, 'usb-c');
+  assert.equal(shared.items[1].restricted, true);
+  assert.equal(shared.items[2].consumable, true);
+  assert.equal(shared.items[2].perNight, true);
+});
+
+test('decodeListShare: accepts a whole link, a bare code, or a link inside a message', () => {
+  const code = encodeListShare(sharableList());
+  const link = `https://marsch124.github.io/AMS-Packing/#/l/${code}`;
+  assert.equal(decodeListShare(code).name, 'Trail run');
+  assert.equal(decodeListShare(link).name, 'Trail run');
+  assert.equal(decodeListShare(`Here you go: ${link} — see you Sunday`).name, 'Trail run');
+});
+
+test('decodeListShare: rejects anything that is not a shared template', () => {
+  assert.throws(() => decodeListShare('not a code'), /template link or code/);
+  assert.throws(() => decodeListShare(''), /template link or code/);
+  // a grab-list code is a different kind and must not be mistaken for a template
+  const grab = encodeGrabShare({ name: 'Swim', items: ['Goggles'] });
+  assert.throws(() => decodeListShare(grab), /template link or code/);
+  // and the other way round
+  assert.throws(() => decodeGrabShare(encodeListShare(sharableList())), /grab-list link or code/);
+});
+
+test('encodeListShare: an empty template has nothing to share', () => {
+  assert.throws(() => encodeListShare(newList({ name: 'Empty' })), /nothing on it to share/);
+});
+
+test('listFromShare: rebuilds a real template with fresh ids and its sections joined up', () => {
+  const original = sharableList();
+  const rebuilt = listFromShare(decodeListShare(encodeListShare(original)));
+  assert.equal(rebuilt.name, 'Trail run');
+  assert.equal(rebuilt.builtin, false);
+  assert.notEqual(rebuilt.id, original.id);
+  assert.equal(rebuilt.sections.length, 2);
+  assert.deepEqual(rebuilt.sections.map((s) => s.name), ['On me', 'In the bag']);
+  // every item points at a section id that exists in THIS template
+  const ids = new Set(rebuilt.sections.map((s) => s.id));
+  assert.equal(rebuilt.items[0].section, rebuilt.sections[0].id);
+  assert.ok(rebuilt.items.every((it) => !it.section || ids.has(it.section)));
+  assert.ok(rebuilt.items.every((it) => it.id && it.id !== ''));
+  assert.equal(new Set(rebuilt.items.map((i) => i.id)).size, 3);
+  // and the conditions came along
+  assert.deepEqual(rebuilt.items[0].seasons, ['summer']);
+  assert.equal(rebuilt.items[1].chargeType, 'usb-c');
+});
+
+test('listFromShare: the two system bins can never arrive as themselves', () => {
+  for (const role of ['loose', 'container']) {
+    const src = { name: 'Sneaky', role, items: [{ name: 'Thing' }] };
+    assert.equal(listFromShare(src).role, '', `${role} must become an ordinary template`);
+  }
+  assert.equal(listFromShare({ name: 'Core', role: 'base', items: [{ name: 'Thing' }] }).role, 'base');
+});
+
+test('listFromShare: a partial overrides identity, for replacing a template in place', () => {
+  const shared = decodeListShare(encodeListShare(sharableList()));
+  const fresh = listFromShare(shared, { id: 'keep-me', createdAt: '2020-01-01T00:00:00.000Z' });
+  assert.equal(fresh.id, 'keep-me');
+  assert.equal(fresh.createdAt, '2020-01-01T00:00:00.000Z');
 });
