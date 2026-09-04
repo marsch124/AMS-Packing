@@ -7,6 +7,7 @@ import {
   daysUntil, countdownLabel, tripNudge, sortEventsForList, nightsBetween, endFromNights,
   buildTripBundle, parseTripBundle, encodeTripLink, decodeTripLink,
   toBase64Url, fromBase64Url, TRIP_LINK_MAX,
+  encodeGrabShare, decodeGrabShare, GRAB_SHARE_NAME_MAX, GRAB_SHARE_ITEM_MAX, GRAB_SHARE_ITEMS_MAX,
   weatherCode, deriveWeather, weatherSuggestions, pendingWeatherItems, weatherGear, coerceEvent, WEATHER_THRESHOLDS,
   PHASE_IDS, CATEGORIES, CONTAINERS, GROUP_IDS,
   coerceItem, normalizeMaintenance, hasCare, maintenanceStatus, maintenanceList, maintenanceSummary,
@@ -595,6 +596,51 @@ test('encodeTripLink: returns null when the payload is too large for a link', ()
   while (encodeTripLink(ev) !== null) ev.entries.push(...all);
   assert.equal(encodeTripLink(ev), null);
   assert.ok(ev.entries.length > 30, 'a normal-sized trip still fits; only very large ones fall back to a file');
+});
+
+// --- Sharing a grab list (QR / link / paste) ---
+test('encodeGrabShare / decodeGrabShare: round-trip of name, look and items', () => {
+  const code = encodeGrabShare({ name: 'Biz trip', icon: 'briefcase', tone: 'purple', items: ['Laptop', 'Charger', 'Badge'] });
+  assert.match(code, /^[A-Za-z0-9_-]+$/, 'the code is URL-safe base64 with no padding');
+  const got = decodeGrabShare(code);
+  assert.deepEqual(got, { name: 'Biz trip', icon: 'briefcase', tone: 'purple', items: ['Laptop', 'Charger', 'Badge'] });
+});
+
+test('decodeGrabShare: accepts a whole link, or text with the link pasted inside it', () => {
+  const code = encodeGrabShare({ name: 'Swim', items: ['Goggles', 'Towel'] });
+  const link = `https://marsch124.github.io/AMS-Packing/#/g/${code}`;
+  assert.deepEqual(decodeGrabShare(link).items, ['Goggles', 'Towel']);
+  assert.deepEqual(decodeGrabShare(`Here is my list: ${link} — enjoy`).items, ['Goggles', 'Towel']);
+  assert.deepEqual(decodeGrabShare(`  ${code}\n`).items, ['Goggles', 'Towel']);
+  const got = decodeGrabShare(code);
+  assert.equal(got.icon, '', 'no icon shared → empty, the app falls back to the button’s factory look');
+  assert.equal(got.tone, '');
+});
+
+test('encodeGrabShare: tidies the items — trims, drops blanks and duplicates, caps lengths', () => {
+  const long = 'x'.repeat(GRAB_SHARE_ITEM_MAX + 20);
+  const code = encodeGrabShare({ name: '  A very long list name indeed  ', items: ['  Towel ', '', 'towel', 'TOWEL', 42, null, long] });
+  const got = decodeGrabShare(code);
+  assert.equal(got.name, 'A very long list name indeed'.slice(0, GRAB_SHARE_NAME_MAX));
+  assert.deepEqual(got.items, ['Towel', 'x'.repeat(GRAB_SHARE_ITEM_MAX)]);
+  const many = Array.from({ length: GRAB_SHARE_ITEMS_MAX + 10 }, (_, i) => `Thing ${i}`);
+  assert.equal(decodeGrabShare(encodeGrabShare({ items: many })).items.length, GRAB_SHARE_ITEMS_MAX);
+});
+
+test('encodeGrabShare / decodeGrabShare: refuse an empty list and anything that is not a grab list', () => {
+  assert.throws(() => encodeGrabShare({ name: 'Empty', items: [] }), /nothing on it/);
+  assert.throws(() => decodeGrabShare('not a code at all!'), /not an AMS Packing grab-list/);
+  assert.throws(() => decodeGrabShare(''), /not an AMS Packing grab-list/);
+  // A trip link is valid base64 JSON, but not a grab list.
+  assert.throws(() => decodeGrabShare(`#/t/${toBase64Url(JSON.stringify({ kind: 'trip', event: {} }))}`), /not an AMS Packing grab-list/);
+  // Right kind, but no usable items.
+  assert.throws(() => decodeGrabShare(toBase64Url(JSON.stringify({ k: 'grab', v: 1, n: 'X', x: ['', '  '] }))), /empty/);
+});
+
+test('decodeGrabShare: survives names with accents and emoji through the base64 layer', () => {
+  const got = decodeGrabShare(encodeGrabShare({ name: 'Löprunda 🏃', items: ['Vattenflaska', 'Mössa & handskar'] }));
+  assert.equal(got.name, 'Löprunda 🏃');
+  assert.deepEqual(got.items, ['Vattenflaska', 'Mössa & handskar']);
 });
 
 // --- Weather (Open-Meteo interpretation) ---
