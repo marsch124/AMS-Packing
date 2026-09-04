@@ -2060,6 +2060,154 @@ export function decodeGrabShare(text) {
   };
 }
 
+
+// --- Sharing a template ---
+// A template travels the same way a grab list does: everything that decides
+// WHAT it contributes and WHEN — its name, cover, group, role, sections, and
+// every item with its conditions, flags and placing — packed into a deep link
+// (#/l/<code>) that doubles as a QR code. Photos, care records and history are
+// deliberately left behind: they describe the physical thing standing in this
+// home, not the recipe. Short keys on purpose; every byte makes the QR denser.
+export const LIST_SHARE_KIND = 'tpl';
+export const LIST_SHARE_NAME_MAX = 60;
+export const LIST_SHARE_ITEMS_MAX = 400;
+
+// The yes/no flags ride in one number rather than a dozen keys.
+const LIST_SHARE_FLAGS = [
+  ['shortList', 1], ['charging', 2], ['liquid', 4],
+  ['restricted', 8], ['perNight', 16], ['consumable', 32],
+];
+
+const cleanShareText = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+const cleanShareList = (arr, max = 40) => asArray(arr)
+  .filter((s) => typeof s === 'string')
+  .map((s) => cleanShareText(s, max))
+  .filter(Boolean);
+
+export function encodeListShare(list) {
+  if (!list || typeof list !== 'object') throw new Error('There is no template to share.');
+  const sections = asArray(list.sections).filter((s) => s && s.id && s.name);
+  const sectionName = new Map(sections.map((s) => [s.id, cleanShareText(s.name, 40)]));
+  const items = asArray(list.items).slice(0, LIST_SHARE_ITEMS_MAX).map((it) => {
+    const name = cleanShareText(it && it.name, GRAB_SHARE_ITEM_MAX);
+    if (!name) return null;
+    const o = { n: name };
+    const put = (k, v) => { if (v) o[k] = v; };
+    let flags = 0;
+    for (const [key, bit] of LIST_SHARE_FLAGS) if (it[key]) flags |= bit;
+    if (flags) o.f = flags;
+    put('w', cleanShareText(it.swedish, 60));
+    put('q', cleanShareText(it.qty, 20));
+    put('c', typeof it.category === 'string' ? it.category : '');
+    put('p', typeof it.phase === 'string' ? it.phase : '');
+    put('b', typeof it.container === 'string' ? it.container : '');
+    put('o', cleanShareText(it.note, 200));
+    put('y', typeof it.chargeType === 'string' ? it.chargeType : '');
+    put('e', it.section ? (sectionName.get(it.section) || '') : '');
+    put('k', cleanShareText(it.kit, 40));
+    put('s', cleanShareText(it.storage, 60));
+    put('a', cleanShareText(it.packer, 40));
+    put('u', cleanShareText(it.owner, 40));
+    if (it.itemType === 'reminder') o.t = 1;
+    if (Number.isFinite(it.weight) && it.weight > 0) o.g = Math.round(it.weight);
+    for (const [key, short] of [['seasons', 'se'], ['contexts', 'cx'], ['transports', 'tr'], ['catering', 'ca'], ['weather', 'we'], ['sub', 'sb']]) {
+      const arr = cleanShareList(it[key], short === 'sb' ? 60 : 40);
+      if (arr.length) o[short] = arr;
+    }
+    return o;
+  }).filter(Boolean);
+  if (!items.length) throw new Error('This template has nothing on it to share.');
+  const obj = { k: LIST_SHARE_KIND, v: 1, n: cleanShareText(list.name, LIST_SHARE_NAME_MAX), x: items };
+  if (list.emoji) obj.i = String(list.emoji).slice(0, 4);
+  if (list.color) obj.c = String(list.color).slice(0, 9);
+  if (list.group) obj.g = String(list.group);
+  if (list.role) obj.r = String(list.role);
+  if (list.transport) obj.tp = String(list.transport);
+  if (list.defaultContainer) obj.d = cleanShareText(list.defaultContainer, 60);
+  const secNames = sections.map((s) => sectionName.get(s.id)).filter(Boolean);
+  if (secNames.length) obj.s = secNames;
+  return toBase64Url(JSON.stringify(obj));
+}
+
+// Accepts a bare code, a whole link carrying #/l/<code>, or anything with such
+// a link pasted inside it. Throws on anything that isn't a shared template.
+export function decodeListShare(text) {
+  let payload = String(text ?? '').trim();
+  const m = payload.match(/#\/l\/([A-Za-z0-9_-]+)/);
+  if (m) payload = m[1];
+  let obj;
+  try { obj = JSON.parse(fromBase64Url(payload)); } catch { throw new Error('This is not an AMS Packing template link or code.'); }
+  if (!obj || typeof obj !== 'object' || obj.k !== LIST_SHARE_KIND) throw new Error('This is not an AMS Packing template link or code.');
+  const items = asArray(obj.x).map((o) => {
+    if (!o || typeof o !== 'object') return null;
+    const name = cleanShareText(o.n, GRAB_SHARE_ITEM_MAX);
+    if (!name) return null;
+    const flags = Number.isFinite(o.f) ? o.f : 0;
+    const out = {
+      name,
+      swedish: cleanShareText(o.w, 60),
+      qty: cleanShareText(o.q, 20),
+      category: typeof o.c === 'string' ? o.c : '',
+      phase: typeof o.p === 'string' ? o.p : '',
+      container: typeof o.b === 'string' ? o.b : '',
+      note: cleanShareText(o.o, 200),
+      chargeType: typeof o.y === 'string' ? o.y : '',
+      section: cleanShareText(o.e, 40),
+      kit: cleanShareText(o.k, 40),
+      storage: cleanShareText(o.s, 60),
+      packer: cleanShareText(o.a, 40),
+      owner: cleanShareText(o.u, 40),
+      itemType: o.t === 1 ? 'reminder' : 'item',
+      weight: Number.isFinite(o.g) && o.g > 0 ? Math.round(o.g) : 0,
+      seasons: cleanShareList(o.se), contexts: cleanShareList(o.cx),
+      transports: cleanShareList(o.tr), catering: cleanShareList(o.ca),
+      weather: cleanShareList(o.we), sub: cleanShareList(o.sb, 60),
+    };
+    for (const [key, bit] of LIST_SHARE_FLAGS) out[key] = !!(flags & bit);
+    return out;
+  }).filter(Boolean).slice(0, LIST_SHARE_ITEMS_MAX);
+  if (!items.length) throw new Error('The shared template is empty.');
+  return {
+    name: cleanShareText(obj.n, LIST_SHARE_NAME_MAX),
+    emoji: typeof obj.i === 'string' ? obj.i.slice(0, 4) : '',
+    color: typeof obj.c === 'string' ? obj.c : '',
+    group: typeof obj.g === 'string' ? obj.g : '',
+    role: typeof obj.r === 'string' ? obj.r : '',
+    transport: typeof obj.tp === 'string' ? obj.tp : '',
+    defaultContainer: cleanShareText(obj.d, 60),
+    sections: cleanShareList(obj.s),
+    items,
+  };
+}
+
+// Turn a decoded share into a real template, ready to save: fresh ids
+// throughout, sections rebuilt and each item pointed back at its own section by
+// name. The two system bins (the Loose items holder and the Containers
+// catalogue) can never arrive this way — an imported one becomes an ordinary
+// template — and nothing imported is ever marked built-in.
+export function listFromShare(shared, partial = {}) {
+  const src = shared && typeof shared === 'object' ? shared : {};
+  const sections = normalizeSections(cleanShareList(src.sections).map((name) => ({ id: id(), name })));
+  const byName = new Map(sections.map((s) => [s.name.toLowerCase(), s.id]));
+  const role = (src.role === 'loose' || src.role === 'container') ? '' : src.role;
+  return newList({
+    name: cleanShareText(src.name, LIST_SHARE_NAME_MAX) || 'Shared template',
+    emoji: src.emoji || '',
+    color: src.color || '',
+    group: src.group || '',
+    role: role || '',
+    transport: src.transport || '',
+    defaultContainer: src.defaultContainer || '',
+    sections,
+    builtin: false,
+    items: asArray(src.items).map((o) => newItem({
+      ...o,
+      section: byName.get(String(o.section || '').toLowerCase()) || '',
+    })),
+    ...partial,
+  });
+}
+
 // --- Care & maintenance ---
 // A physical item can carry a care record: how to look after it (notes + a
 // manufacturer/how-to link), an optional recurring service interval, when it was
