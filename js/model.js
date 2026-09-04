@@ -2007,6 +2007,59 @@ export function decodeTripLink(data) {
   return parseTripBundle(fromBase64Url(data));
 }
 
+// --- Sharing a grab list ---
+// A workout grab list travels as a compact code: its name, doodle and colour
+// plus the item names, base64url-encoded into a deep link (#/g/<code>) that the
+// receiving app offers for import. Short keys on purpose — the same code is
+// drawn as a QR, and every byte makes it denser. Icon and tone are carried as
+// the keys the app stores; the receiver checks them against its own gallery
+// and falls back to the target button's factory look for anything unknown.
+export const GRAB_SHARE_KIND = 'grab';
+export const GRAB_SHARE_NAME_MAX = 14;   // matches the list-name field
+export const GRAB_SHARE_ITEM_MAX = 60;   // matches the item-name field
+export const GRAB_SHARE_ITEMS_MAX = 100;
+const cleanGrabName = (v, max) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
+function cleanGrabItems(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of asArray(arr)) {
+    if (typeof raw !== 'string') continue;
+    const name = cleanGrabName(raw, GRAB_SHARE_ITEM_MAX);
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+    if (out.length >= GRAB_SHARE_ITEMS_MAX) break;
+  }
+  return out;
+}
+export function encodeGrabShare({ name, icon, tone, items } = {}) {
+  const list = cleanGrabItems(items);
+  if (!list.length) throw new Error('This list has nothing on it to share.');
+  const obj = { k: GRAB_SHARE_KIND, v: 1, n: cleanGrabName(name, GRAB_SHARE_NAME_MAX), x: list };
+  if (icon) obj.i = String(icon);
+  if (tone) obj.c = String(tone);
+  return toBase64Url(JSON.stringify(obj));
+}
+// Accepts a bare code, a whole link carrying #/g/<code>, or anything with such
+// a link pasted somewhere inside it. Throws on anything that isn't a grab list.
+export function decodeGrabShare(text) {
+  let payload = String(text ?? '').trim();
+  const m = payload.match(/#\/g\/([A-Za-z0-9_-]+)/);
+  if (m) payload = m[1];
+  let obj;
+  try { obj = JSON.parse(fromBase64Url(payload)); } catch { throw new Error('This is not an AMS Packing grab-list link or code.'); }
+  if (!obj || typeof obj !== 'object' || obj.k !== GRAB_SHARE_KIND) throw new Error('This is not an AMS Packing grab-list link or code.');
+  const items = cleanGrabItems(obj.x);
+  if (!items.length) throw new Error('The shared list is empty.');
+  return {
+    name: cleanGrabName(obj.n, GRAB_SHARE_NAME_MAX),
+    icon: typeof obj.i === 'string' ? obj.i : '',
+    tone: typeof obj.c === 'string' ? obj.c : '',
+    items,
+  };
+}
+
 // --- Care & maintenance ---
 // A physical item can carry a care record: how to look after it (notes + a
 // manufacturer/how-to link), an optional recurring service interval, when it was

@@ -6550,3 +6550,72 @@ table.grid {
    a zero basis for the grow factors to divide the row rather than fight it. */
 .grab-edit-acts .grab-done { flex: 2 1 0; }
 .grab-edit-acts .btn.ghost { flex: 1 1 0; }
+
+/* ——— Sharing a grab list: the QR/link modal, the offer screen ——————————— */
+.grab-share h2 { display: flex; align-items: center; gap: 10px; }
+.grab-share h2 .grab-icon { width: 30px; height: 30px; }
+
+/* The code always sits on white — a phone camera reads dark-on-light, whatever
+   the app's theme — with the quiet zone the encoder already draws around it. */
+.share-qr {
+  background: #fff;
+  border-radius: 14px;
+  padding: 6px;
+  margin: 0 auto;
+  width: min(100%, 250px);
+  border: 1px solid var(--line);
+}
+.share-qr svg { display: block; width: 100%; height: auto; }
+.share-qr-none {
+  margin: 0;
+  padding: 12px;
+  text-align: center;
+  color: var(--muted);
+  font-size: .88rem;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+}
+.share-link {
+  font-family: ui-monospace, monospace;
+  font-size: .72rem;
+  color: var(--muted);
+  word-break: break-all;
+  background: var(--line-2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  max-height: 4.6rem;
+  overflow: hidden;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.modal .small { font-size: .8rem; margin: 0; }
+.modal-paste { min-height: 5.5rem; resize: vertical; }
+
+.grab-import-card { display: grid; gap: 10px; }
+.grab-import-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 1.15rem;
+}
+.grab-import-head .grab-icon { width: 34px; height: 34px; }
+.grab-import-head .muted { font-size: .9rem; font-weight: 500; margin-left: auto; }
+.grab-import-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+.grab-import-items li {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--grabc, var(--brand)) 6%, var(--card));
+  font-weight: 600;
+}
+/* The six choices are the Home buttons themselves — same size, same looks —
+   so "which button?" is answered by recognition, not by reading. */
+.grab-import-pick { margin-top: 4px; }
+.grab-import-pick .grab-btn { font: inherit; font-weight: 700; cursor: pointer; }
+.grab-import-skip { margin-bottom: 56px; }

@@ -13,6 +13,7 @@ import {
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
+  encodeGrabShare, decodeGrabShare,
   deriveWeather, weatherSuggestions, weatherGear, WEATHER_CONDITIONS,
   placesVisited, eventsNeedingCoords, coerceGeo, tripPath, mostVisited,
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
@@ -35,11 +36,12 @@ import * as db from './db.js';
 import * as weather from './weather.js';
 import { buildWorkbook, XLSX_MIME } from './xlsx.js';
 import { WORLD_PATH, MAP_W, MAP_H, project } from './worldmap.js';
+import { QR } from './qr.js';
 
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v156';
+const APP_VERSION = 'v157';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1239,6 +1241,7 @@ const IC = {
   check: svgIcon('<path d="M5 12.5l4.5 4.5L19 7"/>', 2.6),
   share: svgIcon('<path d="M12 15V4M8.5 7.5 12 4l3.5 3.5"/><path d="M6 12v6a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2v-6"/>'),
   link: svgIcon('<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>'),
+  qr: svgIcon('<rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 14h2M14 18h2M18 18h2v2"/>'),
   pin: svgIcon('<path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/>'),
   wrench: svgIcon('<path d="M14.7 6.3a4 4 0 0 0-5.2 5.1L4 16.9 7.1 20l5.5-5.5a4 4 0 0 0 5.1-5.2l-2.4 2.4-2.1-.6-.6-2.1Z"/>'),
   camera: svgIcon('<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z"/><circle cx="12" cy="13" r="3.2"/>'),
@@ -1752,9 +1755,13 @@ async function renderGrab(id) {
   const top = h(`<div class="topbar">
     <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
     <h1 class="grow grab-title"><span class="grab-icon">${def.icon}</span><span class="grab-title-text">${esc(def.title)}</span></h1>
+    <button class="iconbtn grab-sharebtn" type="button" aria-label="Share this list" title="Share this list as a QR code or link">${IC.share}</button>
     <button class="iconbtn grab-editbtn" type="button" aria-label="Edit this list" title="Edit this list">${IC.edit}</button>
   </div>`);
   wrap.appendChild(top);
+  // Share what is on the list RIGHT NOW — a half-finished edit included, since
+  // every edit here saves as you make it. The pencil's own buttons stay put.
+  top.querySelector('.grab-sharebtn').addEventListener('click', () => { flushRename(); shareGrabList(id); });
   // Re-derive the look and repaint the title bar — called after every look
   // edit so the screen answers the change immediately.
   const applyLook = () => {
@@ -1975,6 +1982,144 @@ async function renderGrab(id) {
   });
   draw();
   return wrap;
+}
+
+// ——— Sharing a grab list (QR code + link, paste to import) ————————————————
+// Modelled on AMS PomoTimer's template sharing. The list — its name, doodle,
+// colour and the things on it — is packed into a deep link (#/g/<code>); the
+// same link is drawn as a QR code. Nothing is uploaded: the whole list travels
+// inside the link itself. Whoever opens it is offered the list and chooses
+// which of their six Home buttons it should land on.
+function grabShareLink(id) {
+  const def = getGrabDef(id);
+  const code = encodeGrabShare({ name: def.title, icon: def.iconKey, tone: def.tone, items: loadGrabItems(id) });
+  return { def, code, link: location.origin + location.pathname + location.search + '#/g/' + code };
+}
+
+function shareGrabList(id) {
+  let share;
+  try { share = grabShareLink(id); } catch (err) { showToast(err.message || 'Nothing to share yet.'); return; }
+  const { def, link } = share;
+  // The QR encoder tops out around 500 bytes — a very long list will not fit,
+  // and the link (which has no such limit) then does the job on its own.
+  let qr = '';
+  try { qr = QR.toSvg(link, { level: 'L', dark: '#10232a', light: '#ffffff' }); }
+  catch { qr = ''; }
+  const body = h(`<div class="modal grab-share grab-c-${def.tone}">
+    <h2><span class="grab-icon">${def.icon}</span>Share “${esc(def.title)}”</h2>
+    <p class="modal-sub">Scan the code with a phone camera, or send the link. Whoever opens it is offered the list and picks which button it should go on — nothing is uploaded anywhere.</p>
+    ${qr ? `<div class="share-qr">${qr}</div>` : '<p class="share-qr-none">This list is too long for a QR code — send the link instead.</p>'}
+    <div class="share-link" aria-label="Share link">${esc(link)}</div>
+    <div class="modal-actions">
+      ${navigator.share ? `<button class="btn primary lg" data-s="sheet">${IC.share}<span>Share link…</span></button>` : ''}
+      <button class="btn ${navigator.share ? 'ghost' : 'primary'} lg" data-s="copy">${IC.link}<span>Copy link</span></button>
+    </div>
+    <p class="modal-status" role="status"></p>
+    <p class="muted small">Installed app on the iPhone? Its storage is separate from Safari’s, so there paste the link under <b>Settings → Shared trips &amp; grab lists → Paste</b>.</p>
+    <button class="btn ghost" data-s="close">Close</button>
+  </div>`);
+  const status = $('.modal-status', body);
+  const say = (msg) => { status.textContent = msg; };
+  body.addEventListener('click', async (e) => {
+    const s = e.target.closest('[data-s]')?.dataset.s;
+    if (!s) return;
+    if (s === 'close') { close(); return; }
+    if (s === 'copy') {
+      try { await navigator.clipboard.writeText(link); say('Link copied. Paste it into a message — opening it offers the list.'); }
+      catch { say('Could not copy automatically — select the link above and copy it by hand.'); }
+      return;
+    }
+    if (s === 'sheet') {
+      try { await navigator.share({ title: `AMS Packing — ${def.title}`, text: `Grab list “${def.title}” from AMS Packing`, url: link }); close(); }
+      catch (err) { if (err && err.name !== 'AbortError') say('Sharing was cancelled or unavailable — copy the link instead.'); }
+    }
+  });
+  const close = openModal(body);
+}
+
+// The receiving end of a shared grab list (#/g/<code>): show what arrived and
+// let the person choose which of the six Home buttons should hold it. Nothing
+// is written until a button is picked and confirmed, so an accidental tap on a
+// link changes nothing.
+function renderImportGrab(data) {
+  let shared;
+  try { shared = decodeGrabShare(data); }
+  catch (err) {
+    return h(`<section class="screen"><div class="empty"><p class="empty-t">That grab-list link didn’t work</p><p class="empty-s">${esc(err.message || 'The link may be incomplete or damaged.')}</p><a class="btn primary" href="#/">Go home</a></div></section>`);
+  }
+  const iconKey = GRAB_ICONS[shared.icon] ? shared.icon : '';
+  const tone = GRAB_TONES.includes(shared.tone) ? shared.tone : '';
+  const name = shared.name || 'Shared list';
+  const wrap = h(`<section class="screen grab-import${tone ? ` grab-c-${tone}` : ''}"></section>`);
+  wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a><h1 class="grow">Shared grab list</h1></div>`));
+  wrap.appendChild(h(`<div class="card block grab-import-card">
+    <div class="grab-import-head">${iconKey ? `<span class="grab-icon">${GRAB_ICONS[iconKey].svg}</span>` : ''}<b>${esc(name)}</b><span class="muted">${shared.items.length} ${shared.items.length === 1 ? 'thing' : 'things'}</span></div>
+    <ul class="grab-import-items">${shared.items.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
+  </div>`));
+  wrap.appendChild(h('<p class="muted pad">Someone sent you this grab list. <b>Tap the Home button it should go on</b> — that button’s list is replaced, and it takes on the shared name, doodle and colour. Your other five buttons are untouched.</p>'));
+  const row = h(`<div class="grab-row grab-import-pick" role="group" aria-label="Choose a button">${Object.keys(GRAB_LISTS).map((gid) => {
+    const d = getGrabDef(gid);
+    return `<button type="button" class="grab-btn grab-c-${d.tone}" data-gid="${gid}" aria-label="Put it on ${esc(d.title)}"><span class="grab-icon">${d.icon}</span><span>${esc(d.label)}</span></button>`;
+  }).join('')}</div>`);
+  row.addEventListener('click', (e) => {
+    const gid = e.target.closest('[data-gid]')?.dataset.gid;
+    if (!gid || !GRAB_LISTS[gid]) return;
+    const cur = getGrabDef(gid);
+    const curItems = loadGrabItems(gid);
+    if (!confirm(`Put “${name}” on the ${cur.label} button?\n\nIts current list — ${curItems.length} ${curItems.length === 1 ? 'thing' : 'things'} under “${cur.title}” — is replaced by the ${shared.items.length} shared ones. The other buttons stay as they are.`)) return;
+    const meta = {};
+    // The factory label ("Swim" on the swim button) is left unset so the
+    // factory title ("Indoor swim") still shows; any other name is kept.
+    if (name && name !== GRAB_LISTS[gid].label) meta.label = name;
+    if (iconKey) meta.icon = iconKey;
+    if (tone) meta.tone = tone;
+    saveGrabMeta(gid, meta);
+    saveGrabItems(gid, shared.items);
+    saveGrabState(gid, [], []); // a fresh list starts untouched
+    showToast(`“${name}” is on Home now, where “${cur.title}” was.`);
+    location.replace(`#/grab/${gid}`);
+  });
+  wrap.appendChild(row);
+  wrap.appendChild(h(`<a class="btn ghost lg grab-import-skip" href="#/">${IC.close}<span>Not now</span></a>`));
+  return wrap;
+}
+
+// Settings → Paste. An installed app on the iPhone keeps its own storage, so a
+// link opened in Safari lands in Safari's copy of the app, not the installed
+// one. Pasting the link (or the bare code) here is the way in.
+function pasteGrabShare() {
+  const body = h(`<div class="modal">
+    <h2>Paste a grab-list link or code</h2>
+    <p class="modal-sub">Paste the link (or just the code) someone shared with you. You then pick which Home button the list should go on.</p>
+    <textarea class="modal-link modal-paste" rows="4" placeholder="Paste here…" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+    <div class="modal-actions"><button class="btn primary lg" data-s="import">${IC.share}<span>Import</span></button></div>
+    <p class="modal-status" role="status"></p>
+    <button class="btn ghost" data-s="close">Cancel</button>
+  </div>`);
+  const ta = $('.modal-paste', body);
+  const status = $('.modal-status', body);
+  const say = (msg) => { status.textContent = msg; };
+  ta.addEventListener('input', () => say('')); // a fresh paste clears the last complaint
+  body.addEventListener('click', async (e) => {
+    const s = e.target.closest('[data-s]')?.dataset.s;
+    if (!s) return;
+    if (s === 'close') { close(); return; }
+    if (s !== 'import') return;
+    let text = ta.value.trim();
+    // An empty box + Import = "use what is on the clipboard", where the browser
+    // lets us read it (it asks first, and only inside a tap like this one).
+    if (!text && navigator.clipboard?.readText) {
+      try { text = (await navigator.clipboard.readText() || '').trim(); ta.value = text; } catch { /* declined */ }
+    }
+    if (!text) { say('Nothing pasted yet.'); ta.focus(); return; }
+    try { decodeGrabShare(text); }
+    catch (err) { say(err.message || 'That is not a grab-list link.'); return; }
+    const code = (text.match(/#\/g\/([A-Za-z0-9_-]+)/) || [])[1] || text;
+    close();
+    location.assign(`#/g/${code}`);
+  });
+  const close = openModal(body);
+  setTimeout(() => ta.focus(), 50);
 }
 
 async function renderHome() {
@@ -6379,12 +6524,12 @@ function howtoCard() {
         <h3>Getting around</h3>
         <p>Six tabs along the bottom:</p>
         <ul>
-          <li><b>Home</b> — the builder for starting a new trip, plus a compact preview of your few most recent events. Above the builder sit the two <b>workout grab lists</b> — 🚴 <b>Bike</b> and 🏃 <b>Run</b> (see below).</li>
+          <li><b>Home</b> — the builder for starting a new trip, plus a compact preview of your few most recent events. Above the builder sit the six <b>workout grab lists</b> — <b>Swim</b>, <b>Bike</b> and <b>Run</b>, indoors and out (see below).</li>
  <li><b>Events</b> — every event you've made, grouped <b>Upcoming</b> → <b>No date set</b> → <b>Past trips</b>, with the nearest trip on top. Home's “See all” link lands here. The <b>Map</b> button up top opens the <b>Places visited</b> world map (see below). <b>Long-press</b> (or <b>right-click</b>) a trip card for its quick-actions menu — see <b>Quick actions on a trip</b> below.</li>
           <li><b>Templates</b> — your reusable templates (the building blocks).</li>
           <li><b>Care</b> — everything that needs looking after, as an urgency-ordered list or a month calendar (see <b>Care, storage &amp; maintenance</b> below).</li>
           <li><b>Actions</b> — your to-do list (the red tab): everything you need to <em>do</em>, not just pack, whether it belongs to a specific item or stands on its own (see <b>Actions — your to-do list</b> below).</li>
-          <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip import, this guide and the version history.</li>
+          <li><b>Settings</b> — <b>Maintenance mode</b> (the whole-database overview), backup/restore, trip and grab-list import, this guide and the version history.</li>
         </ul>
  <p><b>Search.</b> A <b></b> button in the top bar of Home, Events, Templates, Care and Actions opens one search box that looks across <b>everything at once</b> — items (by name, <em>and</em> by the original Swedish wording even though that is no longer displayed), templates, trips (by name or destination) and to-dos. Results are grouped and update as you type; tap one to jump straight to it. It's the quickest way to reach a specific thing without remembering which template it's in.</p>
 
@@ -6398,6 +6543,7 @@ function howtoCard() {
           <li><b>The ✎ pencil also restyles the button itself</b>: give the list your own <b>name</b> (up to 14 letters — “Biz trip”, say), pick any of the <b>twelve hand-drawn doodles</b> (briefcase, plane, mountains, golf, gym, dog walk, and the six sport ones), and choose one of <b>six colours</b>. The Home button and the list’s own title change together; emptying the name field brings the standard name back, and <b>Cancel</b> undoes look changes along with everything else.</li>
           <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. <b>Done</b> keeps your changes; <b>Cancel</b> puts the list back exactly as it was when you tapped the pencil. Each list is its own — the bike list and the run list can differ.</li>
           <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
+          <li><b>Share a list</b> — the share arrow beside the pencil opens a <b>QR code</b> and a <b>link</b> carrying the list: its name, doodle, colour and everything on it. Whoever scans the code with the phone camera, or opens the link, is <b>offered the list</b> and taps which of their six Home buttons it should go on — that button’s list is replaced, the other five are untouched. Nothing is uploaded; the whole list travels inside the link. Because an installed app on the iPhone keeps its own storage (a link opened in Safari lands in Safari’s copy), there is also <b>Paste</b> under <b>Settings → Shared trips &amp; grab lists</b>: paste the link or the code, tap <b>Import</b>, pick a button, done.</li>
         </ul>
 
         <h3>Colour tells you where you are</h3>
@@ -6673,7 +6819,7 @@ function howtoCard() {
         <p>Settings is an <b>index</b>: every section is one line showing what’s inside it — <em>Packers: Martin, Anna</em>, <em>Storage places: 12 places</em>, <em>Backed up today — still current</em> — so you can see the state of everything without opening a thing. Tap a line to unfold it. Whatever you leave open <b>stays open next time you come back</b>, so the sections you use often can simply live open.</p>
         <p>Those summary lines are <b>live</b>. Add a person, remove a storage place, delete a trip preset, and the line above the list updates as you do it — you never have to leave Settings and come back to find out whether the change took. That matters because the editors here deliberately redraw <b>only their own list</b> when you make a change, so that renaming something halfway down a long page doesn’t throw away your scroll position.</p>
         <p>Each section has its <b>own colour and icon</b>, fixed for good, so you come to know them by sight rather than by reading. Closed, the colour sits in the little icon tile; <b>open, it takes over the panel</b> — the tile fills in, and the heading, the edge and a faint wash of the background all follow — so you always know which section you are inside. The colour is an <em>identity</em>, not a warning light: it never changes to tell you something is wrong. When something does need attention, the app says so in words, and on the Home screen.</p>
-        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>Packers</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Item conditions</b>, <b>Trip presets</b> and <b>Shared trips</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
+        <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>Packers</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Item conditions</b>, <b>Trip presets</b> and <b>Shared trips &amp; grab lists</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
         <h3>Your data &amp; privacy</h3>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
@@ -6701,6 +6847,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v157', '2026-09-04 · 11:55 UTC', false, 'Share a grab list as a QR code or a link',
+      '<b>The workout grab lists can now travel between phones</b> — the same way AMS PomoTimer shares its timer templates. Open any grab list and tap the new <b>share arrow</b> beside the pencil: up comes a <b>QR code</b> and a <b>link</b> that carry the whole list — its name, doodle, colour and everything on it. Scan the code with a phone camera, or send the link by message, and the other phone is <b>offered the list</b>: it shows what arrived and asks which of the six Home buttons it should go on. That button’s list is replaced (after a confirmation), the other five stay as they are, and nothing is ever uploaded anywhere — the list is inside the link itself.<br><br>One iPhone wrinkle handled: an <b>installed</b> app keeps its own storage, so a link opened in Safari lands in Safari’s copy, not the app on your home screen. For that there is a new <b>Paste</b> button under <b>Settings → Shared trips &amp; grab lists</b> — paste the link (or just the code), tap Import, pick a button. The QR code is drawn by the app itself, offline, with no outside library.',
+      'Set up a grab list once and hand it to the other phone — or to a friend — in one scan.'),
     v('v156', '2026-08-31 · 12:20 UTC', false, 'The icon goes light green',
       '<b>Your verdict on the persimmon icon: love it — but make it light green.</b> Done. Same drawing, new weather: the rucksack, the two snow-flecked peaks, the sun and the birds are untouched, now standing on a <b>fresh light-green ground</b> with a paler green glow behind the scene.<br><br>One colour decision came with it: the cream ink that sat so well on the warm orange would have all but vanished on a light ground, so the pen now writes in a <b>deep forest green</b> — dark lines on a light field, checked at home-screen size and in the round crop, where everything still reads clearly. Green on green also suits a bag that lives outdoors rather better than office teal ever did.<br><br>The same home-screen note as last time applies: an already-installed icon keeps its old face until the app is removed from the home screen and added again from Safari.',
       'The front door is now the colour of the places the bag actually goes.'),
@@ -7961,12 +8110,16 @@ async function renderSettings() {
   });
 
   const trips = h(`<div class="card block">
-    <h2>Shared trips</h2>
+    <h2>Shared trips &amp; grab lists</h2>
     <p class="muted">Someone shared a trip file with you? Import it here to add it as your own event. (Shared links open and import on their own.)</p>
     <div class="btnrow">
       <button class="btn" data-t="importtrip">Import a trip file</button>
     </div>
     <input type="file" accept="application/json,.json" hidden>
+    <p class="muted">Got a <b>workout grab list</b> as a link or a QR code? Opening the link in Safari offers it to Safari’s copy of the app — the <b>installed app keeps its own storage</b>, so in there paste the link (or the code) here instead.</p>
+    <div class="btnrow">
+      <button class="btn" data-t="pastegrab">${IC.link}<span>Paste a grab-list link or code</span></button>
+    </div>
   </div>`);
 
   const places = h(`<div class="card block">
@@ -8529,6 +8682,7 @@ async function renderSettings() {
   const tripFile = trips.querySelector('input[type=file]');
   trips.addEventListener('click', (e) => {
     if (e.target.closest('[data-t="importtrip"]')) tripFile.click();
+    if (e.target.closest('[data-t="pastegrab"]')) pasteGrabShare();
   });
   tripFile.addEventListener('change', async () => {
     const f = tripFile.files[0]; if (!f) return;
@@ -8564,7 +8718,7 @@ async function renderSettings() {
   wrap.appendChild(foldCard('places', places, placesSummary(places2), { icon: 'box' }));
   wrap.appendChild(foldCard('conditions', condCard, conditionsSummary(), { icon: 'swap' }));
   wrap.appendChild(foldCard('presets', presetCard, presetsSummary(presets2), { icon: 'star' }));
-  wrap.appendChild(foldCard('sharedtrips', trips, 'Import a trip someone sent you', { icon: 'share' }));
+  wrap.appendChild(foldCard('sharedtrips', trips, 'Import a trip file, or paste a shared grab list', { icon: 'share' }));
 
   wrap.appendChild(settingsGroup('Appearance', 'theme'));
   wrap.appendChild(foldCard('theme', theme, themeLabel, { icon: 'moon' }));
@@ -9623,6 +9777,8 @@ async function renderRoute() {
   if (hash === '#/overview') return renderOverview();
   const tripLink = m(/^#\/t\/(.+)$/);
   if (tripLink) return renderImportTrip(tripLink);
+  const grabLink = m(/^#\/g\/(.+)$/);
+  if (grabLink) return renderImportGrab(grabLink);
   const eventEdit = m(/^#\/event\/([^/]+)\/edit$/);
   if (eventEdit) { const ev = await db.getEvent(eventEdit); return renderEventForm(ev); }
   const eventReview = m(/^#\/event\/([^/]+)\/review$/);
