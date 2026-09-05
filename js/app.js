@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v158';
+const APP_VERSION = 'v159';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -6983,6 +6983,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v159', '2026-09-04 · 19:15 UTC', false, 'Better neighbours',
+      'Better neighbours. All of your AMS apps live at the same web address, and each one used to clear out every stored copy it found there that was not its own — so opening this app in Safari quietly made the last app you had looked at fetch itself again the next time. It now tidies up only its own older copies and leaves the others alone. Your own data was never involved and is untouched.',
+      'Opening another AMS app no longer costs this one its offline copy.'),
     v('v158', '2026-09-04 · 16:30 UTC', false, 'Templates and trips travel by QR code too',
       '<b>Sharing grew up from the grab lists to the two things you actually build the app around.</b><br><br><b>A template can now be handed to another phone.</b> Open any template and tap the new <b>share arrow</b> in its title bar: up comes a <b>QR code</b> and a <b>link</b> carrying the whole recipe — the name, cover and group, its sections, and every item with the conditions, category, phase, bag, weight and flags that decide when and where it gets packed. The other phone shows what arrived and offers two honest choices: <b>add it as a new template</b> (your own are untouched), or, if you already have one by that name, <b>replace that one</b> after a confirmation. What stays behind is everything that belongs to <em>your</em> things rather than to the recipe: photos, care records and service history.<br><br><b>A trip now offers a QR code as well as a link and a file.</b> A trip carries its entire packing list, so it is usually too big for a QR code — when it fits, the code is there; when it does not, the dialog says so and points at the link or the file instead. No more guessing which of the three will work.<br><br><b>And one paste box now does all three.</b> The old “Paste a grab-list link” under <b>Settings → Shared trips &amp; grab lists</b> is now <b>“Paste a shared link or code”</b>: give it a grab list, a template or a trip and it works out which it is on its own. That matters on the iPhone, where an <b>installed</b> app keeps its own storage and a link opened in Safari lands in Safari\'s copy.',
       'Set a template up once — on the Mac, in peace — and hand it to the phone, or to whoever you pack with, in one scan.'),

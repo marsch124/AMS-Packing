@@ -1,6 +1,9 @@
 // service-worker.js — offline app shell caching.
 // Bump CACHE when you change any of the cached files to force an update.
-const CACHE = 'ams-packing-list-v158';
+/* Bump this with APP_VERSION in js/app.js. PREFIX is separate so that clearing
+   out old copies never touches the sibling AMS apps sharing this web address. */
+const PREFIX = 'ams-packing-list-v';
+const CACHE = 'ams-packing-list-v159';
 const ASSETS = [
   './',
   './index.html',
@@ -30,7 +33,7 @@ self.addEventListener('install', (e) => {
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
-    caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    caches.keys().then((keys) => Promise.all(keys.filter((k) => k.startsWith(PREFIX) && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
