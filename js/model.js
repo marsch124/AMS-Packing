@@ -1994,17 +1994,165 @@ export function fromBase64Url(b64url) {
   return decodeURIComponent(escape(atob(b64)));
 }
 
-// Encode a trip as a self-contained deep link fragment: #/t/<base64url-json>.
-// Returns null when the payload is too large to travel reliably as a link
-// (some apps/browsers truncate long URLs) — callers fall back to a file share.
-export const TRIP_LINK_MAX = 8000;
+
+// --- Squeezing a share code ---------------------------------------------
+// A trip carries its whole packing list: a week away with three activities is
+// some 250 lines and 50 kB of JSON, which as plain base64 is a 65 kB link — far
+// past what any messaging app will carry in one piece. The text is enormously
+// repetitive (the same two dozen field names on every line), so LZW compression
+// takes roughly four fifths of it away and turns most trips back into a link
+// you can actually send.
+//
+// Written out here rather than using the browser's CompressionStream because
+// that one is asynchronous, and everything in this file is pure, synchronous
+// and covered by tests — including this, which is fuzz-tested against its own
+// inverse.
+//
+// A compressed payload is marked with a "z." in front. A plain one is always
+// base64 of JSON, which always begins "eyJ", so the two can never be confused,
+// and links sent before this existed keep working exactly as they did.
+export const SHARE_ZIP_PREFIX = 'z.';
+
+// Codes start 9 bits wide and grow as the dictionary fills, up to 16 bits.
+const LZW_MAX = 65536;
+const lzwWidth = (next) => {
+  let w = 9;
+  while (next > (1 << w) - 1 && w < 16) w++;
+  return w;
+};
+
+export function lzwCompress(bytes) {
+  const src = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || []);
+  if (!src.length) return new Uint8Array(0);
+  const dict = new Map();
+  let next = 256;
+  let width = 9;
+  const out = [];
+  let acc = 0, bits = 0;
+  const emit = (code) => {
+    acc = acc * (1 << width) + code;
+    bits += width;
+    while (bits >= 8) {
+      bits -= 8;
+      const shift = 1 << bits;
+      out.push(Math.floor(acc / shift) & 255);
+      acc %= shift;
+    }
+  };
+  let w = String.fromCharCode(src[0]);
+  for (let i = 1; i < src.length; i++) {
+    const c = String.fromCharCode(src[i]);
+    const wc = w + c;
+    const known = wc.length === 1 ? wc.charCodeAt(0) : dict.get(wc);
+    if (known !== undefined) { w = wc; continue; }
+    emit(w.length === 1 ? w.charCodeAt(0) : dict.get(w));
+    if (next < LZW_MAX) { dict.set(wc, next++); width = lzwWidth(next); }
+    w = c;
+  }
+  emit(w.length === 1 ? w.charCodeAt(0) : dict.get(w));
+  if (bits > 0) out.push((acc * (1 << (8 - bits))) & 255);
+  return Uint8Array.from(out);
+}
+
+export function lzwDecompress(bytes) {
+  const src = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes || []);
+  if (!src.length) return new Uint8Array(0);
+  const dict = [];
+  let next = 256;
+  // The decoder learns each entry one step after the encoder wrote it, so it
+  // must widen one step early to stay in lock-step.
+  let width = 9;
+  let acc = 0, bits = 0, pos = 0;
+  const read = () => {
+    while (bits < width) {
+      if (pos >= src.length) return -1;
+      acc = acc * 256 + src[pos++];
+      bits += 8;
+    }
+    bits -= width;
+    const shift = 1 << bits;
+    const code = Math.floor(acc / shift);
+    acc %= shift;
+    return code;
+  };
+  const entryFor = (code) => (code < 256 ? String.fromCharCode(code) : dict[code]);
+  let code = read();
+  if (code < 0) return new Uint8Array(0);
+  let w = entryFor(code);
+  if (w === undefined) throw new Error('This code is damaged.');
+  const parts = [w];
+  for (;;) {
+    const k = read();
+    if (k < 0) break;
+    let entry = entryFor(k);
+    if (entry === undefined) {
+      if (k !== next) throw new Error('This code is damaged.');
+      entry = w + w[0];
+    }
+    parts.push(entry);
+    if (next < LZW_MAX) { dict[next++] = w + entry[0]; width = lzwWidth(next + 1); }
+    w = entry;
+  }
+  const text = parts.join('');
+  const out = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 255;
+  return out;
+}
+
+// Pack a string into the shortest share code available: compressed when that
+// helps (most things), plain base64 when it does not (very short codes).
+export function packShare(str) {
+  const text = String(str ?? '');
+  const plain = toBase64Url(text);
+  try {
+    const raw = lzwCompress(new TextEncoder().encode(text));
+    const zipped = SHARE_ZIP_PREFIX + bytesToBase64Url(raw);
+    if (zipped.length < plain.length) return zipped;
+  } catch { /* whatever went wrong, the plain code still works */ }
+  return plain;
+}
+
+// Unpack either flavour back into the original string.
+export function unpackShare(payload) {
+  let code = String(payload ?? '').trim().replace(/\.+$/, ''); // a sentence's full stop is not part of the code
+  if (code.startsWith(SHARE_ZIP_PREFIX)) {
+    const raw = base64UrlToBytes(code.slice(SHARE_ZIP_PREFIX.length));
+    return new TextDecoder().decode(lzwDecompress(raw));
+  }
+  return fromBase64Url(code);
+}
+
+// base64url of raw bytes (no UTF-8 step — these are bytes, not text).
+export function bytesToBase64Url(bytes) {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+export function base64UrlToBytes(b64url) {
+  let b64 = String(b64url || '').replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+// Encode a trip as a self-contained deep link fragment: #/t/<code>, the code
+// squeezed by `packShare`. Returns null when even the squeezed payload is too
+// large to travel reliably as a link — callers fall back to a file share.
+//
+// The ceiling is generous because the limit that bites is the messaging app in
+// the middle, not the browser: Safari swallows some 80 000 characters, and the
+// apps people actually paste links into carry tens of thousands. Compressed, a
+// week away with three activities lands around 12 000.
+export const TRIP_LINK_MAX = 30000;
 export function encodeTripLink(event, whenISO = nowISO()) {
   const json = JSON.stringify(buildTripBundle(event, whenISO));
-  const frag = `#/t/${toBase64Url(json)}`;
+  const frag = `#/t/${packShare(json)}`;
   return frag.length > TRIP_LINK_MAX ? null : frag;
 }
 export function decodeTripLink(data) {
-  return parseTripBundle(fromBase64Url(data));
+  return parseTripBundle(unpackShare(data));
 }
 
 // --- Sharing a grab list ---
@@ -2039,16 +2187,16 @@ export function encodeGrabShare({ name, icon, tone, items } = {}) {
   const obj = { k: GRAB_SHARE_KIND, v: 1, n: cleanGrabName(name, GRAB_SHARE_NAME_MAX), x: list };
   if (icon) obj.i = String(icon);
   if (tone) obj.c = String(tone);
-  return toBase64Url(JSON.stringify(obj));
+  return packShare(JSON.stringify(obj));
 }
 // Accepts a bare code, a whole link carrying #/g/<code>, or anything with such
 // a link pasted somewhere inside it. Throws on anything that isn't a grab list.
 export function decodeGrabShare(text) {
   let payload = String(text ?? '').trim();
-  const m = payload.match(/#\/g\/([A-Za-z0-9_-]+)/);
+  const m = payload.match(/#\/g\/([A-Za-z0-9_.-]+)/);
   if (m) payload = m[1];
   let obj;
-  try { obj = JSON.parse(fromBase64Url(payload)); } catch { throw new Error('This is not an AMS Packing grab-list link or code.'); }
+  try { obj = JSON.parse(unpackShare(payload)); } catch { throw new Error('This is not an AMS Packing grab-list link or code.'); }
   if (!obj || typeof obj !== 'object' || obj.k !== GRAB_SHARE_KIND) throw new Error('This is not an AMS Packing grab-list link or code.');
   const items = cleanGrabItems(obj.x);
   if (!items.length) throw new Error('The shared list is empty.');
@@ -2126,17 +2274,17 @@ export function encodeListShare(list) {
   if (list.defaultContainer) obj.d = cleanShareText(list.defaultContainer, 60);
   const secNames = sections.map((s) => sectionName.get(s.id)).filter(Boolean);
   if (secNames.length) obj.s = secNames;
-  return toBase64Url(JSON.stringify(obj));
+  return packShare(JSON.stringify(obj));
 }
 
 // Accepts a bare code, a whole link carrying #/l/<code>, or anything with such
 // a link pasted inside it. Throws on anything that isn't a shared template.
 export function decodeListShare(text) {
   let payload = String(text ?? '').trim();
-  const m = payload.match(/#\/l\/([A-Za-z0-9_-]+)/);
+  const m = payload.match(/#\/l\/([A-Za-z0-9_.-]+)/);
   if (m) payload = m[1];
   let obj;
-  try { obj = JSON.parse(fromBase64Url(payload)); } catch { throw new Error('This is not an AMS Packing template link or code.'); }
+  try { obj = JSON.parse(unpackShare(payload)); } catch { throw new Error('This is not an AMS Packing template link or code.'); }
   if (!obj || typeof obj !== 'object' || obj.k !== LIST_SHARE_KIND) throw new Error('This is not an AMS Packing template link or code.');
   const items = asArray(obj.x).map((o) => {
     if (!o || typeof o !== 'object') return null;

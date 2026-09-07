@@ -14,7 +14,7 @@ import {
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
   encodeGrabShare, decodeGrabShare,
-  encodeListShare, decodeListShare, listFromShare, decodeTripLink,
+  encodeListShare, decodeListShare, listFromShare, decodeTripLink, unpackShare,
   deriveWeather, weatherSuggestions, weatherGear, WEATHER_CONDITIONS,
   placesVisited, eventsNeedingCoords, coerceGeo, tripPath, mostVisited,
   MAINTENANCE_INTERVALS, MAINTENANCE_SOON_DAYS, hasCare, maintenanceStatus, normalizeMaintenance, MAX_PHOTOS,
@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v158';
+const APP_VERSION = 'v159';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2238,11 +2238,11 @@ function pasteSharedLink() {
 // when nothing does.
 function sharedRouteFor(text) {
   const bare = String(text || '').trim();
-  const grab = (bare.match(/#\/g\/([A-Za-z0-9_-]+)/) || [])[1] || bare;
+  const grab = (bare.match(/#\/g\/([A-Za-z0-9_.-]+)/) || [])[1] || bare;
   try { decodeGrabShare(grab); return `#/g/${grab}`; } catch { /* not a grab list */ }
-  const tpl = (bare.match(/#\/l\/([A-Za-z0-9_-]+)/) || [])[1] || bare;
+  const tpl = (bare.match(/#\/l\/([A-Za-z0-9_.-]+)/) || [])[1] || bare;
   try { decodeListShare(tpl); return `#/l/${tpl}`; } catch { /* not a template */ }
-  const trip = (bare.match(/#\/t\/([A-Za-z0-9_-]+)/) || [])[1] || bare;
+  const trip = (bare.match(/#\/t\/([A-Za-z0-9_.-]+)/) || [])[1] || bare;
   try { decodeTripLink(trip); return `#/t/${trip}`; } catch { /* not a trip */ }
   return '';
 }
@@ -4234,7 +4234,7 @@ function shareTrip(ev) {
     <h2>Share “${esc(ev.name)}”</h2>
     <p class="modal-sub">Send this whole trip — its full packing list travels inside. The other person imports it; nothing is uploaded anywhere.</p>
     ${qr ? `<div class="share-qr">${qr}</div><p class="muted small">Scan it with a phone camera to open the trip there.</p>`
-      : `<p class="share-qr-none">${fullLink ? 'This trip is too big for a QR code — send the link or the file.' : 'This trip is too big for a link or a QR code — send the file.'}</p>`}
+      : `<p class="share-qr-none">${fullLink ? 'A whole trip is far too much for a QR code — send the link instead, or the file.' : 'This trip is too big even for a link — send the file.'}</p>`}
     ${fullLink ? `<div class="share-link" aria-label="Share link">${esc(fullLink)}</div>` : ''}
     <div class="modal-actions">
       ${canShareFile ? `<button class="btn primary lg" data-s="sheet">${IC.share}<span>Share…</span></button>` : ''}
@@ -6935,7 +6935,7 @@ function howtoCard() {
         <p>After a trip, open <b>Trip review</b> and mark what you didn't use. The app remembers, per item, how often it was packed vs actually used. <b>Refine</b> (from the Templates tab) then suggests dropping items you keep packing but never use — you decide Keep or Drop.</p>
 
         <h3>Sharing a trip</h3>
-        <p>From a trip, tap <b>Share</b>. The whole trip — its full packing list — travels inside a <b>QR code</b>, a <b>link</b> or a <b>file</b>; nothing is uploaded. The other person scans the code or opens the link (it imports on its own), or imports the file from Settings. Every import becomes a fresh, unpacked copy. A trip carries a lot, so the QR code only appears for a small one and the link for a middling one — for a big trip the file is the way, and the dialog says which of the three is available.</p>
+        <p>From a trip, tap <b>Share</b>. The whole trip — its full packing list — travels inside a <b>link</b> or a <b>file</b>; nothing is uploaded. The other person opens the link (it imports on its own) or imports the file from Settings. Every import becomes a fresh, unpacked copy. Share codes are <b>squeezed</b> before they travel, which takes about three quarters off, so even a long trip with several activities now fits in a link you can send in a message; only the very biggest still need the file, and the dialog says which is available. A whole trip is still far too much for a QR code — those suit grab lists and small templates.</p>
 
         <h3>Spreadsheet export</h3>
         <p><b>Excel</b> exports a trip as an .xlsx (phase, container, item, qty, packed, note). Settings can export every event at once.</p>
@@ -6983,6 +6983,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v159', '2026-09-04 · 17:15 UTC', false, 'A whole trip now fits in a link',
+      '<b>Sharing a trip has quietly been a file-only affair, and this fixes it.</b><br><br>The reason was size. A trip carries its entire packing list, and a week away with a couple of activities is around 250 lines — some 50 000 characters of data, which as a plain link came to about 65 000. No messaging app carries that in one piece, so the <b>Copy link</b> button sat there greyed out and the file was the only way through.<br><br><b>Share codes are now squeezed before they travel.</b> The text inside is enormously repetitive — the same two dozen field names on every single line — so it compresses beautifully: that 65 000-character link becomes about <b>17 000</b>, roughly three quarters smaller. A week away with three activities lands near 22 000. In practice <b>every ordinary trip now fits in a link</b> you can paste into a message, and the file is left for the truly enormous ones.<br><br>The same squeeze applies to templates and grab lists, so those links got much shorter too. Anything already sent still works: an older link is recognised and opened exactly as before.<br><br>One thing that has not changed, and cannot: a QR code holds only a few hundred characters, so a whole trip will never fit in one. QR codes remain the right tool for grab lists and small templates, and the share dialog says plainly which of the ways is open to you.',
+      'The trip you just planned can go to the other phone in a message, without saving and sending a file.'),
     v('v158', '2026-09-04 · 16:30 UTC', false, 'Templates and trips travel by QR code too',
       '<b>Sharing grew up from the grab lists to the two things you actually build the app around.</b><br><br><b>A template can now be handed to another phone.</b> Open any template and tap the new <b>share arrow</b> in its title bar: up comes a <b>QR code</b> and a <b>link</b> carrying the whole recipe — the name, cover and group, its sections, and every item with the conditions, category, phase, bag, weight and flags that decide when and where it gets packed. The other phone shows what arrived and offers two honest choices: <b>add it as a new template</b> (your own are untouched), or, if you already have one by that name, <b>replace that one</b> after a confirmation. What stays behind is everything that belongs to <em>your</em> things rather than to the recipe: photos, care records and service history.<br><br><b>A trip now offers a QR code as well as a link and a file.</b> A trip carries its entire packing list, so it is usually too big for a QR code — when it fits, the code is there; when it does not, the dialog says so and points at the link or the file instead. No more guessing which of the three will work.<br><br><b>And one paste box now does all three.</b> The old “Paste a grab-list link” under <b>Settings → Shared trips &amp; grab lists</b> is now <b>“Paste a shared link or code”</b>: give it a grab list, a template or a trip and it works out which it is on its own. That matters on the iPhone, where an <b>installed</b> app keeps its own storage and a link opened in Safari lands in Safari\'s copy.',
       'Set a template up once — on the Mac, in peace — and hand it to the phone, or to whoever you pack with, in one scan.'),
@@ -9112,7 +9115,7 @@ function exportOverviewXlsx(rows, dupIds) {
 // new event, and jumps to it; shows a friendly error if the link is malformed.
 async function renderImportTrip(data) {
   try {
-    const ev = await db.importTrip(fromBase64Url(data));
+    const ev = await db.importTrip(unpackShare(data));
     location.replace(`#/event/${ev.id}`);
     return h('<section class="screen"><div class="empty"><p class="empty-t">Trip imported</p><p class="empty-s">Opening it now…</p></div></section>');
   } catch (err) {
