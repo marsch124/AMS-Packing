@@ -9,6 +9,7 @@ import {
   toBase64Url, fromBase64Url, TRIP_LINK_MAX,
   encodeGrabShare, decodeGrabShare, GRAB_SHARE_NAME_MAX, GRAB_SHARE_ITEM_MAX, GRAB_SHARE_ITEMS_MAX,
   encodeListShare, decodeListShare, listFromShare, LIST_SHARE_ITEMS_MAX,
+  lzwCompress, lzwDecompress, packShare, unpackShare, SHARE_ZIP_PREFIX, bytesToBase64Url, base64UrlToBytes,
   weatherCode, deriveWeather, weatherSuggestions, pendingWeatherItems, weatherGear, coerceEvent, WEATHER_THRESHOLDS,
   PHASE_IDS, CATEGORIES, CONTAINERS, GROUP_IDS,
   coerceItem, normalizeMaintenance, hasCare, maintenanceStatus, maintenanceList, maintenanceSummary,
@@ -602,7 +603,9 @@ test('encodeTripLink: returns null when the payload is too large for a link', ()
 // --- Sharing a grab list (QR / link / paste) ---
 test('encodeGrabShare / decodeGrabShare: round-trip of name, look and items', () => {
   const code = encodeGrabShare({ name: 'Biz trip', icon: 'briefcase', tone: 'purple', items: ['Laptop', 'Charger', 'Badge'] });
-  assert.match(code, /^[A-Za-z0-9_-]+$/, 'the code is URL-safe base64 with no padding');
+  // Since v159 a code may be squeezed, which marks it with a leading "z." —
+  // still URL-safe, still unpadded.
+  assert.match(code, /^(z\.)?[A-Za-z0-9_-]+$/, 'the code is URL-safe with no padding');
   const got = decodeGrabShare(code);
   assert.deepEqual(got, { name: 'Biz trip', icon: 'briefcase', tone: 'purple', items: ['Laptop', 'Charger', 'Badge'] });
 });
@@ -3129,4 +3132,101 @@ test('listFromShare: a partial overrides identity, for replacing a template in p
   const fresh = listFromShare(shared, { id: 'keep-me', createdAt: '2020-01-01T00:00:00.000Z' });
   assert.equal(fresh.id, 'keep-me');
   assert.equal(fresh.createdAt, '2020-01-01T00:00:00.000Z');
+});
+
+// --- Squeezing a share code (LZW) ------------------------------------------
+
+const roundTrip = (s) => unpackShare(packShare(s));
+
+test('lzwCompress/lzwDecompress: bytes survive the round trip', () => {
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  for (const s of ['', 'a', 'ab', 'aaaaaaaaaaaaaaaaaaaa', 'ababababababab', '{"a":1,"b":2}', 'ä ö ü € 😀']) {
+    assert.equal(dec.decode(lzwDecompress(lzwCompress(enc.encode(s)))), s, `round trip of ${JSON.stringify(s)}`);
+  }
+});
+
+test('lzwCompress: survives inputs that cross the code-width boundaries', () => {
+  // The dictionary widens from 9 to 16 bits as it fills; the decoder has to
+  // widen in lock-step, one entry early. Long varied input crosses every step.
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789 {}[]":,';
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (const len of [300, 1000, 5000, 20000, 60000]) {
+    let s = '';
+    for (let i = 0; i < len; i++) s += alphabet[Math.floor(rnd() * alphabet.length)];
+    assert.equal(dec.decode(lzwDecompress(lzwCompress(enc.encode(s)))), s, `round trip at ${len} characters`);
+  }
+});
+
+test('packShare/unpackShare: repetitive JSON gets much shorter, and comes back whole', () => {
+  const row = '{"id":"x","name":"Thing","category":"Clothing","phase":"week","packed":false},';
+  const json = `[${row.repeat(400)}]`;
+  const code = packShare(json);
+  assert.ok(code.startsWith(SHARE_ZIP_PREFIX), 'a repetitive payload is worth squeezing');
+  assert.ok(code.length < json.length / 4, `squeezed to ${code.length} from ${json.length}`);
+  assert.equal(unpackShare(code), json);
+});
+
+test('packShare: a tiny payload is left as plain base64', () => {
+  const code = packShare('{"k":"grab"}');
+  assert.ok(!code.startsWith(SHARE_ZIP_PREFIX), 'squeezing a short code would only make it longer');
+  assert.equal(unpackShare(code), '{"k":"grab"}');
+});
+
+test('unpackShare: still reads a plain code sent before squeezing existed', () => {
+  const json = '{"app":"ams-packing-list","kind":"trip"}';
+  assert.equal(unpackShare(toBase64Url(json)), json, 'old links keep working');
+});
+
+test('unpackShare: a full stop at the end of a sentence is not part of the code', () => {
+  const json = '{"a":"' + 'long and repetitive '.repeat(60) + '"}';
+  const code = packShare(json);
+  assert.ok(code.startsWith(SHARE_ZIP_PREFIX));
+  assert.equal(unpackShare(code + '.'), json);
+});
+
+test('packShare/unpackShare: unicode survives', () => {
+  const s = JSON.stringify({ name: 'Terrängskor ä ö ü', note: 'åka skidor 😀 — 100 %' });
+  assert.equal(roundTrip(s), s);
+});
+
+test('base64UrlToBytes/bytesToBase64Url: raw bytes survive, URL-safe and unpadded', () => {
+  const bytes = Uint8Array.from({ length: 300 }, (_, i) => (i * 7) % 256);
+  const b64 = bytesToBase64Url(bytes);
+  assert.match(b64, /^[A-Za-z0-9_-]+$/);
+  assert.deepEqual(Array.from(base64UrlToBytes(b64)), Array.from(bytes));
+});
+
+test('encodeTripLink: a big trip now fits a link, and decodes back to the same trip', () => {
+  const ev = newEvent({ name: 'Long haul', startDate: '2026-10-01', endDate: '2026-10-14' });
+  // 300 entries, the shape a real week-away list has
+  ev.entries = Array.from({ length: 300 }, (_, i) => ({
+    id: `e${i}`, name: `Item ${i}`, category: 'Clothing', phase: 'week',
+    container: 'Carry-on / hand luggage', qty: '1', packed: false, note: '', section: '', kit: '',
+  }));
+  const frag = encodeTripLink(ev);
+  assert.ok(frag, 'a 300-line trip travels as a link');
+  assert.ok(frag.length < TRIP_LINK_MAX, `link is ${frag.length} characters`);
+  assert.ok(frag.startsWith('#/t/'));
+  const back = decodeTripLink(frag.slice('#/t/'.length));
+  assert.equal(back.name, 'Long haul');
+  assert.equal(back.entries.length, 300);
+  assert.equal(back.entries[42].name, 'Item 42');
+});
+
+test('encodeListShare: a big template travels far smaller than it used to', () => {
+  const list = newList({
+    name: 'Everything', items: Array.from({ length: 150 }, (_, i) => newItem({
+      name: `Thing ${i}`, category: 'Clothing', phase: 'week', seasons: ['summer'], contexts: ['outdoor'],
+    })),
+  });
+  const code = encodeListShare(list);
+  assert.ok(code.startsWith(SHARE_ZIP_PREFIX), 'a 150-item template is worth squeezing');
+  const back = decodeListShare(code);
+  assert.equal(back.items.length, 150);
+  assert.equal(back.items[99].name, 'Thing 99');
+  assert.deepEqual(back.items[0].seasons, ['summer']);
 });
