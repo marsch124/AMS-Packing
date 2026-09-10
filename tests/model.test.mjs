@@ -4,7 +4,8 @@ import {
   newItem, newList, newEvent, coerceList, itemMatchesEvent, listsForEvent, buildTotalEntries, regenerateEntries,
   entriesByPhase, groupByContainer, groupByCategory, groupBy, progress, packSteps, totalListRows,
   applyReview, pruneSuggestions, effectiveQty, bagLoads, packingFlags,
-  daysUntil, countdownLabel, tripNudge, sortEventsForList, nightsBetween, endFromNights,
+  daysUntil, countdownLabel, tripNudge, tripsAwaitingReview, tripEndDate, REVIEW_WINDOW_DAYS,
+  sortEventsForList, nightsBetween, endFromNights,
   buildTripBundle, parseTripBundle, encodeTripLink, decodeTripLink,
   toBase64Url, fromBase64Url, TRIP_LINK_MAX,
   encodeGrabShare, decodeGrabShare, GRAB_SHARE_NAME_MAX, GRAB_SHARE_ITEM_MAX, GRAB_SHARE_ITEMS_MAX,
@@ -36,6 +37,7 @@ import {
   PHASES, DEFAULT_PHASES, setPhases, coercePhase, newPhase, phasesCustomised,
   phaseOrFallback, phaseLeadDays, phaseEmoji, defaultPhaseId, phaseOrder,
   SHARED_KINDS, DEFAULT_PEOPLE, DEFAULT_STORAGE_LOCATIONS, sharedRowId, coerceSharedRow, sharedRowsOfKind,
+  grabToRows, grabFromRows, expiringOnTrip,
   conditionsToRows, conditionsFromRows, peopleToRows, peopleFromRows,
   namesToRows, namesFromRows, presetsToRows, presetsFromRows,
   sharedRowsFrom, defaultListFor, isFactoryList,
@@ -2749,8 +2751,11 @@ test('isFactoryList: the defaults are recognised so they are never written as da
 
 test('sharedRowsFrom: every kind builds rows, and an unknown kind builds none', () => {
   for (const kind of SHARED_KINDS) {
-    const rows = sharedRowsFrom(kind, defaultListFor(kind).length ? defaultListFor(kind)
-      : (kind === 'presets' ? [{ name: 'P', config: {} }] : ['Someone']));
+    // Each kind has its own row shape; a bare name only suits the name-keyed ones.
+    const sample = kind === 'presets' ? [{ name: 'P', config: {} }]
+      : kind === 'grab' ? [{ id: 'bike', items: ['Helmet'], label: 'Bike', icon: 'bike', tone: 'yellow' }]
+      : ['Someone'];
+    const rows = sharedRowsFrom(kind, defaultListFor(kind).length ? defaultListFor(kind) : sample);
     assert.ok(rows.length, kind);
     assert.ok(rows.every((r) => r.kind === kind && r.id.startsWith(`${kind}:`)), kind);
   }
@@ -3229,4 +3234,224 @@ test('encodeListShare: a big template travels far smaller than it used to', () =
   assert.equal(back.items.length, 150);
   assert.equal(back.items[99].name, 'Thing 99');
   assert.deepEqual(back.items[0].seasons, ['summer']);
+});
+
+
+// --- v161: the trip review finally gets asked for -------------------------
+// These pin the two halves of the Home fix: a finished trip must NOT be able to
+// claim the "pack now" slot, and it MUST be able to claim the review slot.
+
+const reviewable = (o = {}) => newEvent({
+  name: 'Norway', startDate: '2026-08-30', endDate: '2026-09-05',
+  entries: [newItem({ name: 'Boots' })], ...o,
+});
+
+test('tripEndDate: the return date, or the start when there is no return', () => {
+  assert.equal(tripEndDate({ startDate: '2026-09-01', endDate: '2026-09-08' }), '2026-09-08');
+  assert.equal(tripEndDate({ startDate: '2026-09-01', endDate: '' }), '2026-09-01');
+  assert.equal(tripEndDate({ startDate: '', endDate: '' }), '');
+  assert.equal(tripEndDate(null), '');
+});
+
+test('tripsAwaitingReview: a finished, unreviewed trip is offered', () => {
+  const rows = tripsAwaitingReview([reviewable()], '2026-09-10');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].endedDaysAgo, 5);
+  assert.equal(rows[0].event.name, 'Norway');
+});
+
+test('tripsAwaitingReview: not while it is still running, and not on the day it ends', () => {
+  assert.equal(tripsAwaitingReview([reviewable()], '2026-09-02').length, 0, 'mid-trip');
+  assert.equal(tripsAwaitingReview([reviewable()], '2026-09-05').length, 0, 'still driving home');
+  assert.equal(tripsAwaitingReview([reviewable()], '2026-09-06').length, 1, 'the morning after');
+});
+
+test('tripsAwaitingReview: the offer expires, rather than nagging about last year', () => {
+  const day = (n) => tripsAwaitingReview([reviewable()], n).length;
+  assert.equal(day('2026-10-05'), 1, 'exactly 30 days is still inside the window');
+  assert.equal(day('2026-10-06'), 0, 'a day later it has expired');
+  assert.equal(REVIEW_WINDOW_DAYS, 30);
+});
+
+test('tripsAwaitingReview: skips trips already reviewed, undated, or with no gear', () => {
+  assert.equal(tripsAwaitingReview([reviewable({ reviewedAt: '2026-09-06T10:00:00Z' })], '2026-09-10').length, 0);
+  assert.equal(tripsAwaitingReview([reviewable({ status: 'done' })], '2026-09-10').length, 0);
+  assert.equal(tripsAwaitingReview([reviewable({ startDate: '', endDate: '' })], '2026-09-10').length, 0);
+  assert.equal(tripsAwaitingReview([reviewable({ entries: [] })], '2026-09-10').length, 0);
+  const remindersOnly = reviewable({ entries: [newItem({ name: 'Lock the door', itemType: 'reminder' })] });
+  assert.equal(tripsAwaitingReview([remindersOnly], '2026-09-10').length, 0, 'a reminder is not gear to review');
+});
+
+test('tripsAwaitingReview: most recently finished first', () => {
+  const rows = tripsAwaitingReview([
+    reviewable({ id: 'a', name: 'Older', startDate: '2026-08-20', endDate: '2026-08-25' }),
+    reviewable({ id: 'b', name: 'Newer', startDate: '2026-09-01', endDate: '2026-09-08' }),
+  ], '2026-09-10');
+  assert.deepEqual(rows.map((r) => r.event.name), ['Newer', 'Older']);
+});
+
+test('tripNudge: a finished trip reports a NEGATIVE days-to-go', () => {
+  // The premise of the Home fix. Home sorts its pack nudges ascending, so before
+  // v161 this negative number sorted a trip that was already over ahead of every
+  // upcoming one and kept the only slot. Home now filters on daysToGo >= 0.
+  const ev = newEvent({ startDate: '2026-08-01', entries: [newItem({ name: 'Boots', phase: 'week' })] });
+  const n = tripNudge(ev, '2026-09-10');
+  assert.ok(n.daysToGo < 0, 'a past trip is negative');
+  assert.ok(n.dueCount > 0, 'and it still reports unpacked items — which is why it used to win');
+  assert.equal(countdownLabel(n.daysToGo), '40 days ago');
+});
+
+// --- v162: the review stops counting things that never went in the bag ------
+
+test('applyReview: an unticked item on a ticked trip is skipped, not packed', () => {
+  const list = newList({ name: 'Ski', items: [newItem({ name: 'Skis' }), newItem({ name: 'Snow chains' })] });
+  const ev = newEvent({ activities: [list.id] });
+  ev.entries = buildTotalEntries(ev, [list]);
+  const skis = ev.entries.find((e) => e.name === 'Skis');
+  const chains = ev.entries.find((e) => e.name === 'Snow chains');
+  skis.checked = true;  skis.used = true;      // went in the bag, and got used
+  chains.checked = false; chains.used = true;  // looked at, left behind
+  applyReview(ev, [list]);
+  const s = list.items.find((i) => i.name === 'Skis').stats;
+  const c = list.items.find((i) => i.name === 'Snow chains').stats;
+  assert.deepEqual([s.packed, s.used, s.skipped], [1, 1, 0]);
+  assert.deepEqual([c.packed, c.used, c.skipped], [0, 0, 1],
+    'before v162 the chains scored packed:1 used:1 — the exact opposite of the truth');
+});
+
+test('applyReview: a trip with no ticks at all still counts, as it always did', () => {
+  // He packed without ticking. There is no evidence to read, and learning nothing
+  // would be worse than trusting the list — so the old behaviour stands.
+  const list = newList({ name: 'Beach', items: [newItem({ name: 'Towel' }), newItem({ name: 'Snorkel' })] });
+  const ev = newEvent({ activities: [list.id] });
+  ev.entries = buildTotalEntries(ev, [list]);
+  ev.entries.forEach((e) => { e.checked = false; e.used = true; });
+  applyReview(ev, [list]);
+  for (const it of list.items) {
+    assert.deepEqual([it.stats.packed, it.stats.used, it.stats.skipped], [1, 1, 0]);
+  }
+});
+
+test('pruneSuggestions: one quiet trip is not evidence — the default is two', () => {
+  const list = newList({ name: 'Hike', items: [newItem({ name: 'First-aid kit' })] });
+  const once = () => {
+    const ev = newEvent({ activities: [list.id] });
+    ev.entries = buildTotalEntries(ev, [list]);
+    ev.entries[0].checked = true;
+    ev.entries[0].used = false;
+    applyReview(ev, [list]);
+  };
+  once();
+  assert.equal(pruneSuggestions([list]).length, 0, 'one trip must not offer a Drop on the first-aid kit');
+  once();
+  const s = pruneSuggestions([list]);
+  assert.equal(s.length, 1);
+  assert.equal(s[0].reason, 'never-used');
+  assert.equal(s[0].times, 2);
+});
+
+test('pruneSuggestions: never-packed is its own signal, and says so', () => {
+  const list = newList({ name: 'RV', items: [newItem({ name: 'Awning poles' })] });
+  const skip = () => {
+    const ev = newEvent({ activities: [list.id] });
+    ev.entries = buildTotalEntries(ev, [list]);
+    ev.entries[0].checked = false;   // never ticked...
+    ev.entries[0].used = true;
+    const other = newItem({ name: 'Decoy' });
+    ev.entries.push({ ...other, checked: true, used: true, sourceListId: '', sourceItemId: '' }); // ...but the trip WAS ticked
+    applyReview(ev, [list]);
+  };
+  skip(); 
+  assert.equal(pruneSuggestions([list]).length, 0, 'still only one trip');
+  skip();
+  const s = pruneSuggestions([list]);
+  assert.equal(s.length, 1);
+  assert.equal(s[0].reason, 'never-packed');
+  assert.equal(s[0].times, 2);
+  assert.equal(s[0].stats.packed, 0);
+});
+
+test('pruneSuggestions: "Keep" still settles it for good', () => {
+  const list = newList({ name: 'Hike', items: [newItem({ name: 'Rope', keep: true, stats: { packed: 9, used: 0 } })] });
+  assert.equal(pruneSuggestions([list]).length, 0);
+});
+
+
+// --- v163: the grab lists join the account, as a sixth kind of shared row ---
+
+test('grabToRows/grabFromRows: a list survives the round trip, hyphen and all', () => {
+  const back = grabFromRows(grabToRows([
+    { id: 'run-out', items: ['Cap', 'Sunglasses', 'Gels'], label: 'Trail', icon: 'mountain', tone: 'green' },
+    { id: 'bike', items: ['Helmet'] },
+  ]));
+  assert.deepEqual(back[0], { id: 'run-out', items: ['Cap', 'Sunglasses', 'Gels'], label: 'Trail', icon: 'mountain', tone: 'green' });
+  assert.equal(back[1].id, 'bike');
+  assert.deepEqual(back[1].items, ['Helmet']);
+});
+
+test('grabToRows: the row id is stable, so two devices merge instead of doubling', () => {
+  // The 880-item lesson. Both devices editing the Bike button must land on one row.
+  const a = grabToRows([{ id: 'bike', items: ['Helmet'] }])[0];
+  const b = grabToRows([{ id: 'bike', items: ['Bidon', 'Gilet'] }])[0];
+  assert.equal(a.id, b.id);
+  assert.equal(a.id, 'grab:bike');
+});
+
+test('grabToRows: the code id survives normalising, verbatim, in data.gid', () => {
+  const row = grabToRows([{ id: 'swim-out', items: ['Goggles'] }])[0];
+  assert.equal(row.data.gid, 'swim-out', 'the key is normalised; gid must not be');
+  assert.equal(grabFromRows([row])[0].id, 'swim-out');
+});
+
+test('grabToRows: nothing is invented — junk and duplicates build no rows', () => {
+  assert.deepEqual(grabToRows([]), []);
+  assert.deepEqual(grabToRows(['Someone']), [], 'a bare string is not a grab list');
+  assert.deepEqual(grabToRows([{ items: ['x'] }]), [], 'no id, no row');
+  assert.equal(grabToRows([{ id: 'bike', items: ['a'] }, { id: 'bike', items: ['b'] }]).length, 1);
+  assert.deepEqual(grabToRows([{ id: 'bike', items: ['  ', '', 'Helmet '] }])[0].data.items, ['Helmet']);
+});
+
+test('grab is a kind of the EXISTING shared table, not a new table', () => {
+  // Why this assertion earns its place: a synced table of its own would have walked
+  // back into the v120 fault, where a device already syncing records a new table's
+  // empty first download as "done" and only ever receives changes afterwards.
+  assert.ok(SHARED_KINDS.includes('grab'));
+  assert.equal(SHARED_KINDS.length, 6);
+});
+
+// --- v163: gear that runs out before you get home --------------------------
+
+test('expiringOnTrip: judged against the TRIP’s end, not today plus a month', () => {
+  const entries = [
+    { id: 'a', name: 'Sunscreen', expiry: '2026-10-15' },
+    { id: 'b', name: 'Gas canister', expiry: '2026-08-01' },
+    { id: 'c', name: 'Boots', expiry: '' },
+    { id: 'd', name: 'Paracetamol', expiry: '2027-05-01' },
+  ];
+  const r = expiringOnTrip(entries, '2026-10-20', '2026-09-10');
+  assert.deepEqual(r.map((x) => x.entry.name), ['Gas canister', 'Sunscreen'], 'soonest first');
+  assert.equal(r[0].alreadyOut, true);
+  assert.equal(r[1].alreadyOut, false);
+  // 35 days out is beyond shoppingReason's fixed 30-day window, so only the trip
+  // itself could ever have caught this one.
+  assert.equal(r[1].daysLeft, 35);
+});
+
+test('expiringOnTrip: nothing without an end date, and nothing that outlasts the trip', () => {
+  const entries = [{ id: 'a', name: 'Sunscreen', expiry: '2026-10-15' }];
+  assert.deepEqual(expiringOnTrip(entries, '', '2026-09-10'), []);
+  assert.deepEqual(expiringOnTrip(entries, '2026-09-20', '2026-09-10'), [], 'still good when you get home');
+  assert.equal(expiringOnTrip(entries, '2026-10-15', '2026-09-10').length, 1, 'the day itself counts');
+});
+
+test('expiringOnTrip: one line per thing, and reminders are not gear', () => {
+  const entries = [
+    { id: '1', name: 'Sunscreen', expiry: '2026-10-01', sourceItemId: 'item-x' },
+    { id: '2', name: 'Sunscreen', expiry: '2026-10-01', sourceItemId: 'item-x' }, // same item, two templates
+    { id: '3', name: 'Renew passport', expiry: '2026-10-01', itemType: 'reminder' },
+    { id: '4', name: 'Old stove', expiry: '2026-10-01', retired: true },
+  ];
+  const r = expiringOnTrip(entries, '2026-10-20', '2026-09-10');
+  assert.equal(r.length, 1);
+  assert.equal(r[0].entry.sourceItemId, 'item-x');
 });

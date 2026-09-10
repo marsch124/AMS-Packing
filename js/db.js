@@ -1276,11 +1276,17 @@ async function applyBackup({ lists = [], events = [], actions = [], kits = [], p
   return { lists: L.length, events: E.length, actions: A.length, kits: K.length, photos: P.length };
 }
 
-export async function importJSON(text, { merge = false } = {}) {
+export async function importJSON(text, { merge = false, prefs = null } = {}) {
   const info = inspectBackup(text);
   // A REPLACE overwrites everything — capture the current state as a safety
   // snapshot FIRST, so an unwanted import is always undoable.
-  if (!merge) await saveSnapshot({ reason: 'before-restore', force: true }).catch(() => {});
+  //
+  // 🚨 `prefs` matters here (v161). The safety snapshot used to be taken WITHOUT
+  // them, so the one copy meant to make a restore undoable was the one copy that
+  // could not put your settings back — and since v161 the grab lists live in prefs,
+  // that gap would have quietly eaten them on any undo. The caller hands us the
+  // current prefs; a snapshot of "everything as it was" has to mean everything.
+  if (!merge) await saveSnapshot({ reason: 'before-restore', prefs, force: true }).catch(() => {});
   const res = await applyBackup(info.data, { merge });
   return { ...res, prefs: info.data.prefs };
 }
@@ -1369,10 +1375,11 @@ export function deleteSnapshot(id) { return delOne(SNAPSHOTS, id); }
 
 // Restore a snapshot, capturing the current state as a fresh safety snapshot first
 // (so a restore is itself undoable). Returns its counts + saved prefs.
-export async function restoreSnapshot(id) {
+export async function restoreSnapshot(id, prefs = null) {
   const snap = await getOneRaw(SNAPSHOTS, id);
   if (!snap || !snap.data) throw new Error('That backup is no longer available.');
-  await saveSnapshot({ reason: 'before-restore', force: true }).catch(() => {});
+  // Same reason as importJSON: the undo copy must carry the prefs too.
+  await saveSnapshot({ reason: 'before-restore', prefs, force: true }).catch(() => {});
   await applyBackup(snap.data, { merge: false });
   return { counts: snap.counts, prefs: snap.data.prefs || null };
 }

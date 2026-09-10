@@ -710,14 +710,17 @@ em {
    button drops to its own row whenever the card gets too narrow to hold both.
    Top-aligned, because the message often runs to two or three lines. */
 .nudge.backup,
-.nudge.sync {
+.nudge.sync,
+.nudge.review {
   flex-wrap: wrap;
   align-items: flex-start;
 }
 .nudge.backup .nudge-ic,
-.nudge.sync .nudge-ic { margin-top: 1px; }
+.nudge.sync .nudge-ic,
+.nudge.review .nudge-ic { margin-top: 1px; }
 .nudge.backup .nudge-body,
-.nudge.sync .nudge-body { flex: 1 1 15rem; }
+.nudge.sync .nudge-body,
+.nudge.review .nudge-body { flex: 1 1 15rem; }
 .nudge-acts {
   flex: 0 0 auto;
   display: flex;
@@ -737,6 +740,42 @@ em {
   color: var(--danger);
 }
 .nudge-save[disabled] { opacity: .55; }
+/* (v163) "Won't last the trip" — gear whose replace-by date falls before you get
+   home. Amber, matching the shopping/backup family it belongs to, and never red:
+   this is something to decide about before you leave, not a fault. */
+.expire-band {
+  background: color-mix(in srgb, var(--warn) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--warn) 38%, var(--line));
+}
+.expire-band h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--warn);
+}
+.expire-list {
+  margin: 8px 0 10px;
+  padding-left: 20px;
+  display: grid;
+  gap: 4px;
+}
+.expire-band .btn { white-space: nowrap; }
+
+/* Trip review — the one nudge that is good news: the trip happened, and the app
+   is offering to learn from it. Green on purpose, and green is free here (the
+   trip nudge is brand, backup and shopping are amber, to-dos are red), so the
+   colour alone says which of the five this is with the glasses off. */
+.nudge.review {
+  background: color-mix(in srgb, var(--ok) 11%, var(--card));
+  border-color: color-mix(in srgb, var(--ok) 38%, var(--line));
+}
+.nudge.review .nudge-ic { color: var(--ok); }
+.nudge.review .btn {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+  color: var(--ok);
+  white-space: nowrap;
+}
+
 /* To-do reminder — a red tint echoing the red Actions tab it links to. */
 .nudge.todo {
   background: color-mix(in srgb, var(--danger) 9%, var(--card));
@@ -2468,6 +2507,104 @@ a.rd-stat.rd-link::after {
 .rev-list {
   display: grid;
   gap: 7px;
+}
+
+/* --- v162: the review stops being a 250-line scroll ---------------------- */
+
+/* "Anything you wished you'd had?" — the review's one ADDING channel. */
+.rev-miss-add {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+.rev-miss-in {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.rev-miss-add .btn { flex: none; white-space: nowrap; }
+.rev-miss-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+.rev-miss-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--ok) 8%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--ok) 30%, var(--line));
+  border-radius: 10px;
+  padding: 7px 8px 7px 12px;
+}
+/* The name must be free to shrink or the select shoves it off a 375px screen —
+   the same min-width:auto trap that cost v112 its Packing Mode pen. */
+.rev-miss-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rev-miss-where {
+  flex: 0 1 10rem;
+  min-width: 0;
+}
+
+/* Find a row in a long trip. */
+.rev-find { margin: 0 0 10px; }
+.rev-find input { width: 100%; }
+
+/* One fold per category, its own count in the summary so you can see where the
+   "didn't use" ones are without opening anything. */
+.rev-cat {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.rev-cat > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+.rev-cat > summary::-webkit-details-marker { display: none; }
+.rev-cat > summary::before {
+  content: '\25B8';
+  color: var(--muted);
+  font-size: .8rem;
+  transition: transform .15s ease;
+}
+.rev-cat[open] > summary::before { transform: rotate(90deg); }
+.rev-cat-h {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+}
+.rev-cat-sum {
+  flex: none;
+  font-size: .8rem;
+  color: color-mix(in srgb, var(--muted) 45%, var(--ink));
+}
+/* A category holding something you didn't use says so in colour, so you can find
+   your own marks again after scrolling away. */
+.rev-cat-sum.has-unused {
+  color: var(--warn);
+  font-weight: 700;
+}
+.rev-cat-note {
+  margin: 0;
+  padding: 0 14px 8px;
+  font-size: .84rem;
+}
+.rev-cat-body {
+  display: grid;
+  gap: 7px;
+  padding: 0 10px 10px;
 }
 
 .rev-item {

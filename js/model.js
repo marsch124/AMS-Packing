@@ -579,11 +579,21 @@ export function normalizeMaintenance(m) {
   const empty = !notes && !link && !intervalDays && !lastDone && !log.length;
   return empty ? null : { notes, link, intervalDays, lastDone, log };
 }
-// Usage learning: how often a building-block item was packed vs actually used.
+// Usage learning: how often a building-block item was packed vs actually used —
+// and, since v162, how often it was on the list and never packed at all.
+//
+// `skipped` is its own count on purpose. Standing on a list you never pack from
+// is a different fact about an item than being packed and not used, and it is
+// arguably the stronger hint that it does not belong there — so it is counted
+// separately rather than folded into `unused`, and Refine says which of the two
+// it is looking at.
 function normalizeStats(s) {
   const n = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
   s = s && typeof s === 'object' ? s : {};
-  return { packed: n(s.packed), used: n(s.used), unused: n(s.unused), lastReviewed: typeof s.lastReviewed === 'string' ? s.lastReviewed : '' };
+  return {
+    packed: n(s.packed), used: n(s.used), unused: n(s.unused), skipped: n(s.skipped),
+    lastReviewed: typeof s.lastReviewed === 'string' ? s.lastReviewed : '',
+  };
 }
 // A template's named, ordered SECTIONS — logical groupings the user defines per
 // template (e.g. a Diving list's "Lights", "Rig", "Regulators"). Each item's
@@ -800,6 +810,42 @@ export function shoppingReason(item, todayISO) {
   if (item.consumable) return 'Restock';
   return '';
 }
+// Gear on THIS trip whose replace-by date falls before you get home.
+//
+// 🚨 WHY THIS IS SEPARATE FROM shoppingReason. That one asks "should I buy this
+// soon?" and answers against TODAY plus a fixed 30-day window — which is the wrong
+// question the moment a trip has dates on it. Sunscreen expiring in 60 days raises
+// nothing today, and then expires quietly halfway through a trip you leave for in
+// seven weeks. And a three-week trip starting in 25 days takes gear "expiring soon"
+// with it and says nothing about the fortnight it is out of date.
+//
+// The trip knows when it ends. That is the date its own gear should be judged
+// against, so this asks the only question that matters when you are packing:
+// will this still be good when I need it?
+//
+// `alreadyOut` separates the two cases, because they read differently and want
+// different actions: something already past its date is a shopping trip before you
+// leave; something that expires DURING the trip is a decision about whether to take
+// it at all.
+export function expiringOnTrip(entries, endDate, todayISO) {
+  const end = typeof endDate === 'string' ? endDate.slice(0, 10) : '';
+  if (!end) return [];
+  const today = (todayISO || new Date().toISOString()).slice(0, 10);
+  const out = [];
+  const seen = new Set();
+  for (const e of asArray(entries)) {
+    if (!e || e.itemType === 'reminder' || e.retired) continue;
+    const exp = isYMD(e.expiry) ? e.expiry : '';
+    if (!exp || exp > end) continue;                 // still good when you get home
+    const key = e.sourceItemId || e.id;
+    if (seen.has(key)) continue;                     // one line per thing, not per template
+    seen.add(key);
+    out.push({ entry: e, expiry: exp, alreadyOut: exp < today, daysLeft: daysUntil(exp, today) });
+  }
+  out.sort((a, b) => a.expiry.localeCompare(b.expiry));
+  return out;
+}
+
 // Sort rank so the buy-list shows the most urgent reasons first.
 const SHOP_REASON_RANK = { 'Needs replacing': 0, Expired: 1, 'Replace soon': 2, Restock: 3 };
 
@@ -949,7 +995,14 @@ export function groupByPacker(entries, order = []) {
 // seeded factory phases into shared data using stable ids and they landed exactly
 // on top of Martin's customised rows and replaced them — stable ids prevent
 // duplication precisely BY overwriting. Same mechanism, so: never seed.
-export const SHARED_KINDS = Object.freeze(['conditions', 'presets', 'people', 'owners', 'places']);
+// 🚨 'grab' (v163) is a SIXTH KIND IN THIS EXISTING TABLE, and that is the whole
+// point of doing it this way. Giving the workout grab lists a synced table of their
+// own would have walked straight back into the v120 fault: a device already syncing
+// does a new table's one first full download whenever it next connects, and if the
+// table is empty at that moment it downloads nothing and records the table as done
+// for ever. New ROWS in a table that is already syncing are ordinary changes — and
+// ordinary changes are the one thing that has demonstrably worked all along (v124).
+export const SHARED_KINDS = Object.freeze(['conditions', 'presets', 'people', 'owners', 'places', 'grab']);
 
 // The starter roster. In the CODE only — an account that has never edited its Packers
 // stores no rows at all, and both devices show these two straight from here.
@@ -1092,11 +1145,56 @@ export function presetsFromRows(rows) {
     .map((r) => ({ id: r.id, name: r.name, createdAt: r.data.createdAt || '', config: r.data.config }));
 }
 
-// One list → its rows, whichever of the five it is.
+// --- workout grab lists (v163) ---
+// One row per Home button. The key is the button's code id ('bike', 'run-out'),
+// which is stable and shipped, so two devices editing the same button land on the
+// same row and merge instead of doubling — and `data.gid` carries it VERBATIM,
+// exactly as a condition carries its `cid`, because `sharedRowId` normalises the
+// key and 'run-out' must survive the round trip character for character.
+//
+// A button you have never edited has NO ROW. That is deliberate and it is the
+// v118 rule: the factory six live in the code, and an account with no grab rows
+// means "use the defaults" rather than "the lists are empty".
+export function grabToRows(list) {
+  const seen = new Set();
+  const out = [];
+  for (const g of asArray(list)) {
+    const gid = String((g && g.id) || '').trim();
+    if (!gid || seen.has(gid)) continue;
+    seen.add(gid);
+    const items = asArray(g.items).filter((x) => typeof x === 'string' && x.trim()).map((x) => x.trim().slice(0, 80));
+    const label = typeof g.label === 'string' ? g.label.trim().slice(0, 24) : '';
+    out.push(coerceSharedRow({
+      kind: 'grab', key: gid, name: label || gid, order: out.length,
+      data: {
+        gid,
+        items,
+        label,
+        icon: typeof g.icon === 'string' ? g.icon : '',
+        tone: typeof g.tone === 'string' ? g.tone : '',
+      },
+    }, out.length));
+  }
+  return out;
+}
+export function grabFromRows(rows) {
+  return sharedRowsOfKind(rows, 'grab')
+    .filter((r) => r.data && r.data.gid)
+    .map((r) => ({
+      id: r.data.gid,
+      items: asArray(r.data.items).filter((x) => typeof x === 'string' && x.trim()),
+      label: typeof r.data.label === 'string' ? r.data.label : '',
+      icon: typeof r.data.icon === 'string' ? r.data.icon : '',
+      tone: typeof r.data.tone === 'string' ? r.data.tone : '',
+    }));
+}
+
+// One list → its rows, whichever of the six it is.
 export function sharedRowsFrom(kind, list) {
   if (kind === 'conditions') return conditionsToRows(list);
   if (kind === 'people') return peopleToRows(list);
   if (kind === 'presets') return presetsToRows(list);
+  if (kind === 'grab') return grabToRows(list);
   if (kind === 'owners' || kind === 'places') return namesToRows(kind, list);
   return [];
 }
@@ -1670,15 +1768,38 @@ export function applyReview(event, lists, whenISO) {
   const now = whenISO || new Date().toISOString();
   const byId = new Map(asArray(lists).map((l) => [l.id, l]));
   const changed = new Set();
-  for (const e of asArray(event && event.entries)) {
+  const entries = asArray(event && event.entries);
+
+  // 🚨 v162: only what actually went in the bag counts as packed.
+  //
+  // Before this, EVERY line on the trip scored +1 packed the moment you saved a
+  // review — including the things you looked at and deliberately left behind. So
+  // gear you quietly skip on every single trip was recorded as "packed, and used"
+  // every single trip, and the learning was being fed the opposite of the truth.
+  // A tick in Packing Mode (or on the list) is the app's record of "this is in the
+  // bag", so that is what we count.
+  //
+  // The fallback matters as much as the rule. If you packed WITHOUT ticking — no
+  // tick anywhere on the trip — there is no evidence to read, and refusing to
+  // learn anything would be worse than trusting the list. In that case the list
+  // itself is the evidence and every line counts, exactly as it did before v162.
+  const anyTicked = entries.some((e) => e && e.checked);
+
+  for (const e of entries) {
     if (typeof e.used !== 'boolean' || !e.sourceListId || !e.sourceItemId) continue;
     const list = byId.get(e.sourceListId);
     if (!list) continue;
     const item = asArray(list.items).find((x) => x.id === e.sourceItemId);
     if (!item) continue;
     item.stats = normalizeStats(item.stats);
-    item.stats.packed += 1;
-    if (e.used) item.stats.used += 1; else item.stats.unused += 1;
+    if (anyTicked && !e.checked) {
+      // On the list, never packed. A fact worth keeping — it is the clearest
+      // sign an item has outstayed its welcome on that template.
+      item.stats.skipped += 1;
+    } else {
+      item.stats.packed += 1;
+      if (e.used) item.stats.used += 1; else item.stats.unused += 1;
+    }
     item.stats.lastReviewed = now;
     changed.add(list.id);
   }
@@ -1686,15 +1807,33 @@ export function applyReview(event, lists, whenISO) {
 }
 
 // Items worth pruning: packed on >= minTrips reviewed trips but never used.
+// Things a template is probably carrying for nothing. Two different signals, kept
+// apart because they mean different things and read differently on screen:
+//
+//   'never-used'   — you packed it this many times and never once used it.
+//   'never-packed' — it sat on the list this many times and never went in the bag.
+//
+// 🚨 `minTrips` defaults to 2 and v162 stopped the Refine screen overriding it
+// to 1. One trip is not evidence, and the class of gear you most often fail to
+// use is precisely the class you carry BECAUSE you hope not to need it — the
+// first-aid kit, the tow rope, the spare warm layer. Offering a one-tap Drop on
+// the strength of a single quiet trip is the same trap this app removed twice
+// before (v133's "Reset to the standard seven", v141's "Standard items").
 export function pruneSuggestions(lists, { minTrips = 2 } = {}) {
   const out = [];
   for (const l of asArray(lists)) {
     for (const it of asArray(l.items)) {
       const s = normalizeStats(it.stats);
-      if (s.packed >= minTrips && s.used === 0 && !it.keep) out.push({ listId: l.id, listName: l.name, item: it, stats: s });
+      if (it.keep) continue;                       // you have already said "keep it"
+      let reason = '';
+      let times = 0;
+      if (s.packed >= minTrips && s.used === 0) { reason = 'never-used'; times = s.packed; }
+      else if (s.skipped >= minTrips && s.packed === 0) { reason = 'never-packed'; times = s.skipped; }
+      if (!reason) continue;
+      out.push({ listId: l.id, listName: l.name, item: it, stats: s, reason, times });
     }
   }
-  out.sort((a, b) => b.stats.packed - a.stats.packed);
+  out.sort((a, b) => b.times - a.times);
   return out;
 }
 
@@ -1911,6 +2050,48 @@ export function tripNudge(event, todayISO) {
   const dueCount = due.reduce((sum, s) => sum + s.remaining, 0);
   const focus = due[0] || null; // packSteps is timeline-ordered, so this is the earliest due phase
   return { daysToGo, label: countdownLabel(daysToGo), focusPhaseId: focus ? focus.phase.id : null, focusLabel: focus ? focus.phase.label : '', dueCount };
+}
+
+// How long after a trip ends the app still offers to review it. Beyond a month
+// the answers stop being memory and start being guesswork, and a wrong "used"
+// is worse for the learning than no answer at all — so the offer expires.
+export const REVIEW_WINDOW_DAYS = 30;
+
+// The day a trip is over: its return date if it has one, else the day it began
+// (a day trip is finished the evening it starts).
+export function tripEndDate(event) {
+  if (!event) return '';
+  const end = typeof event.endDate === 'string' ? event.endDate : '';
+  const start = typeof event.startDate === 'string' ? event.startDate : '';
+  return (end || start).slice(0, 10);
+}
+
+// Trips that are over and have never been reviewed, most recently finished first.
+//
+// 🚨 WHY THIS EXISTS. The review is the ONLY thing that feeds the learning engine
+// — applyReview writes the packed/used counts that pruneSuggestions later reads —
+// and from v5 until v161 nothing in the app ever asked for it. The button sat on
+// the trip screen and Refine sat empty, so the oldest feature in the app had
+// quietly never run. This is what the Home screen asks from.
+//
+// A trip ending TODAY is left alone: he is probably still driving home.
+export function tripsAwaitingReview(events, todayISO, windowDays = REVIEW_WINDOW_DAYS) {
+  const out = [];
+  for (const e of asArray(events)) {
+    if (!e || e.reviewedAt || e.status === 'done') continue;
+    const end = tripEndDate(e);
+    if (!end) continue;                          // an undated draft is never "over"
+    const days = daysUntil(end, todayISO);
+    if (days == null || days >= 0) continue;     // still to come, or ending today
+    const endedDaysAgo = -days;
+    if (endedDaysAgo > windowDays) continue;     // too long ago to answer honestly
+    // Reminders and tasks are not reviewable gear; a trip of nothing but those
+    // has no question to ask.
+    if (!asArray(e.entries).some((x) => x && x.itemType !== 'reminder')) continue;
+    out.push({ event: e, endedDaysAgo });
+  }
+  out.sort((a, b) => a.endedDaysAgo - b.endedDaysAgo);
+  return out;
 }
 
 // Packing Mode steps: one per non-empty timeline phase, with packed/remaining counts.

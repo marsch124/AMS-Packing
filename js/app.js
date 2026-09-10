@@ -11,7 +11,7 @@ import {
   itemCondition, conditionTone, conditionReplaces, careSections, MAINTENANCE_UPCOMING_DAYS,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupByPacker, groupBy, groupItemsBySection, newSection,
   progress, packSteps, totalListRows, applyReview, pruneSuggestions,
-  effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, nightsBetween, endFromNights,
+  effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, tripsAwaitingReview, tripEndDate, REVIEW_WINDOW_DAYS, expiringOnTrip, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
   encodeGrabShare, decodeGrabShare,
   encodeListShare, decodeListShare, listFromShare, decodeTripLink, unpackShare,
@@ -23,7 +23,7 @@ import {
   newKit, coerceKit, kitEmoji, clusterByKit, KIT_DEFAULT_EMOJI,
   shoppingReason, shoppingSuggestions, openShoppingCount,
   PERSON_COLORS, coercePerson, newPerson, personColor, assignedPeople, DEFAULT_PEOPLE,
-  SHARED_KINDS, sharedRowId, sharedRowsOfKind, sharedRowsFrom, isFactoryList,
+  SHARED_KINDS, sharedRowId, sharedRowsOfKind, sharedRowsFrom, isFactoryList, grabToRows, grabFromRows,
   AUDITABLE_KINDS, AUDIT_LABELS, referencedListValues, auditDeviceLists,
   conditionsFromRows, conditionsToRows, peopleFromRows, namesFromRows, orderedNamesFromRows, ownersByUsage, namesToRows, presetsFromRows, presetsToRows,
   monthKey, shiftMonth, monthGrid, rangeCellState, orderRange,
@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v160';
+const APP_VERSION = 'v163';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -216,6 +216,7 @@ const sharedStored = (kind) => SHARED_STORED.has(kind);
 // staying quiet behind an old dismissal.
 const SYNC_GEN = 2;                              // 1 = phases (v118) · 2 = shared (v120)
 const AUDIT_HUSH_KEY = 'ams-list-check-hushed';  // the one verdict he has already seen and waved away
+const REVIEW_HUSH_KEY = 'ams-review-hushed';      // trips he has waved away rather than reviewed
 let LAST_LIST_CHECK = null;
 // What this device's GEAR points at, kept separately from the verdict.
 //
@@ -292,6 +293,23 @@ function auditHushed(a) {
 }
 function hushAudit(a) {
   try { localStorage.setItem(AUDIT_HUSH_KEY, auditSignature(a)); } catch { /* ignore */ }
+}
+
+// "Not this one" on a trip-review nudge. Kept per trip and on this device only:
+// waving the offer away is a passing mood, not a fact about the trip, and it must
+// never look like the trip HAS been reviewed — `reviewedAt` stays empty, so the
+// Trip review button still works and the learning is still there to be collected.
+// The list is trimmed to the last 40, since the offer expires after a month anyway.
+function loadReviewHush() {
+  try { const a = JSON.parse(localStorage.getItem(REVIEW_HUSH_KEY) || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+function reviewHushed(id) { return loadReviewHush().includes(id); }
+function hushReview(id) {
+  try {
+    const a = loadReviewHush().filter((x) => x !== id);
+    a.push(id);
+    localStorage.setItem(REVIEW_HUSH_KEY, JSON.stringify(a.slice(-40)));
+  } catch { /* ignore */ }
 }
 
 // "15 storage places and 5 item conditions" — the gaps, in his words not mine.
@@ -1590,7 +1608,52 @@ const GRAB_LISTS = {
   'bike-out': { label: 'Bike', title: 'Outdoor bike', tone: 'yellow', icon: 'bike-sun' },
   'run-out': { label: 'Run', title: 'Outdoor run', tone: 'green', icon: 'run-sun' },
 };
+// --- where a grab list actually lives (v163) --------------------------------
+//
+// Until v163 the six lists were the one part of this app that existed in exactly
+// one place. v161 put them in the backup; this puts them in the account, so the
+// list you fix on the Mac is the list your phone hands you on the way out.
+//
+// They ride in the EXISTING `shared` table as a sixth kind rather than in a table
+// of their own — see the note on SHARED_KINDS for why that distinction is the
+// difference between working and the v120 fault.
+//
+// READ ORDER, and it matters: the account's row, then this device's own
+// localStorage copy, then the factory list in the code. A button you have never
+// edited has no row and no copy, and simply shows the factory list — which is why
+// nothing is ever seeded (v118).
+//
+// localStorage is kept written as well, deliberately. It is the copy that answers
+// when you are offline or not signed in, and it is what the one-time adoption
+// below reads to lift your existing lists into the account.
+function grabSharedMap() {
+  const out = new Map();
+  try { for (const g of grabFromRows(SHARED_ROWS)) out.set(g.id, g); } catch { /* ignore */ }
+  return out;
+}
+// Where a list sits among the six, so a single-row write can't land it at the
+// front — the `order: 0` trap that sent every newly typed storage place to the
+// top of everybody's dropdown in v125.
+const grabOrder = (id) => Math.max(0, Object.keys(GRAB_LISTS).indexOf(id));
+// Write one list's row: items AND look together, because a grab list is ONE row.
+// Whatever is not being changed is read back at its current effective value, so
+// saving a rename can never blank the list underneath it.
+async function putGrabRow(id, { items, meta } = {}) {
+  const look = meta || loadGrabMeta(id);
+  const rows = grabToRows([{
+    id,
+    items: items || loadGrabItems(id),
+    label: look.label || '', icon: look.icon || '', tone: look.tone || '',
+  }]);
+  rows.forEach((r) => { r.order = grabOrder(id); });
+  try { await putShared(rows); } catch { /* offline / signed out: localStorage still holds it */ }
+}
+
 function loadGrabMeta(id) {
+  const shared = grabSharedMap().get(id);
+  if (shared && (shared.label || shared.icon || shared.tone)) {
+    return { label: shared.label, icon: shared.icon, tone: shared.tone };
+  }
   try {
     const all = JSON.parse(localStorage.getItem(GRAB_META_KEY) || 'null') || {};
     return (all[id] && typeof all[id] === 'object') ? all[id] : {};
@@ -1602,6 +1665,7 @@ function saveGrabMeta(id, meta) {
     all[id] = meta;
     localStorage.setItem(GRAB_META_KEY, JSON.stringify(all));
   } catch { /* ignore */ }
+  putGrabRow(id, { meta });
 }
 // A list's effective look: the factory setting with this device's overrides
 // on top. A custom name serves as both the button label and the screen title
@@ -1622,6 +1686,8 @@ function getGrabDef(id) {
   };
 }
 function loadGrabItems(id) {
+  const shared = grabSharedMap().get(id);
+  if (shared && shared.items.length) return shared.items.slice();
   try {
     const all = JSON.parse(localStorage.getItem(GRAB_ITEMS_KEY) || 'null');
     if (all && Array.isArray(all[id])) {
@@ -1637,6 +1703,36 @@ function saveGrabItems(id, items) {
     all[id] = items;
     localStorage.setItem(GRAB_ITEMS_KEY, JSON.stringify(all));
   } catch { /* ignore */ }
+  putGrabRow(id, { items });
+}
+
+// One-time lift of this device's existing grab lists into the account (v163).
+//
+// 🚨 ADD-IF-ABSENT, never overwrite. Both devices arrive at v163 holding their own
+// localStorage copies, and whichever opens the app first would otherwise stamp its
+// version over the other's. `addSharedRowsIfAbsent` means a button the account
+// already knows about is left completely alone, so the second device adopts only
+// the buttons the first one had never edited. Nothing is invented: a button with
+// no localStorage entry has never been edited and is left to the factory list.
+const GRAB_ADOPTED_KEY = 'ams-grab-adopted';
+async function adoptGrabLists() {
+  try { if (localStorage.getItem(GRAB_ADOPTED_KEY) === '1') return; } catch { return; }
+  let items = {}; let meta = {};
+  try { items = JSON.parse(localStorage.getItem(GRAB_ITEMS_KEY) || '{}') || {}; } catch { items = {}; }
+  try { meta = JSON.parse(localStorage.getItem(GRAB_META_KEY) || '{}') || {}; } catch { meta = {}; }
+  const ids = [...new Set([...Object.keys(items), ...Object.keys(meta)])].filter((k) => GRAB_LISTS[k]);
+  if (ids.length) {
+    const rows = grabToRows(ids.map((gid) => ({
+      id: gid,
+      items: Array.isArray(items[gid]) ? items[gid] : loadGrabItems(gid),
+      label: (meta[gid] && meta[gid].label) || '',
+      icon: (meta[gid] && meta[gid].icon) || '',
+      tone: (meta[gid] && meta[gid].tone) || '',
+    })));
+    rows.forEach((r) => { r.order = grabOrder(r.data.gid); });
+    try { adoptSharedRows(await db.addSharedRowsIfAbsent(rows)); } catch { return; }
+  }
+  try { localStorage.setItem(GRAB_ADOPTED_KEY, '1'); } catch { /* ignore */ }
 }
 // Ticks and "not this time" skips live in ONE record with ONE clock, on
 // purpose: a skip is a fact about this session, exactly like a tick, so the
@@ -2254,7 +2350,15 @@ async function renderHome() {
   wrap.appendChild(h(`<div class="topbar"><h1 class="grow">AMS Packing List</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a></div>`));
 
   // On-open reminder: the soonest trip that has items due to pack now.
-  const nudges = events.map((e) => ({ e, n: tripNudge(e) })).filter((x) => x.n && x.n.dueCount > 0);
+  //
+  // 🚨 `daysToGo >= 0` is load-bearing, not tidiness. A trip in the past has a
+  // NEGATIVE days-to-go, and the sort below is ascending — so before v161 any
+  // finished trip still holding unticked items sorted ahead of every upcoming
+  // one and took this single slot for good, reading "Norway 40 days ago — 12
+  // items to pack now". Home has one trip nudge; it belongs to the trip you
+  // still have to pack for. A finished trip's business is the review nudge below.
+  const nudges = events.map((e) => ({ e, n: tripNudge(e) }))
+    .filter((x) => x.n && x.n.dueCount > 0 && x.n.daysToGo >= 0);
   nudges.sort((a, b) => a.n.daysToGo - b.n.daysToGo);
   if (nudges.length) {
     const { e, n } = nudges[0];
@@ -2263,6 +2367,33 @@ async function renderHome() {
       <span class="nudge-body"><b>${esc(e.name || 'Trip')} ${esc(n.label)}</b> — ${n.dueCount} item${n.dueCount === 1 ? '' : 's'} to pack now<span class="nudge-sub">${esc(n.focusLabel)}</span></span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
+  }
+
+  // Trip review: the trip is over and nobody has ever asked how it went.
+  //
+  // This is the missing half of the app's oldest feature. applyReview is what
+  // writes the packed/used counts, pruneSuggestions is what reads them, and
+  // Refine is what shows the result — but the only door into the review was a
+  // button on the trip screen, so for 160 versions the loop simply never ran.
+  const pending = tripsAwaitingReview(events).filter((r) => !reviewHushed(r.event.id));
+  if (pending.length) {
+    const { event: rev, endedDaysAgo } = pending[0];
+    const when = endedDaysAgo === 1 ? 'yesterday' : `${endedDaysAgo} days ago`;
+    const more = pending.length > 1 ? ` · ${pending.length - 1} more waiting` : '';
+    const nudge = h(`<div class="nudge review">
+      <span class="nudge-ic">${ic('check','md')}</span>
+      <span class="nudge-body"><b>How was ${esc(rev.name || 'your trip')}?</b> — you got back ${esc(when)}. Tell the app what you didn’t use and it starts trimming your lists.<span class="nudge-sub">Takes a minute${esc(more)}</span></span>
+      <span class="nudge-acts">
+        <a class="btn sm" href="#/event/${rev.id}/review">${ic('check','sm')}<span>Review it</span></a>
+        <button class="nudge-x" type="button" aria-label="Not this one" title="Not this one">${ic('close','sm')}</button>
+      </span>
+    </div>`);
+    nudge.querySelector('.nudge-x').addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      hushReview(rev.id);
+      render();
+    });
+    wrap.appendChild(nudge);
   }
 
   // Care reminder: gear that's overdue or due soon for maintenance.
@@ -2476,6 +2607,7 @@ function openEventMenu(ev, after = () => render()) {
       ${p.total && p.done ? `<button class="btn ghost lg" data-m="unpackall">${IC.swap}<span>Clear every tick</span></button>` : ''}
       <button class="btn ghost lg" data-m="rename">${IC.edit}<span>Rename</span></button>
       <a class="btn ghost lg" href="#/event/${ev.id}/edit" data-m="go">${IC.gear}<span>Trip settings</span></a>
+      <button class="btn ghost lg" data-m="again">${IC.copy || IC.swap}<span>Start a new trip from this one<em>same list, fresh ticks</em></span></button>
       <button class="btn ghost lg" data-m="share">${IC.share}<span>Share</span></button>
       <button class="btn danger ghost lg" data-m="del">${IC.trash}<span>Delete this trip</span></button>
     </div>
@@ -2505,6 +2637,35 @@ function openEventMenu(ev, after = () => render()) {
     if (!m) return;
     if (m === 'go') { close(); return; }              // the <a> navigates by itself
     if (m === 'cancel') { close(); return; }
+    if (m === 'again') {
+      // "Same as last summer." A trip PRESET saves your answers to the Home form
+      // and is spent the instant the trip is created — it contains no items at all.
+      // So the one thing you actually want to repeat, the list as it finally ended
+      // up after you had corrected it all week, was the one thing you could not
+      // repeat. This copies that list.
+      //
+      // What is deliberately LEFT BEHIND is everything that belonged to the old
+      // trip rather than to the kind of trip it was: its dates, its weather, its
+      // place on the map, its ticks and its review. You get the list, clean.
+      const name = (prompt('Name for the new trip:', `${ev.name || 'Trip'} (again)`) || '').trim();
+      if (!name) return;
+      const copy = newEvent({
+        name,
+        mode: ev.mode, activities: [...(ev.activities || [])], contexts: [...(ev.contexts || [])],
+        transport: ev.transport, catering: ev.catering, season: ev.season,
+        laundry: !!ev.laundry, weatherOn: [...(ev.weatherOn || [])],
+        destination: ev.destination || '',
+      });
+      copy.entries = (ev.entries || []).map((e) => ({
+        ...e, id: id(), checked: false, used: undefined, packedAt: '',
+      }));
+      for (const e of copy.entries) delete e.used;
+      if (!await saveGuard(db.saveEvent(copy))) return;
+      close();
+      showToast(`“${name}” started from “${ev.name}” — ${copy.entries.length} item${copy.entries.length === 1 ? '' : 's'}, nothing ticked`);
+      location.assign(`#/event/${copy.id}`);
+      return;
+    }
     if (m === 'packall') { await setAll(true); return; }
     if (m === 'unpackall') {
       if (!confirm(`Clear every tick on “${ev.name}”? The list itself is untouched — you'd just be starting the packing again.`)) return;
@@ -3340,6 +3501,29 @@ async function renderEvent(eventId) {
   const summary = h('<div class="ev-summary"></div>');
   summary.appendChild(readinessDashboard(ev, openTodos));
   wrap.appendChild(summary);
+
+  // (v163) Gear that runs out before you get home.
+  //
+  // The Shopping list has always watched replace-by dates, but it judges them
+  // against TODAY and a fixed month — the wrong question once a trip has dates.
+  // Sunscreen expiring in sixty days raises nothing today and then goes off
+  // halfway through a trip you leave for in seven weeks. This asks the trip's own
+  // question instead: will this still be good when I need it?
+  const expiring = expiringOnTrip(ev.entries, tripEndDate(ev));
+  if (expiring.length) {
+    const out = expiring.filter((x) => x.alreadyOut);
+    const during = expiring.filter((x) => !x.alreadyOut);
+    const line = (x) => `<li><b>${esc(x.entry.name)}</b> — ${x.alreadyOut
+      ? `out of date since ${esc(prettyDate(x.expiry))}`
+      : `runs out ${esc(prettyDate(x.expiry))}, while you’re away`}</li>`;
+    const band = h(`<div class="card block expire-band">
+      <h2>${ic('warn','sm')} ${expiring.length === 1 ? 'One thing' : `${expiring.length} things`} won’t last the trip</h2>
+      <ul class="expire-list">${expiring.map(line).join('')}</ul>
+      <p class="muted">${out.length ? `<b>${out.length}</b> already past ${out.length === 1 ? 'its' : 'their'} date. ` : ''}${during.length ? `<b>${during.length}</b> ${during.length === 1 ? 'goes' : 'go'} off before you get home. ` : ''}Replace ${expiring.length === 1 ? 'it' : 'them'} before you leave, or decide to take ${expiring.length === 1 ? 'it' : 'them'} anyway.</p>
+      <a class="btn" href="#/shopping">${ic('cart','sm')}<span>Shopping list</span></a>
+    </div>`);
+    wrap.appendChild(band);
+  }
 
   wrap.appendChild(tripSetupCard(ev));
 
@@ -4853,52 +5037,181 @@ function finishScreen(ev, overall) {
 async function renderReview(eventId) {
   const ev = await db.getEvent(eventId);
   if (!ev || !ev.entries.length) { location.assign(`#/event/${eventId}`); return h('<section></section>'); }
+  const lists = await db.getLists();
   // Review physical gear only (skip reminders/tasks).
   const items = ev.entries.filter((e) => e.itemType !== 'reminder');
   // Default everything to "used"; the user just flips the few they didn't use.
   const used = new Map(items.map((e) => [e.id, e.used !== false]));
 
+  // v162: the whole job on this screen is finding the handful you did NOT use, and
+  // before this you had to scroll every line of the trip to do it — a week away is
+  // around 250 of them. Two things shorten that to seconds: the things you never
+  // ticked into the bag come first in their own open block (they are the likeliest
+  // answers and there are rarely many), and everything else folds away by category
+  // with a search box over the top.
+  const anyTicked = items.some((e) => e.checked);
+  const neverPacked = anyTicked ? items.filter((e) => !e.checked) : [];
+  const neverPackedIds = new Set(neverPacked.map((e) => e.id));
+  const rest = items.filter((e) => !neverPackedIds.has(e.id));
+
+  // The templates this trip was built from — the honest set of places a thing you
+  // wished you'd had could belong next time. Loose items is always offered as the
+  // home for something that fits no template yet.
+  const usedListIds = [...new Set(items.map((e) => e.sourceListId).filter(Boolean))];
+  const tripLists = usedListIds.map((id) => lists.find((l) => l.id === id)).filter(Boolean);
+  const loose = await getLooseList();
+  const fileOpts = [...tripLists.filter((l) => l.id !== loose.id), loose];
+
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(backBar('Trip review', `#/event/${ev.id}`)));
-  wrap.appendChild(h(`<p class="muted pad">Tap anything you <b>didn’t use</b> on this trip. Everything is marked used by default — over a few trips the app learns what to trim.</p>`));
 
-  const body = h('<div class="rev-list"></div>');
+  // --- (v162) What did you wish you'd had? ---------------------------------
+  // The review could only ever take things AWAY. The worst thing that happens on
+  // a trip is the thing you needed and did not have, and the app had nowhere to
+  // put it — so it was remembered until the drive home and then forgotten. This
+  // is that channel, and it files straight into a template so next time it comes.
+  const missing = [];
+  const missCard = h(`<div class="card block rev-miss">
+    <h2>Anything you wished you’d had?</h2>
+    <p class="muted">The thing you had to buy, borrow or do without. Add it here and it goes onto a list, so next time it comes with you.</p>
+    <div class="rev-miss-add">
+      <input class="rev-miss-in" type="text" placeholder="e.g. Power bank" autocomplete="off">
+      <button class="btn" type="button" data-add>${IC.plus}<span>Add</span></button>
+    </div>
+    <div class="rev-miss-list"></div>
+  </div>`);
+  const missIn = $('.rev-miss-in', missCard);
+  const missList = $('.rev-miss-list', missCard);
+  const drawMissing = () => {
+    missList.innerHTML = '';
+    for (const m of missing) {
+      const row = h(`<div class="rev-miss-row">
+        <span class="rev-miss-name">${esc(m.name)}</span>
+        <select class="rev-miss-where" aria-label="Which list should it go on?">
+          ${fileOpts.map((l) => `<option value="${esc(l.id)}"${l.id === m.listId ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}
+        </select>
+        <button class="iconbtn" type="button" data-drop aria-label="Remove">${IC.close}</button>
+      </div>`);
+      $('.rev-miss-where', row).addEventListener('change', (e) => { m.listId = e.target.value; });
+      $('[data-drop]', row).addEventListener('click', () => {
+        missing.splice(missing.indexOf(m), 1);
+        drawMissing();
+      });
+      missList.appendChild(row);
+    }
+  };
+  const addMissing = () => {
+    const name = (missIn.value || '').trim();
+    if (!name) return;
+    if (missing.some((m) => m.name.toLowerCase() === name.toLowerCase())) { missIn.value = ''; return; }
+    missing.push({ name, listId: (fileOpts[0] || {}).id || '' });
+    missIn.value = '';
+    drawMissing();
+    missIn.focus();
+  };
+  $('[data-add]', missCard).addEventListener('click', addMissing);
+  missIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addMissing(); } });
+  if (fileOpts.length) wrap.appendChild(missCard);
+
+  wrap.appendChild(h(`<p class="muted pad">Now tap anything you <b>didn’t use</b>. Everything starts marked used — over a couple of trips the app learns what to trim.</p>`));
+
   const counter = h('<div class="rev-counter"></div>');
   wrap.appendChild(counter);
+  const find = h(`<div class="rev-find"><input type="search" placeholder="Find an item…" autocomplete="off" aria-label="Find an item"></div>`);
+  wrap.appendChild(find);
+  const body = h('<div class="rev-list"></div>');
   wrap.appendChild(body);
 
   const updateCounter = () => {
     const notUsed = [...used.values()].filter((v) => !v).length;
     counter.textContent = notUsed ? `${notUsed} marked “didn’t use”` : 'All marked used — flip the ones you didn’t need';
   };
-  for (const cg of groupByCategory(items)) {
-    body.appendChild(h(`<div class="sub">${esc(cg.category)}</div>`));
-    for (const e of cg.entries) {
-      const row = h(`<button class="rev-item${used.get(e.id) ? '' : ' unused'}" type="button" data-id="${e.id}">
-        <span class="rev-name">${esc(e.name)}</span>
-        <span class="rev-tag">${used.get(e.id) ? 'Used' : 'Didn’t use'}</span>
-      </button>`);
-      row.addEventListener('click', () => {
-        const v = !used.get(e.id); used.set(e.id, v);
-        row.classList.toggle('unused', !v);
-        row.querySelector('.rev-tag').textContent = v ? 'Used' : 'Didn’t use';
-        updateCounter();
-      });
-      body.appendChild(row);
+
+  const rowFor = (e) => {
+    const row = h(`<button class="rev-item${used.get(e.id) ? '' : ' unused'}" type="button" data-id="${e.id}" data-name="${esc((e.name || '').toLowerCase())}">
+      <span class="rev-name">${esc(e.name)}</span>
+      <span class="rev-tag">${used.get(e.id) ? 'Used' : 'Didn’t use'}</span>
+    </button>`);
+    row.addEventListener('click', () => {
+      const v = !used.get(e.id); used.set(e.id, v);
+      row.classList.toggle('unused', !v);
+      $('.rev-tag', row).textContent = v ? 'Used' : 'Didn’t use';
+      updateCounter();
+      refreshSummaries();
+    });
+    return row;
+  };
+
+  // Each category folds, and its summary keeps its own count so you can see where
+  // the "didn't use" ones are without opening anything.
+  const groups = [];
+  const addGroup = (label, entries, open, note) => {
+    if (!entries.length) return;
+    const det = h(`<details class="rev-cat"${open ? ' open' : ''}>
+      <summary><span class="rev-cat-h">${esc(label)}</span><span class="rev-cat-sum"></span></summary>
+      ${note ? `<p class="muted rev-cat-note">${note}</p>` : ''}
+      <div class="rev-cat-body"></div>
+    </details>`);
+    const holder = $('.rev-cat-body', det);
+    entries.forEach((e) => holder.appendChild(rowFor(e)));
+    body.appendChild(det);
+    groups.push({ det, entries, sum: $('.rev-cat-sum', det) });
+  };
+
+  if (neverPacked.length) {
+    addGroup(`Never went in the bag`, neverPacked, true,
+      'You didn’t tick these while packing, so the app is treating them as left behind rather than packed and unused. Nothing to do here unless you actually took one after all — tap it to say so.');
+  }
+  for (const cg of groupByCategory(rest)) addGroup(cg.category, cg.entries, false);
+
+  function refreshSummaries() {
+    for (const g of groups) {
+      const notUsed = g.entries.filter((e) => !used.get(e.id)).length;
+      g.sum.textContent = notUsed ? `${g.entries.length} · ${notUsed} didn’t use` : `${g.entries.length} · all used`;
+      g.sum.classList.toggle('has-unused', notUsed > 0);
     }
   }
+  refreshSummaries();
   updateCounter();
+
+  // Typing opens whichever categories hold a match and hides the rest, so a
+  // 250-line trip becomes the one row you were looking for.
+  $('input', find).addEventListener('input', (e) => {
+    const q = (e.target.value || '').trim().toLowerCase();
+    for (const g of groups) {
+      let hits = 0;
+      for (const row of $$('.rev-item', g.det)) {
+        const hit = !q || (row.dataset.name || '').includes(q);
+        row.hidden = !hit;
+        if (hit) hits += 1;
+      }
+      g.det.hidden = q ? hits === 0 : false;
+      if (q) g.det.open = true;
+    }
+  });
 
   const save = h(`<div class="pack-footer"><div class="spacer"></div><button class="btn primary lg" data-save>Save review</button></div>`);
   wrap.appendChild(save);
-  save.querySelector('[data-save]').addEventListener('click', async () => {
+  $('[data-save]', save).addEventListener('click', async () => {
     for (const e of items) e.used = !!used.get(e.id);
-    const lists = await db.getLists();
-    const changed = applyReview(ev, lists);
+    const fresh = await db.getLists();
+    // File anything he wished he'd had, before the review is applied — so the new
+    // item is in the template from this moment, ready for the next trip.
+    let added = 0;
+    for (const m of missing) {
+      const list = fresh.find((l) => l.id === m.listId);
+      if (!list) continue;
+      if (list.items.some((x) => (x.name || '').trim().toLowerCase() === m.name.toLowerCase())) continue;
+      list.items.push(newItem({ name: m.name }));
+      if (await saveGuard(db.saveList(list))) added += 1;
+    }
+    const changed = applyReview(ev, added ? await db.getLists() : fresh);
     for (const l of changed) await saveGuard(db.saveList(l));
     ev.status = 'done';
     ev.reviewedAt = new Date().toISOString();
-    if (await saveGuard(db.saveEvent(ev))) location.assign('#/refine');
+    if (!(await saveGuard(db.saveEvent(ev)))) return;
+    if (added) showToast(`Added ${added} thing${added === 1 ? '' : 's'} you missed`);
+    location.assign('#/refine');
   });
   return wrap;
 }
@@ -4908,30 +5221,41 @@ async function renderReview(eventId) {
 // ============================================================
 async function renderRefine() {
   const lists = await db.getLists();
-  const suggestions = pruneSuggestions(lists, { minTrips: 1 });
+  // 🚨 v162: the `{ minTrips: 1 }` override is gone. The engine's own default is 2,
+  // and this screen was quietly halving it — so a SINGLE quiet trip put a one-tap
+  // Drop beside your first-aid kit. One trip is not evidence, and the gear you
+  // most often fail to use is exactly the gear you carry hoping not to need it.
+  const suggestions = pruneSuggestions(lists);
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(backBar('Refine lists', '#/lists')));
 
   if (!suggestions.length) {
     wrap.appendChild(h(`<div class="empty">
       <p class="empty-t">Nothing to trim yet</p>
-      <p class="empty-s">After a trip review, items you packed but never used show up here so you can drop them from a list.</p>
+      <p class="empty-s">After <b>two</b> trip reviews, anything you keep packing and never use — or keep listing and never pack — shows up here so you can drop it from a list. One trip is not enough to judge by.</p>
     </div>`));
     return wrap;
   }
-  wrap.appendChild(h(`<p class="muted pad">You packed these but haven’t used them. Drop them from the list, or keep them.</p>`));
+  wrap.appendChild(h(`<p class="muted pad">Each of these has earned its place here over <b>at least two trips</b>. <b>Keep</b> settles it for good — the app stops asking. <b>Drop</b> removes it from that template; your item itself, and every other list it is on, are untouched.</p>`));
   const body = h('<div class="items"></div>');
   wrap.appendChild(body);
 
   const draw = () => {
-    const cur = pruneSuggestions(lists, { minTrips: 1 });
+    const cur = pruneSuggestions(lists);
     body.innerHTML = '';
     if (!cur.length) { body.appendChild(h('<div class="empty"><p class="empty-s">All done — nothing left to review.</p></div>')); return; }
     for (const s of cur) {
+      // Say which of the two signals this is. "Packed 3 times, never used" and
+      // "on the list 3 times, never packed" are different facts and lead to
+      // different decisions — running them together as one grey line was asking
+      // him to drop things without telling him why.
+      const why = s.reason === 'never-packed'
+        ? `on the list ${s.times}× · never packed`
+        : `packed ${s.times}× · used 0×`;
       const row = h(`<div class="entry">
         <span class="entry-main">
           <span class="e-name">${esc(s.item.name)}</span>
-          <span class="e-sub">${esc(s.listName)} · packed ${s.stats.packed}× · used 0×</span>
+          <span class="e-sub">${esc(s.listName)} · ${esc(why)}</span>
         </span>
         <button class="btn ghost" data-keep>Keep</button>
         <button class="btn danger ghost" data-drop>${IC.trash}<span>Drop</span></button>
@@ -4939,6 +5263,9 @@ async function renderRefine() {
       row.querySelector('[data-drop]').addEventListener('click', async () => {
         const list = lists.find((l) => l.id === s.listId);
         if (!list) return;
+        // Drop edits a template, and the button sits under your thumb next to
+        // Keep. It asks first.
+        if (!confirm(`Drop “${s.item.name}” from ${list.name}?\n\nIt stays in your catalogue and on any other list it is on — this only removes it from this template.`)) return;
         list.items = list.items.filter((it) => it.id !== s.item.id);
         if (await saveGuard(db.saveList(list))) draw();
       });
@@ -6678,7 +7005,7 @@ function howtoCard() {
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
           <li><b>The ✎ pencil also restyles the button itself</b>: give the list your own <b>name</b> (up to 14 letters — “Biz trip”, say), pick any of the <b>twelve hand-drawn doodles</b> (briefcase, plane, mountains, golf, gym, dog walk, and the six sport ones), and choose one of <b>six colours</b>. The Home button and the list’s own title change together; emptying the name field brings the standard name back, and <b>Cancel</b> undoes look changes along with everything else.</li>
           <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. <b>Done</b> keeps your changes; <b>Cancel</b> puts the list back exactly as it was when you tapped the pencil. Each list is its own — the bike list and the run list can differ.</li>
-          <li><b>They live on this device only</b> — deliberately outside sync, since the list is about what is lying around <em>this</em> home, not about your gear catalogue.</li>
+          <li><b>They travel between your devices (v163)</b> — fix a typo on the Mac and the phone hands you the corrected list on the way out. Names, doodles, colours and contents all go. They ride in the <b>same list-of-lists the app has synced since v120</b> (alongside your storage places, packers, owners, conditions and trip presets) rather than in a store of their own — that is the point, because a brand-new synced store is exactly what went wrong in v120. Your existing lists are lifted into the account <b>once</b>, by whichever device opens v163 first, and only ever <b>added</b>: a button the account already knows about is never written over, so the second device contributes only what the first had never edited. Each device keeps its own copy too, so the lists still work with no signal and while signed out. <b>And since v161 they are in your backups</b>: the six lists, their names, doodles, colours and contents travel in the backup file and in every automatic on-device copy, and come back on a restore. Before that they existed in exactly one place, which meant the app’s own advice for a sync problem — <b>“Replace this device with the account copy”</b>, which empties the device first — would quietly have taken them with it. A restore <b>merges</b>: a list your backup knows about comes back, a list it has never heard of is left exactly as it is here, so restoring can only ever give you a list back. A list you have never edited carries nothing and simply arrives as the factory list, which is right.</li>
           <li><b>Share a list</b> — the share arrow beside the pencil opens a <b>QR code</b> and a <b>link</b> carrying the list: its name, doodle, colour and everything on it. Whoever scans the code with the phone camera, or opens the link, is <b>offered the list</b> and taps which of their six Home buttons it should go on — that button’s list is replaced, the other five are untouched. Nothing is uploaded; the whole list travels inside the link. Because an installed app on the iPhone keeps its own storage (a link opened in Safari lands in Safari’s copy), there is also <b>Paste</b> under <b>Settings → Shared trips &amp; grab lists</b>: paste the link or the code, tap <b>Import</b>, pick a button, done.</li>
         </ul>
 
@@ -6837,6 +7164,7 @@ function howtoCard() {
 
         <h3>Quick actions on a trip</h3>
  <p>Some things you only want to do to a <em>whole</em> trip. <b>Long-press</b> a trip card on the <b>Events</b> tab (or <b>right-click</b> it on the Mac), or tap the <b>⋯</b> button in a trip's own header, and a short menu appears:</p>
+        <p><b>Start a new trip from this one (v163).</b> The same menu can copy a finished trip into a fresh one: you get its <b>whole list exactly as it ended up</b>, with nothing ticked. Its dates, weather, map pin, ticks and review stay behind — they belonged to that trip, not to the kind of trip it was. Use a <b>Trip preset</b> when you want the <em>form</em> filled in; use this when you want the <em>list</em>.</p>
         <ul>
  <li><b>Mark everything packed</b> — takes the list straight to <b>100%</b> in one tap. Use it for a trip you actually packed away from the app, or an old trip you simply want on record as done rather than sitting there half-ticked forever. The list itself is untouched, so it stays fully readable afterwards.</li>
           <li><b>Clear every tick</b> — the opposite, for starting the packing again (it asks first).</li>
@@ -6893,9 +7221,11 @@ function howtoCard() {
 
         <h3>Shopping list</h3>
  <p>A separate <b>Shopping list</b> (on the <b>Care</b> tab) rounds up what to <b>buy or restock before a trip</b>. It suggests three kinds of thing automatically: items you flag as a <b>Consumable</b> in their editor (things you use up — sunscreen, toothpaste, energy gels, a gas canister), items whose <b>Item condition</b> you’ve set to <b>Needs replacing</b>, and anything past or within a month of its <b>replace-by / expiry date</b>. Tap <b>＋ Add</b> beside a suggestion to move it onto your buy-list, or the <b>Add</b> button for a one-off like “travel adapter”. <b>Tick</b> a line once you’ve bought it — bought things drop into a collapsible group. It’s built on the same store as your to-dos (so it’s in every backup), and a <b>“Shopping list — N to buy”</b> nudge shows on <b>Home</b> whenever something’s waiting. Your <b>Actions</b> tab stays purely to-dos; shopping keeps its own screen.</p>
+        <p><b>What the trip itself checks (v163).</b> The Shopping list judges a replace-by date against <b>today</b> plus a month, which is the wrong question once a trip has dates. So a trip measures its own gear against <b>the day you get home</b>: open it and anything that <b>won't last the trip</b> is listed at the top — what is already past its date, and what runs out while you're away, each with the date and a link through to the Shopping list. It only shows when there is something to say.</p>
 
         <h3>Countdown &amp; “pack now” nudges</h3>
- <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b></b> maintenance nudge when gear is overdue or due soon, a <b>shopping</b> nudge when you’ve things to buy, a <b>“To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), and a <b></b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
+ <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b></b> maintenance nudge when gear is overdue or due soon, a <b>shopping</b> nudge when you’ve things to buy, a <b>“To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), a green <b>trip review</b> card once a trip is over, and a <b></b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
+        <p>Home keeps <b>one</b> pack-now slot, and it belongs to a trip you still have to pack for. Before v161 a trip that had already <em>happened</em> could take it: a finished trip still holding a few unticked items counted as “sooner” than any trip in the future, so it sat at the top for good reading <b>“Norway 40 days ago — 12 items to pack now”</b>. Finished trips now have their own card — the review one — and leave that slot alone.</p>
 
         <h3>Packing Mode</h3>
  <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List. Within a phase, things are gathered <b>by bag</b>, under a heading naming that bag — so the rows beneath it don't repeat it, and their small grey line is left for what the heading hasn't already told you: whose it is, the cupboard to fetch it from, and any note.</p>
@@ -6933,6 +7263,11 @@ function howtoCard() {
 
         <h3>Trip review &amp; Refine (learning)</h3>
         <p>After a trip, open <b>Trip review</b> and mark what you didn't use. The app remembers, per item, how often it was packed vs actually used. <b>Refine</b> (from the Templates tab) then suggests dropping items you keep packing but never use — you decide Keep or Drop.</p>
+        <p><b>What it counts (v162).</b> A tick is the app's record of "this is in the bag", so only things you actually ticked count as packed. Anything you left behind is recorded as <b>skipped</b> — on the list, never packed — kept as its own count because it is a different fact from "packed and never used", and a stronger hint that a template is carrying something for nothing. If you packed <b>without ticking anything at all</b>, there is nothing to read, so the list itself is taken as the evidence and everything counts, as it always did.</p>
+        <p><b>Anything you wished you'd had (v162).</b> The review opens with a box for the thing you needed and did not have. Type it, tap <b>Add</b>, and pick which list it belongs on — it offers <b>the templates this trip was built from</b>, plus <b>Loose items</b>. Saving the review files them, so the next trip using that template brings them along.</p>
+        <p><b>Finding your way down a long review (v162).</b> Things you never ticked into the bag come first, in their own open block. Everything else folds by category, each fold showing its own count, and a search box finds any row and opens the fold holding it.</p>
+        <p><b>Refine waits for two trips (v162).</b> One quiet trip is not evidence, and the gear you fail to use is often the gear you carry hoping not to need it. Refine now needs two, says which signal it is acting on, and asks before it drops anything — and Drop only removes the item from <em>that template</em>; the item itself and every other list it is on are untouched.</p>
+        <p><b>Since v161 the app asks you.</b> The day after a trip ends, <b>Home</b> shows a green <b>“How was …?”</b> card with a <b>Review it</b> button. That is the whole reason this section exists: the counting only happens if the review happens, and until v161 the only way in was a button you had to remember. The card never appears during a trip, nor on the day you travel home, and it <b>expires after a month</b> — beyond that the answers are guesswork, and a wrong “used” teaches the app the wrong thing. The <b>✕</b> waves one trip away on this device without marking it reviewed, so the <b>Trip review</b> button still works whenever you get round to it.</p>
 
         <h3>Sharing a trip</h3>
         <p>From a trip, tap <b>Share</b>. The whole trip — its full packing list — travels inside a <b>link</b> or a <b>file</b>; nothing is uploaded. The other person opens the link (it imports on its own) or imports the file from Settings. Every import becomes a fresh, unpacked copy. Share codes are <b>squeezed</b> before they travel, which takes about three quarters off, so even a long trip with several activities now fits in a link you can send in a message; only the very biggest still need the file, and the dialog says which is available. A whole trip is still far too much for a QR code — those suit grab lists and small templates.</p>
@@ -6983,6 +7318,15 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v163', '2026-09-10 · 16:00 UTC', false, 'Repeat a trip, catch what runs out while you’re away, and the grab lists reach your other device',
+      '<b>Three of them, and each one finishes something the app had already started.</b><br><br><b>(1) “Same as last summer” is now a thing you can do.</b> The app has always had <b>Trip presets</b> — but a preset saves your <em>answers</em> to the Home form (transport, season, which activities are ticked) and is <b>spent the instant you press Create Event</b>. It contains no items at all. So the one thing you would actually want to repeat — <b>the list as it finally ended up</b>, after a week of adding the things you had forgotten and taking out the things you had not needed — was the one thing there was no way to repeat.<br><br>Open any trip’s <b>⋯</b> menu (or long-press its card) and there is now <b>“Start a new trip from this one”</b>. Name it, and you get the whole list exactly as that trip finished, with <b>nothing ticked</b>. What is deliberately left behind is everything that belonged to <em>that</em> trip rather than to the kind of trip it was: its dates, its weather, its pin on the map, its ticks and its review. A preset is still the right tool when you want the <em>form</em> filled in; this is for when you want the <em>list</em>.<br><br><b>(2) The trip now checks what will still be good when you get there.</b> Every item can carry a <b>replace-by / expiry date</b>, and the <b>Shopping list</b> has watched those for a long time — but it judges them against <b>today</b>, plus a fixed month. That is the wrong question the moment a trip has dates on it. Sunscreen that runs out in sixty days raises nothing today, and then quietly goes off halfway through a trip you leave for in seven weeks. And a three-week trip departing in twenty-five days takes “expiring soon” gear along and says nothing whatever about the fortnight it spends out of date.<br><br>A trip knows when it ends, so that is now what its own gear is measured against. Open a trip and anything that <b>will not last it</b> is listed at the top: what is <b>already past its date</b>, and what <b>runs out while you are away</b>, each with the date, and a button through to the Shopping list. It only appears when there is something to say.<br><br><b>(3) The workout grab lists reach your other device.</b> <b>v161</b> got them into your backups, which was the urgent half. This is the other one: fix a typo on the Mac and the phone hands you the corrected list on the way out of the door. Names, doodles, colours and contents all travel.<br><br><b>How it is done matters more than that it is done.</b> They ride in the <b>list of lists this app has already been syncing since v120</b> — as a sixth kind of entry alongside your storage places, packers, owners, conditions and trip presets — rather than in a new store of their own. That is deliberate: a <em>new</em> synced store is exactly what caused the fault in <b>v120</b>, where your iPhone recorded an empty first download as “done” and afterwards only ever received changes. New entries in a store that is already syncing are ordinary changes, and ordinary changes are the one thing that has demonstrably worked all along.<br><br>Your existing lists are <b>lifted into the account once</b>, by whichever device opens this version first — and only ever <b>added</b>, never written over the top: a button the account already knows about is left completely alone, so the second device contributes only the buttons the first one had never edited. A button you have never touched has no entry at all and simply shows the factory list, which is right. And your device keeps its own copy either way, so the lists still work with no signal and while signed out.',
+      'Repeat a good trip in two taps, stop finding out at the campsite that something expired — and edit a grab list on either device.'),
+    v('v162', '2026-09-10 · 14:30 UTC', false, 'The trip review grows up — it can add things, it counts honestly, and it stops asking you to scroll',
+      '<b>v161 made the app ask how the trip went. This makes the answering worth doing.</b> Four changes, and the first is the one you will feel first.<br><br><b>(1) The review can finally ADD something.</b> Until now it could only ever take things away: it asked what you did not use, and had no way at all to record <em>the thing you needed and did not have</em>. That is the worst thing that happens on a trip — the charger you borrowed, the head torch you bought at a petrol station, the warm layer you spent a week wishing for — and the app had nowhere to put it, so it lived in your head until the drive home and then went.<br><br>The review now opens with <b>“Anything you wished you’d had?”</b> Type it, tap <b>Add</b>, and choose which list it should be on next time. The choice is not a long alphabetical menu: it offers <b>the templates this very trip was built from</b>, plus <b>Loose items</b> for something that fits none of them yet. Save the review and they are filed — so the next trip that uses that template brings them along without you doing anything else. Anything already on the list by that name is left alone rather than duplicated.<br><br><b>(2) The counting was wrong, and had been all along.</b> Saving a review scored <b>+1 packed</b> for every single line on the trip — including the things you looked at and deliberately left behind. So gear you quietly skip on <em>every</em> trip was being recorded as “packed, and used” on every trip. The app was not just failing to learn from those, it was learning the exact opposite of the truth, and then keeping them on your lists for ever on the strength of it.<br><br>A tick is the app’s record of “this is in the bag”, so that is now what counts. Anything you never ticked is recorded as <b>skipped</b> — on the list, never packed — which is kept as its own count because it is a different fact from “packed and unused”, and honestly a stronger hint that something has outstayed its welcome on a template. One deliberate exception: if you packed <b>without ticking anything at all</b>, there is no evidence to read, so the list itself is taken as the evidence and everything counts exactly as it did before. Refusing to learn would be worse than trusting the list.<br><br><b>(3) Refine had become a trap, and it is now two trips.</b> The engine has always wanted <b>two</b> trips of evidence before suggesting you drop something; the Refine screen was quietly overriding that to <b>one</b>. So a single trip on which you did not open the first-aid kit put a one-tap <b>Drop</b> button beside it — and the gear you most often fail to use is precisely the gear you carry <em>hoping</em> not to need it: the first-aid kit, the tow rope, the spare warm layer. That is the same shape this app has removed twice already (<b>v133</b>’s “Reset to the standard seven”, <b>v141</b>’s “Standard items”): a single tap that quietly undoes something you meant.<br><br>Refine now waits for two trips, <b>says which of the two signals it is looking at</b> (“packed 3× · used 0×” or “on the list 3× · never packed”, which lead to quite different decisions), and <b>asks before it drops</b>, spelling out that your item and its other lists are untouched.<br><br><b>(4) It is no longer 250 rows to flip six things.</b> Everything on the review starts marked <b>used</b>, so the entire job is finding the handful that were not — and you had to scroll the whole trip to do it. Now the things you <b>never ticked into the bag</b> come first in their own open block, since they are the likeliest answers and there are rarely many; everything else <b>folds away by category</b>, each fold carrying its own count so you can see at a glance where your marks are without opening anything; and a <b>search box</b> over the top finds any row in one go, opening whichever folds hold it.',
+      'The review now catches what you missed as well as what you didn’t use — and it takes a minute instead of ten.'),
+    v('v161', '2026-09-10 · 12:00 UTC', false, 'Your grab lists get a safety net, and the app finally asks how the trip went',
+      '<b>Three things, and the first one is the one that mattered.</b><br><br><b>(1) Your six grab lists were in no backup at all.</b> Everything else in this app has a second copy — your gear, your trips, your templates and your five Settings lists are in the backup file, in the automatic on-device copies, and most of them in your account too. The grab lists were not in any of them. They lived in this browser, on this one device, and nowhere else: the names you typed, the doodles you chose, the colours you set and everything on the six lists, all built up between <b>v140</b> and <b>v154</b>, existed exactly once.<br><br>That is bad enough on its own. What made it worse is that the app\'s own advice could have destroyed them. When something goes wrong with syncing, the cure this app tells you to use is <b>“Replace this device with the account copy”</b> — and that deliberately <b>empties the device</b> before it downloads. Your gear would all have come back, because your gear is in the account. The grab lists would simply have been gone, quietly, in the middle of what looked like a repair.<br><br>They now travel in the backup file and in every automatic copy, and come back on a restore. Two details worth knowing: a list you have <b>never touched</b> carries nothing, because writing the factory list into a backup as though it were your own work is exactly the mistake that cost you the <b>When</b> list in v118 — an untouched list simply arrives as the factory list on the other side, which is right. And a restore <b>merges</b> rather than replaces: a list your backup knows about comes back from the backup, a list it has never heard of is left exactly as this device has it. So restoring can only ever give you a list back. It can never cost you one you have made since.<br><br><b>The same repair reached one layer deeper.</b> Every restore quietly takes a copy of your current data first, so an unwanted restore is itself undoable. That safety copy was being taken <em>without your settings</em> — so the one copy in the world whose entire job is putting things back the way they were was the one copy that could not put your settings back. It carries them now.<br><br><b>(2) Home was showing a trip that had already happened.</b> The reminder at the top of the Home screen picks the <b>soonest trip with things still to pack</b>. But a trip in the past counts as sooner than a trip in the future — so any finished trip still holding a few unticked items sat there for good, ahead of every real one, reading something like <b>“Norway 40 days ago — 12 items to pack now”</b>. Home has one slot for that reminder and it now belongs to a trip you actually still have to pack for. A trip that is over has its own reminder, which is the next thing.<br><br><b>(3) The app now asks how the trip went.</b> This app has been able to learn from your trips since <b>v5</b>. You tell it what you did not use, it keeps count, and after a couple of trips <b>Refine</b> offers to drop the things you never touch. It has quietly never happened — because the only way in was a button on the trip screen, and nobody presses a button they are not asked to press. So the counting never started and Refine stayed empty for a hundred and fifty-five versions.<br><br>Now, once you are home, Home says <b>“How was Norway? — you got back 3 days ago”</b> with a <b>Review it</b> button. It appears the day <em>after</em> a trip ends, never during it and not on the day you travel home. It <b>expires after a month</b> — past that, the answers would be guesswork, and a wrong “used” teaches the app the wrong thing, which is worse than teaching it nothing. And there is an <b>✕</b> to wave a trip away without answering: that only hides the offer on this device, it does not mark the trip reviewed, so the <b>Trip review</b> button still works whenever you feel like it.',
+      'The lists you use every week can no longer vanish with a device — and the app has finally started learning from your trips.'),
     v('v160', '2026-09-05 · 08:00 UTC', false, 'A whole trip now fits in a link',
       '<b>Sharing a trip has quietly been a file-only affair, and this fixes it.</b><br><br>The reason was size. A trip carries its entire packing list, and a week away with a couple of activities is around 250 lines — some 50 000 characters of data, which as a plain link came to about 65 000. No messaging app carries that in one piece, so the <b>Copy link</b> button sat there greyed out and the file was the only way through.<br><br><b>Share codes are now squeezed before they travel.</b> The text inside is enormously repetitive — the same two dozen field names on every single line — so it compresses beautifully: that 65 000-character link becomes about <b>17 000</b>, roughly three quarters smaller. A week away with three activities lands near 22 000. In practice <b>every ordinary trip now fits in a link</b> you can paste into a message, and the file is left for the truly enormous ones.<br><br>The same squeeze applies to templates and grab lists, so those links got much shorter too. Anything already sent still works: an older link is recognised and opened exactly as before.<br><br>One thing that has not changed, and cannot: a QR code holds only a few hundred characters, so a whole trip will never fit in one. QR codes remain the right tool for grab lists and small templates, and the share dialog says plainly which of the ways is open to you.',
       'The trip you just planned can go to the other phone in a message, without saving and sending a file.'),
@@ -8241,7 +8585,7 @@ async function renderSettings() {
       let warn = `Restore this backup?\n\n  ${countsSummary(snap.counts)}\n  (${snapshotWhen(snap.createdAt)})\n\nThis REPLACES everything currently in the app. Your current data (${countsSummary(cur)}) is saved as a fresh automatic backup first, so this is undoable.`;
       if (!confirm(warn)) return;
       try {
-        const res = await db.restoreSnapshot(id);
+        const res = await db.restoreSnapshot(id, collectPrefs());
         if (res.prefs) await applyPrefs(res.prefs);
         alert(`Restored: ${countsSummary(res.counts)}.`);
         render();
@@ -8816,7 +9160,7 @@ async function renderSettings() {
           file.value = ''; return;
         }
       }
-      const res = await db.importJSON(text, { merge });
+      const res = await db.importJSON(text, { merge, prefs: collectPrefs() });
       if (res.prefs) await applyPrefs(res.prefs); // restore the five shared lists / theme / view too
       alert(`Imported ${res.lists} template(s) and ${res.events} trip(s)${res.actions ? ` and ${res.actions} to-do(s)` : ''}.`
         + (merge ? '' : '\n\nYour previous data was saved under Settings → Automatic backups, in case you want it back.'));
@@ -9778,8 +10122,95 @@ function applyPresetToForm(form, config) {
   if (laundry) laundry.checked = !!config.laundry;
 }
 
+// The six grab lists, for the backup file.
+//
+// 🚨 WHY THIS EXISTS. Until v161 the grab lists were the one part of this app that
+// existed in exactly ONE place: three browser keys on one device. db.js had never
+// heard of them, collectPrefs did not carry them, and they do not sync — so the
+// names, doodles, colours and contents Martin built up across v140–v154 had no
+// second copy anywhere. Worse, the app's own documented cure for a sync problem
+// ("Replace this device with the account copy") ERASES the device, which would
+// have taken them with it while looking like a repair.
+//
+// The RAW keys are read on purpose, never loadGrabItems(): that helper falls back
+// to the factory list, and writing factory defaults into a backup as if they were
+// his own work is precisely the v118 mistake. An untouched list has no key, carries
+// nothing, and restores as the factory list on the far side — which is correct.
+//
+// Ticks are deliberately left out. They reset themselves after six hours; a tick
+// is a fact about this morning's swim, not something to carry into next year.
+function collectGrabPrefs() {
+  const read = (key) => {
+    try {
+      const o = JSON.parse(localStorage.getItem(key) || 'null');
+      return (o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).length) ? o : null;
+    } catch { return null; }
+  };
+  const items = read(GRAB_ITEMS_KEY) || {};
+  const meta = read(GRAB_META_KEY) || {};
+  // (v163) Since the lists can now live in the ACCOUNT as well, a backup taken on a
+  // device that received them by sync would otherwise carry nothing at all — this
+  // device never wrote them to localStorage. So the backup captures what you can
+  // actually SEE. A button is included when it has been edited SOMEWHERE — a local
+  // entry or an account row; a button that has neither has never been touched, and
+  // carries nothing, so a restore can never plant the factory list as your own work.
+  const shared = grabSharedMap();
+  const ids = [...new Set([...Object.keys(items), ...Object.keys(meta), ...shared.keys()])]
+    .filter((k) => GRAB_LISTS[k]);
+  if (!ids.length) return null;
+  const grab = { items: {}, meta: {} };
+  for (const gid of ids) {
+    grab.items[gid] = loadGrabItems(gid);
+    const look = loadGrabMeta(gid);
+    if (look && (look.label || look.icon || look.tone)) grab.meta[gid] = look;
+  }
+  if (!Object.keys(grab.meta).length) delete grab.meta;
+  return grab;
+}
+
+// Put the grab lists back from a backup file.
+//
+// MERGED PER LIST, never wholesale: a list the backup names is taken from the
+// backup, a list it does not mention is left exactly as this device has it. So
+// restoring can only ever give you a list back — it cannot cost you one you have
+// made since. A backup taken before v161 has no `grab` at all and this does
+// nothing, which is why the caller checks before touching the keys.
+function applyGrabPrefs(grab) {
+  if (!grab || typeof grab !== 'object') return;
+  const merge = (key, incoming) => {
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return;
+    let cur; try { cur = JSON.parse(localStorage.getItem(key) || '{}') || {}; } catch { cur = {}; }
+    if (!cur || typeof cur !== 'object' || Array.isArray(cur)) cur = {};
+    for (const [id, val] of Object.entries(incoming)) {
+      if (!GRAB_LISTS[id]) continue;              // ignore a list this build doesn't have
+      if (val && (Array.isArray(val) || typeof val === 'object')) cur[id] = val;
+    }
+    try { localStorage.setItem(key, JSON.stringify(cur)); } catch { /* ignore */ }
+  };
+  merge(GRAB_ITEMS_KEY, grab.items);
+  merge(GRAB_META_KEY, grab.meta);
+  // (v163) And offer them to the account — ADD-IF-ABSENT, exactly like the five
+  // older lists on a restore. A button the account already has is left alone, so
+  // restoring an old file on one device can never rewrite the other device's list.
+  const ids = [...new Set([...Object.keys(grab.items || {}), ...Object.keys(grab.meta || {})])]
+    .filter((k) => GRAB_LISTS[k]);
+  if (!ids.length) return;
+  const rows = grabToRows(ids.map((gid) => {
+    const look = (grab.meta && grab.meta[gid]) || {};
+    return {
+      id: gid,
+      items: Array.isArray(grab.items && grab.items[gid]) ? grab.items[gid] : loadGrabItems(gid),
+      label: look.label || '', icon: look.icon || '', tone: look.tone || '',
+    };
+  }));
+  rows.forEach((r) => { r.order = grabOrder(r.data.gid); });
+  db.addSharedRowsIfAbsent(rows).then(adoptSharedRows).catch(() => {});
+}
+
 function collectPrefs() {
   const prefs = { theme: currentTheme() };
+  const grab = collectGrabPrefs();
+  if (grab) prefs.grab = grab;
   try { const v = localStorage.getItem(VIEW_KEY); if (v) prefs.view = v; } catch { /* ignore */ }
   // Each of the five is carried only once it is a list you actually authored. An
   // untouched app runs on the code's defaults, and a backup must never plant those
@@ -9827,6 +10258,7 @@ async function applyPrefs(prefs) {
   if (meaningful('conditions', prefs.conditions)) {
     await saveConditions(prefs.conditions);
   }
+  if (prefs.grab) applyGrabPrefs(prefs.grab);
   await refreshShared();
 }
 
@@ -10107,9 +10539,16 @@ function watchForUpdate(reg) {
       return db.migrateSharedLists();
     })
     .then(async (r) => {
-      if (!r || !r.added) return;
-      logDiag('shared-lists', { adopted: r.kinds, rows: r.added });
-      await refreshShared();
+      if (r && r.added) {
+        logDiag('shared-lists', { adopted: r.kinds, rows: r.added });
+        await refreshShared();
+        renderIfIdle();
+      }
+      // The grab lists join the account here, AFTER the five older lists have
+      // settled — so this runs on a device that has already seen the account's
+      // copy and can therefore tell "the account has never heard of this button"
+      // from "I simply have not downloaded it yet".
+      await adoptGrabLists();
       renderIfIdle();
     })
     .catch((err) => logDiag('shared-lists', err));
