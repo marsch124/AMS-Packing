@@ -174,6 +174,7 @@ em {
   max-width: 720px;
   margin: 0 auto;
   padding: 12px 14px 24px;
+  overflow-x: clip;   /* v165: `clip`, not `hidden` — it makes no scroll container, so nothing sticky changes */
 }
 
 .screen {
@@ -381,8 +382,11 @@ em {
 }
 
 .iconbtn.sm {
-  width: 34px;
-  height: 34px;
+  /* v165: 34px was the app's smallest button and the one on every row — the pencil
+     you hit with a thumb. 40 sits between the old size and Apple's 44, without
+     making a row taller. */
+  width: 40px;
+  height: 40px;
 }
 
 .ic {
@@ -589,7 +593,8 @@ em {
 }
 .ev-countdown.soon {
   color: var(--brand-ink);
-  background: var(--brand);
+  /* the plain tab green under white text was 3.4:1 at 13px */
+  background: color-mix(in srgb, var(--brand) 70%, var(--ink));
   padding: 2px 9px;
   border-radius: 999px;
 }
@@ -766,7 +771,8 @@ em {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--warn);
+  /* amber alone reads 2.85:1 on the tinted card — darkened towards ink to pass */
+  color: color-mix(in srgb, var(--warn) 62%, var(--ink));
 }
 .expire-list {
   margin: 8px 0 10px;
@@ -787,7 +793,7 @@ em {
 .nudge.review .nudge-ic { color: var(--ok); }
 .nudge.review .btn {
   border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
-  color: var(--ok);
+  color: color-mix(in srgb, var(--ok) 62%, var(--ink));   /* 3.4:1 as plain --ok */
   white-space: nowrap;
 }
 
@@ -943,6 +949,10 @@ legend {
 
 .seg input {
   position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
   opacity: 0;
   pointer-events: none;
 }
@@ -1036,6 +1046,11 @@ legend {
 }
 
 .check {
+  /* v165: the invisible checkbox inside is position:absolute, and without this it
+     was placed against the nearest positioned ANCESTOR — the whole form — at a
+     width of a few hundred pixels, poking 45–230px past the right edge of the
+     screen. Home and Event settings could be dragged sideways on the phone. */
+  position: relative;
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 8px 13px;
@@ -1052,6 +1067,10 @@ legend {
 
 .check input {
   position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
   opacity: 0;
   pointer-events: none;
 }
@@ -1534,6 +1553,8 @@ a.rd-stat.rd-link::after {
   gap: 10px;
 }
 
+.setup-val .nw { white-space: nowrap; }
+
 .setup-tile {
   display: flex;
   align-items: center;
@@ -1881,6 +1902,12 @@ a.rd-stat.rd-link::after {
   align-items: center;
   gap: 7px;
   color: var(--warn-txt);
+  flex: none;
+  white-space: nowrap;   /* the name is two words; the count is what may shrink */
+}
+.card.lst.loose-card .lst-count {
+  min-width: 0;
+  text-align: right;
 }
 
 .card.lst.loose-card .lst-name .ic {
@@ -1925,12 +1952,22 @@ a.rd-stat.rd-link::after {
   box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--cover) 40%, transparent);
 }
 .tmpl-emoji { font-size: 1.5rem; line-height: 1; }
-.tmpl-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* Block, not flex: a flex item gets "blockified" past -webkit-box, which turns the
+   two-line clamp below into a hard cut with no ellipsis. */
+.tmpl-body { min-width: 0; display: block; }
+.tmpl-body > .tmpl-count { display: block; margin-top: 2px; }
 .tmpl-name {
   font-weight: 600;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* v165: two lines before the ellipsis — at four columns on the Mac, "Breath work"
+     and "Plane (base)" were losing their second word. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.2;
+  /* A flex item can be "blockified" past -webkit-box in some engines; the max-height
+     guarantees the two-line cap either way, the clamp adds the ellipsis where it can. */
+  max-height: 2.4em;
 }
 .tmpl-count { color: var(--muted); font-size: .82rem; }
 
@@ -2649,21 +2686,22 @@ a.rd-stat.rd-link::after {
   padding: 3px 10px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--ok) 16%, transparent);
-  color: var(--ok);
+  color: color-mix(in srgb, var(--ok) 65%, var(--ink));   /* was 2.9:1 at 12px */
 }
 
 .rev-item.unused {
   background: var(--line-2);
 }
 
+/* No strikethrough: the grey ground and the red pill already say it twice, and a
+   crossed-out name is harder to read — the same call as v141's grab lists. */
 .rev-item.unused .rev-name {
-  text-decoration: line-through;
   color: var(--muted);
 }
 
 .rev-item.unused .rev-tag {
   background: color-mix(in srgb, var(--danger) 15%, transparent);
-  color: var(--danger);
+  color: color-mix(in srgb, var(--danger) 78%, var(--ink));
 }
 
 /* bottom tab bar */
@@ -2821,11 +2859,15 @@ a.rd-stat.rd-link::after {
 
 .ev-hint {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   margin: 2px 0 10px;
   font-size: .84rem;
 }
+/* The icon is its own flex item; the sentence must be ONE item too, or a flex row
+   lays "Long-press" and the rest side by side and wraps the bold word in half. */
+.ev-hint .ic { flex: none; margin-top: 2px; }
+.ev-hint > span { flex: 1 1 auto; min-width: 0; }
 
 /* A long-press on a trip card opens our menu, so suppress iOS's own link callout
    and the text selection that a slow press would otherwise start. */
@@ -6556,8 +6598,9 @@ table.grid {
    as .btn.primary.grab-ready so it outweighs .btn.primary's own background. */
 .btn.primary.grab-ready {
   margin-top: 4px;
-  background: var(--ok);
-  border-color: var(--ok);
+  /* still the green door — but white on plain --ok was 3.4:1, so a shade deeper */
+  background: color-mix(in srgb, var(--ok) 72%, var(--ink));
+  border-color: color-mix(in srgb, var(--ok) 72%, var(--ink));
   color: #fff;
   justify-content: center;
 }

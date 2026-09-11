@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v164';
+const APP_VERSION = 'v165';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -825,7 +825,7 @@ function manageGridColumns(order) {
 async function renderItemsGrid() {
   const wrap = h('<section class="screen screen-grid"></section>');
   wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">All items · table</h1></div>`));
-  wrap.appendChild(h('<p class="muted pad">Edit lots of items at once. Fields under <b>the item itself</b> (weight, storage, flags, colour…) update the item <b>everywhere</b> it’s used. Tap a template box to file the item in or out. <b>Qty/Section</b> are editable when an item is in a single template. Use the toolbar to <b>sort</b> the table and reorder columns with <b>Columns</b>; swipe sideways for more columns.</p>'));
+  wrap.appendChild(h('<p class="muted pad">Every item on one line. Fields under <b>the item itself</b> change it everywhere; a template box files it in or out. <b>Columns</b> picks and orders the columns — swipe sideways for more.</p>'));
 
   let lists = await db.getLists();
   let rowsById = new Map();
@@ -2674,8 +2674,14 @@ function eventCardHTML(e) {
   const meta = (quick
     ? ['⏱️ Quick', e.season, ...(e.contexts || [])]
     : [e.transport, e.season, cateringShort(e.catering), ...(e.contexts || [])]).filter(Boolean);
+  // A finished trip counts from the day you got HOME, not the day you left: "10
+  // days ago" on a card for a trip that ended three days ago read like a different
+  // trip from Home's "you got back 3 days ago". And a trip you are on says so
+  // instead of counting up from a departure that has already happened.
   const dToGo = daysUntil(e.startDate);
-  const countdown = dToGo != null ? esc(countdownLabel(dToGo)) : '';
+  const dEnd = daysUntil(tripEndDate(e));
+  const away = dToGo != null && dToGo < 0 && dEnd != null && dEnd >= 0;
+  const countdown = away ? 'Away now' : (dEnd != null && dEnd < 0) ? esc(countdownLabel(dEnd)) : dToGo != null ? esc(countdownLabel(dToGo)) : '';
   const soon = dToGo != null && dToGo >= 0 && dToGo <= 7;
   // A boarding-pass style sub-line: destination + trip length when known.
   const endVal = e.endDate || endFromNights(e.startDate, e.nights);
@@ -2845,7 +2851,7 @@ async function renderEvents() {
     wrap.appendChild(h('<div class="empty"><p class="empty-t">No events yet</p><p class="empty-s">Head to Home to build your first trip’s combined Packing List.</p></div>'));
     return wrap;
   }
-  wrap.appendChild(h(`<p class="muted pad ev-hint">${ic('more','sm')}<b>Long-press</b> a trip (or right-click on a Mac) for quick actions — mark everything packed, rename, share, delete.</p>`));
+  wrap.appendChild(h(`<p class="muted pad ev-hint">${ic('more','sm')}<span><b>Hold</b> a trip (right-click on the Mac) for more — pack everything, rename, share, delete.</span></p>`));
   // Group headers make the nearest-first ordering legible at a glance.
   const groupOf = (e) => { const d = daysUntil(e.startDate); return d == null ? 'undated' : d >= 0 ? 'upcoming' : 'past'; };
   const labels = { upcoming: 'Upcoming', undated: 'No date set', past: 'Past trips' };
@@ -3457,6 +3463,10 @@ function eventForm(ev, lists, isEdit) {
     // re-anchors the range — so the old "End date is before the start date"
     // warning has nothing left to warn about.
     nightsHint.textContent = msg;
+    // Once both dates are in, the field itself reads "… · 8 days · 7 nights" and this
+    // line said exactly the same underneath it. It now only speaks while there is
+    // still something to ask for.
+    nightsHint.hidden = !!(startInput.value && endInput.value);
   }
   datesField.addEventListener('change', refreshNights);
   refreshNights();
@@ -3643,7 +3653,19 @@ async function renderEvent(eventId) {
 
   wrap.appendChild(tripSetupCard(ev));
 
-  const nudge = tripNudge(ev);
+  // (v165) A trip that is over has nothing left to "pack now" — this banner used to
+  // read "10 days ago — 1 item to pack now" on a finished trip. Once home, the
+  // useful prompt is the review, so an unreviewed trip gets that card instead.
+  const endedDays = daysUntil(tripEndDate(ev));
+  const ended = endedDays != null && endedDays < 0;
+  const nudge = ended ? null : tripNudge(ev);
+  if (ended && !ev.reviewedAt && ev.entries.some((x) => x.itemType !== 'reminder')) {
+    wrap.appendChild(h(`<a class="nudge review" href="#/event/${ev.id}/review">
+      <span class="nudge-ic">${ic('check','md')}</span>
+      <span class="nudge-body"><b>How did it go?</b> — you got back ${esc(endedDays === -1 ? 'yesterday' : `${-endedDays} days ago`)}. Tell the app what you didn’t use and it starts trimming your lists.<span class="nudge-sub">Takes a minute</span></span>
+      <span class="nudge-go">${IC.fwd}</span>
+    </a>`));
+  }
   if (nudge && nudge.dueCount > 0) {
     wrap.appendChild(h(`<a class="nudge" href="#/event/${ev.id}/pack">
       <span class="nudge-ic">${ic('clock','md')}</span>
@@ -3810,7 +3832,9 @@ function tripSetupCard(ev) {
   const endVal = ev.endDate || endFromNights(ev.startDate, ev.nights);
   if (ev.startDate || endVal) {
     const n = nightsBetween(ev.startDate, endVal);
-    const sub = n == null ? '' : n === 0 ? ' · day trip' : ` · ${n} night${n === 1 ? '' : 's'}`;
+    // The night count is one phrase: in a narrow tile "2026 · 7" and "nights" were
+    // landing on different lines.
+    const sub = n == null ? '' : n === 0 ? ' · <span class="nw">day trip</span>' : ` · <span class="nw">${n} night${n === 1 ? '' : 's'}</span>`;
     tile(ic('cal', 'md'), 'Dates', `${esc(prettyRange(ev.startDate, endVal))}${sub}`);
   }
   if (ev.destination) tile(ic('pin', 'md'), 'Destination', esc(ev.destination));
@@ -3887,12 +3911,18 @@ function readinessDashboard(ev, openTodos = 0) {
 
   // Days to go — a big value plus a short label, "soon" when it's within a week.
   const d = daysUntil(ev.startDate);
+  const dEnd = daysUntil(tripEndDate(ev));
   let daysVal, daysLbl, daysState = '';
   if (d == null) { daysVal = '—'; daysLbl = 'no date set'; }
   else if (d > 1) { daysVal = String(d); daysLbl = 'days to go'; if (d <= 7) daysState = 'soon'; }
   else if (d === 1) { daysVal = '1'; daysLbl = 'day to go'; daysState = 'soon'; }
   else if (d === 0) { daysVal = 'Today'; daysLbl = 'departure'; daysState = 'soon'; }
-  else { daysVal = String(-d); daysLbl = `day${d === -1 ? '' : 's'} ago`; }
+  else if (dEnd != null && dEnd >= 0) {
+    // On the trip: which day of it, rather than how long since you left.
+    const total = (nightsBetween(ev.startDate, tripEndDate(ev)) ?? 0) + 1;
+    daysVal = `Day ${1 - d}`; daysLbl = `of ${total} · away now`; daysState = 'soon';
+  }
+  else { const back = dEnd != null ? -dEnd : -d; daysVal = String(back); daysLbl = `day${back === 1 ? '' : 's'} since home`; }
 
   // Packed weight — flagged when any bag is over its limit.
   let wtVal, wtLbl, wtState = '';
@@ -5229,7 +5259,7 @@ async function renderReview(eventId) {
   missIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addMissing(); } });
   if (fileOpts.length) wrap.appendChild(missCard);
 
-  wrap.appendChild(h(`<p class="muted pad">Now tap anything you <b>didn’t use</b>. Everything starts marked used — over a couple of trips the app learns what to trim.</p>`));
+  wrap.appendChild(h(`<p class="muted pad">Tap anything you <b>didn’t use</b>.</p>`));
 
   const counter = h('<div class="rev-counter"></div>');
   wrap.appendChild(counter);
@@ -5276,7 +5306,7 @@ async function renderReview(eventId) {
 
   if (neverPacked.length) {
     addGroup(`Never went in the bag`, neverPacked, true,
-      'You didn’t tick these while packing, so the app is treating them as left behind rather than packed and unused. Nothing to do here unless you actually took one after all — tap it to say so.');
+      'Not ticked while packing, so counted as left behind — tap one if you took it after all.');
   }
   for (const cg of groupByCategory(rest)) addGroup(cg.category, cg.entries, false);
 
@@ -5481,7 +5511,7 @@ async function renderList(listId, openItemId) {
   if (isLoose) {
     wrap.appendChild(h(`<p class="muted pad">A holding place for things not in any template yet — add anything here, even if you don’t know where or when you’ll pack it. Open an item and tick a template under <b>In these templates</b> to file it; once it’s in a template it leaves this list.</p>`));
   } else if (isContainer) {
-    wrap.appendChild(h(`<p class="muted pad">Your bags, duffels and backpacks as things in their own right — add photos, colour, brand, capacity, where each one lives and how to look after it. A container’s maintenance shows up on the <b>Care</b> tab, and every container here is offered when you pick where an item is packed.</p>`));
+    wrap.appendChild(h(`<p class="muted pad">Your bags, duffels and backpacks as things in their own right — photos, capacity, where each one lives, how to look after it. Every one of them is offered when you choose where an item is packed.</p>`));
   }
   const groupOpts = [{ value: '', label: '— no group —' }, ...GROUPS.map((g) => ({ value: g.id, label: `${g.id} · ${g.label}` }))];
   wrap.appendChild(h(`<div class="toolbar">
@@ -6426,7 +6456,7 @@ async function renderMaintenance() {
   // rows-length check on purpose, so the empty state is labelled too.
   // (Two elements, so two appends — `h()` returns only the first element it finds.)
   wrap.appendChild(h(`<div class="ai-head care-head"><h2>${ic('wrench')}<span>Maintenance list</span></h2></div>`));
-  wrap.appendChild(h('<p class="ai-hint">Everything you’ve given a care schedule or care notes, from every template, with whatever needs doing first at the top.</p>'));
+  wrap.appendChild(h('<p class="ai-hint">Everything with a care schedule or care notes — whatever needs doing first, at the top.</p>'));
 
   // One frame around the whole list — its counts, its List/Calendar toggle and every
   // row — so it reads as a single bounded section rather than trailing off into the
@@ -6483,7 +6513,23 @@ async function renderMaintenance() {
   }
 
   // ---- Below: browse every item and jump straight to its editor ----------
-  wrap.appendChild(allItemsSection(lists));
+  // (v165) The whole catalogue used to sit OPEN beneath the maintenance list — some
+  // thirty thousand pixels of page on the phone before you reached the end of Care.
+  // It now starts folded, carries its count on the line, and remembers whether you
+  // left it open, the same way every Settings section does.
+  const items = allItemsSection(lists);
+  const uniq = new Set(lists.flatMap((l) => (l.items || []).map((it) => it._itemId || it.id))).size;
+  const headH2 = items.querySelector('.ai-head > h2');
+  if (headH2) headH2.remove();                        // the fold's own line names it
+  const fold = h(`<div class="card block sset-card" style="--tone:var(--brand)">
+    <details class="howto sset" data-sset="care-items"${settingsOpen('care-items', false) ? ' open' : ''}>
+      ${foldSummary('All items', `${uniq} item${uniq === 1 ? '' : 's'} — search, filter, or add one`, 'list')}
+    </details></div>`);
+  const det = fold.querySelector('details');
+  items.classList.add('howto-body');
+  det.appendChild(items);
+  rememberFold(det, 'care-items');
+  wrap.appendChild(fold);
 
   return wrap;
 }
@@ -7303,6 +7349,7 @@ function howtoCard() {
 
         <h3>Care, storage &amp; maintenance</h3>
         <p>Every item can carry a few extra things about the <em>physical object</em>, set in its editor (in the <b>Templates</b> tab) — its <b>photos sit right beside the item name</b>, while where it's stored and how to look after it live in the <b>Storage &amp; maintenance</b> panel below:</p>
+        <p><b>One row per item (v165).</b> An item that sits in several templates is one item with one care record, so the maintenance list shows it once and names every template it belongs to — and <b>Done</b> is done for all of them.</p>
         <ul>
  <li><b>Where it's stored</b> — pick the item's home from a <b>dropdown</b> of places (Bedroom wardrobe, Garage, Loft / attic, Storage box, RV / camper…), or choose <b>＋ Add a new place…</b> to type your own. It shows on the item, travels onto any trip it lands in, and appears in <b>Packing Mode</b> with a pin so you know exactly where to grab it. Manage the whole list — add, <b>rename</b>, remove or <b>reorder</b> places — under <b>Storage places</b> in <b>Settings</b>. <b>The order you put them in there is the order in this dropdown</b>, so the two or three places you actually use can sit at the top instead of wherever the alphabet puts them.</li>
  <li><b>Photos</b> (beside the name) — snap or pick <b>up to ${MAX_PHOTOS} pictures</b> of the item; each is shrunk and stored <b>on your device</b> (never uploaded). Tap a thumbnail to enlarge it, or the to remove it. Handy to recognise the right gear — the first one shows as a thumbnail in the Care list, with a small count when there's more than one. Pictures are kept in their own place and the item just points at them, so your lists and backups stay quick; if you ever want to reclaim space, <b>Settings → Your data → Tidy up photos</b> frees any picture nothing uses any more.</li>
@@ -7341,6 +7388,7 @@ function howtoCard() {
 
         <h3>Countdown &amp; “pack now” nudges</h3>
  <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b></b> maintenance nudge when gear is overdue or due soon, a <b>shopping</b> nudge when you’ve things to buy, a <b>“To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), a green <b>trip review</b> card once a trip is over, and a <b></b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
+        <p><b>Which day it counts from (v165).</b> Before a trip, the countdown counts down to the day you leave. Once you are away, the trip card says <b>Away now</b> and the trip's own tile says which day of the trip it is. After you are home, both count from the day you <em>got back</em> — the same number Home uses when it asks how the trip went.</p>
         <p>Home keeps <b>one</b> pack-now slot, and it belongs to a trip you still have to pack for. Before v161 a trip that had already <em>happened</em> could take it: a finished trip still holding a few unticked items counted as “sooner” than any trip in the future, so it sat at the top for good reading <b>“Norway 40 days ago — 12 items to pack now”</b>. Finished trips now have their own card — the review one — and leave that slot alone.</p>
 
         <h3>Packing Mode</h3>
@@ -7434,6 +7482,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v165', '2026-09-11 · 13:30 UTC', false, 'A walk through every screen — one real bug, and a round of polish',
+      '<b>You asked for the whole app to be walked through, screen by screen, with an eye for anything crude.</b> Nineteen screens, at phone size and Mac size, plus an automatic check of every one for text that cannot be read, buttons too small to hit, and things poking off the edge. Here is what it found.<br><br><b>The bug: the Care list showed the same item once per template.</b> Since v108 a jacket filed under Golf, Hiking and Travel is <em>one</em> jacket — but the maintenance list still walked every template and listed it three times, Home said <b>“3 overdue”</b> for one item, and pressing <b>Done</b> on one row quietly cleared the other two. It is now one row, naming every template it belongs to.<br><br><b>A finished trip now counts from the day you got home.</b> The Events card said <b>“10 days ago”</b> for a trip that ended three days ago, while Home said <b>“you got back 3 days ago”</b> — two different numbers for one trip, because the card counted from the day you <em>left</em>. It counts from the return now, and so does the big tile at the top of a trip. A trip you are <em>on</em> no longer counts up from a departure that has already happened either: the card says <b>“Away now”</b> and the tile says <b>“Day 3 of 8”</b>.<br><br><b>Five things that were hard to read, fixed.</b> The amber heading on the “won’t last the trip” card, the green <b>Review it</b> button text, the <b>Used / Didn’t use</b> pills on the review, the green <b>“in 5 days”</b> badge and the <b>Ready to go</b> button all measured between 2.9 and 3.4 to 1 against their backgrounds; the minimum for text that size is 4.5. Each is a shade deeper now and passes — same colours, just less washed out.<br><br><b>And the small crude things.</b> The “Long-press a trip…” hint on Events wrapped its bold word in half beside three lines of text — it is one short sentence now. <b>Loose items</b> on Templates broke its own name onto two lines. The Event settings form repeated <b>“8 days · 7 nights”</b> directly beneath a field that already said it. The introductions on <b>Containers</b> and <b>All items · table</b> ran to six and seven lines on the phone before the first thing you came for; each is two now. <b>Home and Event settings could be dragged sideways on the phone</b> — the invisible checkbox behind each activity pill was sitting a few hundred pixels wide, past the edge of the screen; it now sits exactly behind its pill, and the app as a whole can no longer scroll sideways. The review screen, new last week, had more explanation than list above its first row — trimmed — and its “didn’t use” rows lose their strikethrough, for exactly the reason the grab lists lost theirs in v141: the grey ground and the red pill already say it.<br><br><b>And four you chose from the list of judgement calls.</b> The small round buttons on every row — the pencil you hit with a thumb — grow from 34 to <b>40 pixels</b>, without making a row taller. On the <b>Care</b> tab the whole catalogue used to sit open beneath the maintenance list, making the page some thirty thousand pixels tall on the phone; <b>All items</b> there now starts <b>folded</b>, with its count on the line, and remembers whether you left it open. <b>Template names</b> on the Templates grid may run to <b>two lines</b> before they are cut short, so “Breath work” and “Plane (base)” keep their second word on the Mac. And the last of the long introductions — the maintenance list, Maintenance mode and the card that leads to it from Settings — are each one line now.',
+      'The Care list stops counting one jacket three times, a finished trip says when you got home, and nothing on any screen is too faint to read.'),
     v('v164', '2026-09-11 · 09:30 UTC', false, 'Re-send now covers the grab lists — and Sync says which ones have reached your account',
       '<b>You checked a grab list on both devices the morning after v163 and it had not travelled.</b> A look in your account showed why it was hard to see: exactly <b>one</b> of the six lists had arrived — <em>Outdoor run</em> — and nothing anywhere said so. v163 lifts a device’s lists into the account <b>once, when it first opens</b>; if that moment passes with the device offline, signed out, or with the lists sitting in a different browser container from the one that opened, the lists stay where they were and the app quietly considers the job done. There was no second attempt and no button that made one.<br><br><b>(1) Re-send my lists now sends the grab lists too.</b> Before, <b>Settings → Sync your devices → Re-send my lists</b> could only repeat entries the account already held — a grab list still sitting in this device’s own storage had no way up at all, and the button said “Sent” regardless. Now it <b>lifts any grab list that exists only on this device</b> first, then sends. It still only ever <b>adds</b>: a list the account already has is left alone, so pressing it on the wrong device cannot overwrite the right one. Press it on the device whose lists are <b>right</b>, exactly as for the other lists.<br><br><b>(2) Sync now says where the grab lists stand.</b> A new line under the buttons reads, for instance, <b>“Grab lists: 3 in your account · 2 only on this device (Bike, Pool) — press Re-send my lists to send them up”</b>. That is the whole point: a list that has not reached the account must say so, on the device that has it, in a sentence you can act on — the same lesson the storage places taught in v129.<br><br><b>(3) When two copies disagree, it asks you.</b> Only one list had reached the account, and your phone — the device whose lists matter — still held its own copy of the same list. Adding-if-absent would have made the phone quietly <em>show the account’s copy</em> instead of its own, which reads as “my list changed on its own”. So where this device’s copy and the account’s differ, <b>Home</b> now shows a card naming the list, with <b>Use this device’s</b> and <b>Keep the account’s</b>. Asked once; whichever you pick, the two agree from then on.<br><br><b>(4) And it writes down what it did.</b> Each lift, and each answer to that question, is recorded under <b>Settings → Diagnostics</b>, so “did my lists go up?” can be answered from the phone rather than by inspecting the account.',
       'A grab list that stayed behind on one device now tells you so, and one press sends it up.'),
@@ -8665,7 +8716,7 @@ async function renderSettings() {
 
   const overviewLink = h(`<a class="care-link" href="#/overview">
     <span class="care-link-ic">${ic('folder','md')}</span>
-    <span class="care-link-body"><b>Maintenance mode — database overview</b><span class="care-link-sub">Every item on one line, the templates it’s in, its flags &amp; storage — with look-alikes flagged, so you can keep the whole catalog tidy</span></span>
+    <span class="care-link-body"><b>Maintenance mode — database overview</b><span class="care-link-sub">Every item on one line — templates, flags, storage, look-alikes flagged</span></span>
     <span class="care-link-go">${IC.fwd}</span>
   </a>`);
 
@@ -9442,7 +9493,7 @@ async function renderOverview() {
   const dupIds = duplicateIds(rows);
   const realTemplates = lists.filter((l) => !l.role).length;
 
-  wrap.appendChild(h(`<p class="ov-intro">One line per item across your whole catalogue — the templates it’s in, its flags, weight and where it’s stored. Tap any row to open that item; tap a template name to jump to the template. Use it to keep everything tidy and spot anything that’s drifted.</p>`));
+  wrap.appendChild(h(`<p class="ov-intro">Every item on one line — templates, flags, weight, where it’s stored. Tap a row to open the item, a template name to jump to it.</p>`));
 
   // Headline stats.
   const stat = (n, label) => `<span class="ov-stat"><b>${n}</b> ${label}</span>`;

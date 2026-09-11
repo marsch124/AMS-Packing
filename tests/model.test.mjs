@@ -3455,3 +3455,24 @@ test('expiringOnTrip: one line per thing, and reminders are not gear', () => {
   assert.equal(r.length, 1);
   assert.equal(r[0].entry.sourceItemId, 'item-x');
 });
+
+// --- v165: the Care list shows an item once, however many templates hold it ---
+
+test('maintenanceList: one row per item across templates, naming all of them', () => {
+  const jacket = newItem({ name: 'Shell jacket', maintenance: { notes: 'Re-proof', link: '', intervalDays: 180, lastDone: '2025-12-01', log: [] } });
+  const golf = newList({ name: 'Golf', items: [jacket] });
+  const hike = newList({ name: 'Hiking', items: [jacket] });
+  const travel = newList({ name: 'Travel', items: [jacket] });
+  const rows = maintenanceList([golf, hike, travel], '2026-09-11');
+  assert.equal(rows.length, 1, 'was three rows — and Home said "3 overdue" for one jacket');
+  assert.equal(rows[0].listName, 'Golf, Hiking, Travel');
+  assert.deepEqual(rows[0].listNames, ['Golf', 'Hiking', 'Travel']);
+  assert.equal(rows[0].status.state, 'overdue');
+});
+
+test('maintenanceList: different items are still separate rows', () => {
+  const a = newItem({ name: 'Boots', maintenance: { notes: 'Wax', link: '', intervalDays: 90, lastDone: '2026-09-01', log: [] } });
+  const b = newItem({ name: 'Tent', maintenance: { notes: 'Seal seams', link: '', intervalDays: 365, lastDone: '2026-01-01', log: [] } });
+  const rows = maintenanceList([newList({ name: 'Camp', items: [a, b] })], '2026-09-11');
+  assert.equal(rows.length, 2);
+});

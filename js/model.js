@@ -2603,10 +2603,21 @@ const MAINT_RANK = { overdue: 0, soon: 1, ok: 2, reference: 3 };
 export function maintenanceList(lists, todayISO) {
   const today = todayYMD(todayISO);
   const out = [];
+  // ONE ROW PER ITEM. Since v108 an item lives once in the catalogue and merely
+  // appears in each template it belongs to — so a jacket filed under Golf, Hiking
+  // and Travel is one jacket with one care record. Walking every template's items
+  // listed it three times, Home counted "3 overdue", and pressing Done on one row
+  // silently cleared the other two. The first template met names the row; the
+  // rest join it as "Golf, Hiking, Travel", the way All items already reads.
+  const seen = new Map();
   for (const l of asArray(lists)) {
     for (const it of asArray(l.items)) {
       if (!hasCare(it)) continue;
-      out.push({ listId: l.id, listName: l.name || '', item: it, status: maintenanceStatus(it, today) });
+      const prev = it.id && seen.get(it.id);
+      if (prev) { if (l.name && !prev.listNames.includes(l.name)) { prev.listNames.push(l.name); prev.listName = prev.listNames.join(', '); } continue; }
+      const row = { listId: l.id, listName: l.name || '', listNames: [l.name || ''].filter(Boolean), item: it, status: maintenanceStatus(it, today) };
+      if (it.id) seen.set(it.id, row);
+      out.push(row);
     }
   }
   out.sort((a, b) => {
