@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v163';
+const APP_VERSION = 'v164';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1715,14 +1715,36 @@ function saveGrabItems(id, items) {
 // the buttons the first one had never edited. Nothing is invented: a button with
 // no localStorage entry has never been edited and is left to the factory list.
 const GRAB_ADOPTED_KEY = 'ams-grab-adopted';
-async function adoptGrabLists() {
-  try { if (localStorage.getItem(GRAB_ADOPTED_KEY) === '1') return; } catch { return; }
+// v164: the same lift, but callable on demand. `force` bypasses the once-only
+// flag — it is what the Re-send button uses, because the flag can be set on a
+// device whose lists never actually went anywhere (offline at the time, signed
+// out, or lists that were only ever edited in a different browser container), and
+// nothing before v164 could ever try again. Still ADD-IF-ABSENT even when forced:
+// Re-send has always meant "adds to the other device, removes nothing", and a
+// button that could overwrite the other device's newer list would break that.
+async function liftGrabLists({ force = false } = {}) {
+  if (!force) {
+    try { if (localStorage.getItem(GRAB_ADOPTED_KEY) === '1') return { lifted: 0, already: true }; } catch { return { lifted: 0 }; }
+  }
   let items = {}; let meta = {};
   try { items = JSON.parse(localStorage.getItem(GRAB_ITEMS_KEY) || '{}') || {}; } catch { items = {}; }
   try { meta = JSON.parse(localStorage.getItem(GRAB_META_KEY) || '{}') || {}; } catch { meta = {}; }
   const ids = [...new Set([...Object.keys(items), ...Object.keys(meta)])].filter((k) => GRAB_LISTS[k]);
-  if (ids.length) {
-    const rows = grabToRows(ids.map((gid) => ({
+  const before = grabSharedMap();
+  const candidates = ids.filter((gid) => !before.has(gid));
+  // The one case add-if-absent cannot settle: this device has its OWN copy of a
+  // list the account already holds, and the two differ. Both are his — the
+  // account's came from the other device, this one was edited here before the
+  // lists synced. Neither is "newer" in any way the app can know, so it is not
+  // decided here: it is written down, and Home asks him which to keep, once.
+  // Before v164 the account's copy simply won on screen and the local one went
+  // quiet, which on the phone — the device whose lists matter — would have read
+  // as "my list changed on its own".
+  const conflicts = ids.filter((gid) => before.has(gid) && grabLocalDiffers(gid, before.get(gid), items, meta));
+  if (conflicts.length) rememberGrabConflicts(conflicts);
+  let lifted = 0;
+  if (candidates.length) {
+    const rows = grabToRows(candidates.map((gid) => ({
       id: gid,
       items: Array.isArray(items[gid]) ? items[gid] : loadGrabItems(gid),
       label: (meta[gid] && meta[gid].label) || '',
@@ -1730,9 +1752,78 @@ async function adoptGrabLists() {
       tone: (meta[gid] && meta[gid].tone) || '',
     })));
     rows.forEach((r) => { r.order = grabOrder(r.data.gid); });
-    try { adoptSharedRows(await db.addSharedRowsIfAbsent(rows)); } catch { return; }
+    try { adoptSharedRows(await db.addSharedRowsIfAbsent(rows)); } catch (err) { logDiag('grab-lift', err); return { lifted: 0, error: true }; }
+    const after = grabSharedMap();
+    lifted = candidates.filter((gid) => after.has(gid)).length;
+    // Written to Diagnostics on purpose: "did my lists go up?" must be answerable
+    // from Settings → Diagnostics → Copy log, not by reading the account.
+    logDiag('grab-lift', `lifted ${lifted} of ${candidates.length} (${candidates.join(', ')})${force ? ' — via Re-send' : ' — at start-up'}`);
   }
   try { localStorage.setItem(GRAB_ADOPTED_KEY, '1'); } catch { /* ignore */ }
+  return { lifted, alreadyThere: ids.length - candidates.length, onlyHere: candidates.length - lifted, conflicts };
+}
+async function adoptGrabLists() { return liftGrabLists(); }
+
+// Does this device's own copy of a list say something different from the account's?
+function grabLocalDiffers(gid, shared, items, meta) {
+  const norm = (a) => (Array.isArray(a) ? a : []).map((x) => String(x).trim()).filter(Boolean);
+  const li = Array.isArray(items[gid]) ? norm(items[gid]) : null;     // null = no local list
+  const lm = (meta[gid] && typeof meta[gid] === 'object') ? meta[gid] : {};
+  const itemsDiffer = li !== null && li.length > 0 && JSON.stringify(li) !== JSON.stringify(norm(shared.items));
+  const lookDiffer = ['label', 'icon', 'tone'].some((k) => (lm[k] || '') && (lm[k] || '') !== (shared[k] || ''));
+  return itemsDiffer || lookDiffer;
+}
+const GRAB_CONFLICTS_KEY = 'ams-grab-conflicts';
+function loadGrabConflicts() {
+  try { const a = JSON.parse(localStorage.getItem(GRAB_CONFLICTS_KEY) || '[]'); return Array.isArray(a) ? a.filter((k) => GRAB_LISTS[k]) : []; } catch { return []; }
+}
+function rememberGrabConflicts(ids) {
+  try { localStorage.setItem(GRAB_CONFLICTS_KEY, JSON.stringify([...new Set([...loadGrabConflicts(), ...ids])])); } catch { /* ignore */ }
+}
+function clearGrabConflicts() { try { localStorage.removeItem(GRAB_CONFLICTS_KEY); } catch { /* ignore */ } }
+// He chose. Either this device's copies go up and replace the account's, or the
+// account's are copied down so this device stops holding a different one. Both end
+// with the two agreeing, so the question is never asked again.
+async function resolveGrabConflicts(useMine) {
+  const ids = loadGrabConflicts();
+  let items = {}; let meta = {};
+  try { items = JSON.parse(localStorage.getItem(GRAB_ITEMS_KEY) || '{}') || {}; } catch { items = {}; }
+  try { meta = JSON.parse(localStorage.getItem(GRAB_META_KEY) || '{}') || {}; } catch { meta = {}; }
+  const shared = grabSharedMap();
+  for (const gid of ids) {
+    const row = shared.get(gid);
+    if (useMine) {
+      const look = (meta[gid] && typeof meta[gid] === 'object') ? meta[gid] : {};
+      await putGrabRow(gid, { items: Array.isArray(items[gid]) && items[gid].length ? items[gid] : loadGrabItems(gid), meta: look });
+    } else if (row) {
+      items[gid] = row.items.slice();
+      meta[gid] = { label: row.label || '', icon: row.icon || '', tone: row.tone || '' };
+    }
+  }
+  if (!useMine) {
+    try { localStorage.setItem(GRAB_ITEMS_KEY, JSON.stringify(items)); localStorage.setItem(GRAB_META_KEY, JSON.stringify(meta)); } catch { /* ignore */ }
+  }
+  clearGrabConflicts();
+  logDiag('grab-lift', `${useMine ? 'kept this device’s' : 'took the account’s'} copy of ${ids.join(', ')}`);
+  return ids.length;
+}
+
+// For the Sync card: which grab lists are in the account, and which exist only
+// on this device. The v129 lesson, applied here before it has to be learned
+// again — a list that has not reached the account must SAY so, on the device
+// that has it, in a sentence you can act on.
+function grabSyncSummary() {
+  let items = {}; let meta = {};
+  try { items = JSON.parse(localStorage.getItem(GRAB_ITEMS_KEY) || '{}') || {}; } catch { items = {}; }
+  try { meta = JSON.parse(localStorage.getItem(GRAB_META_KEY) || '{}') || {}; } catch { meta = {}; }
+  const local = [...new Set([...Object.keys(items), ...Object.keys(meta)])].filter((k) => GRAB_LISTS[k]);
+  const shared = grabSharedMap();
+  const onlyHere = local.filter((id) => !shared.has(id));
+  return {
+    inAccount: shared.size,
+    onlyHere,
+    onlyHereNames: onlyHere.map((id) => (getGrabDef(id) || {}).label || id),
+  };
 }
 // Ticks and "not this time" skips live in ONE record with ONE clock, on
 // purpose: a skip is a fact about this session, exactly like a tick, so the
@@ -2391,6 +2482,31 @@ async function renderHome() {
     nudge.querySelector('.nudge-x').addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
       hushReview(rev.id);
+      render();
+    });
+    wrap.appendChild(nudge);
+  }
+
+  // (v164) A grab list that exists in two different versions — this device's own
+  // copy and the account's. The app cannot know which is right, so it asks, once.
+  const gConf = loadGrabConflicts();
+  if (gConf.length) {
+    const names = gConf.map((id) => (getGrabDef(id) || {}).label || id);
+    const one = gConf.length === 1;
+    const nudge = h(`<div class="nudge grabconf">
+      <span class="nudge-ic">${ic('swap','md')}</span>
+      <span class="nudge-body"><b>Your ${esc(names.join(', '))} grab list${one ? ' is' : 's are'} different here and in your account</b> — both are yours: this device had its own copy before the lists began syncing. Pick the one that’s right; the other is replaced.<span class="nudge-sub">Asked once. Your other device shows the account’s copy until you decide.</span></span>
+      <span class="nudge-acts">
+        <button class="btn sm primary" type="button" data-gc="mine">${ic('check','sm')}<span>Use this device’s</span></button>
+        <button class="btn sm" type="button" data-gc="account">${ic('refresh','sm')}<span>Keep the account’s</span></button>
+      </span>
+    </div>`);
+    nudge.addEventListener('click', async (e) => {
+      const c = e.target.closest('[data-gc]')?.dataset.gc;
+      if (!c) return;
+      e.preventDefault(); e.stopPropagation();
+      const n = await resolveGrabConflicts(c === 'mine');
+      showToast(c === 'mine' ? `Sent this device’s ${n === 1 ? 'list' : `${n} lists`} to your account` : `Took the account’s ${n === 1 ? 'list' : `${n} lists`}`);
       render();
     });
     wrap.appendChild(nudge);
@@ -7005,7 +7121,7 @@ function howtoCard() {
           <li><b>Ticks clear themselves</b> after a few hours, so the list is always fresh for the next workout — there is nothing to reset (though a <b>Start over</b> button is there if you want one mid-session).</li>
           <li><b>The ✎ pencil also restyles the button itself</b>: give the list your own <b>name</b> (up to 14 letters — “Biz trip”, say), pick any of the <b>twelve hand-drawn doodles</b> (briefcase, plane, mountains, golf, gym, dog walk, and the six sport ones), and choose one of <b>six colours</b>. The Home button and the list’s own title change together; emptying the name field brings the standard name back, and <b>Cancel</b> undoes look changes along with everything else.</li>
           <li><b>The ✎ pencil edits the list</b>: tap a name to fix a typo, remove what you never take, add what is missing, and put things in the order you actually pick them up. <b>Tap ▲▼</b> to move one step, <b>hold</b> either to keep moving, or use <b>⤒⤓</b> to send something straight to the top or the bottom. <b>Done</b> keeps your changes; <b>Cancel</b> puts the list back exactly as it was when you tapped the pencil. Each list is its own — the bike list and the run list can differ.</li>
-          <li><b>They travel between your devices (v163)</b> — fix a typo on the Mac and the phone hands you the corrected list on the way out. Names, doodles, colours and contents all go. They ride in the <b>same list-of-lists the app has synced since v120</b> (alongside your storage places, packers, owners, conditions and trip presets) rather than in a store of their own — that is the point, because a brand-new synced store is exactly what went wrong in v120. Your existing lists are lifted into the account <b>once</b>, by whichever device opens v163 first, and only ever <b>added</b>: a button the account already knows about is never written over, so the second device contributes only what the first had never edited. Each device keeps its own copy too, so the lists still work with no signal and while signed out. <b>And since v161 they are in your backups</b>: the six lists, their names, doodles, colours and contents travel in the backup file and in every automatic on-device copy, and come back on a restore. Before that they existed in exactly one place, which meant the app’s own advice for a sync problem — <b>“Replace this device with the account copy”</b>, which empties the device first — would quietly have taken them with it. A restore <b>merges</b>: a list your backup knows about comes back, a list it has never heard of is left exactly as it is here, so restoring can only ever give you a list back. A list you have never edited carries nothing and simply arrives as the factory list, which is right.</li>
+          <li><b>They travel between your devices (v163)</b> — fix a typo on the Mac and the phone hands you the corrected list on the way out. Names, doodles, colours and contents all go. They ride in the <b>same list-of-lists the app has synced since v120</b> (alongside your storage places, packers, owners, conditions and trip presets) rather than in a store of their own — that is the point, because a brand-new synced store is exactly what went wrong in v120. Your existing lists are lifted into the account <b>once</b>, by whichever device opens v163 first, and only ever <b>added</b>: a button the account already knows about is never written over, so the second device contributes only what the first had never edited. Each device keeps its own copy too, so the lists still work with no signal and while signed out. <b>If one is missing on the other device (v164):</b> <b>Settings → Sync your devices</b> shows a <b>Grab lists</b> line saying how many are in your account and which exist only on this device; press <b>Re-send my lists</b> on the device that has them and they go up — it only ever adds. If a list exists in <em>two different versions</em> — this device's own and the account's — <b>Home</b> asks once which to keep. <b>And since v161 they are in your backups</b>: the six lists, their names, doodles, colours and contents travel in the backup file and in every automatic on-device copy, and come back on a restore. Before that they existed in exactly one place, which meant the app’s own advice for a sync problem — <b>“Replace this device with the account copy”</b>, which empties the device first — would quietly have taken them with it. A restore <b>merges</b>: a list your backup knows about comes back, a list it has never heard of is left exactly as it is here, so restoring can only ever give you a list back. A list you have never edited carries nothing and simply arrives as the factory list, which is right.</li>
           <li><b>Share a list</b> — the share arrow beside the pencil opens a <b>QR code</b> and a <b>link</b> carrying the list: its name, doodle, colour and everything on it. Whoever scans the code with the phone camera, or opens the link, is <b>offered the list</b> and taps which of their six Home buttons it should go on — that button’s list is replaced, the other five are untouched. Nothing is uploaded; the whole list travels inside the link. Because an installed app on the iPhone keeps its own storage (a link opened in Safari lands in Safari’s copy), there is also <b>Paste</b> under <b>Settings → Shared trips &amp; grab lists</b>: paste the link or the code, tap <b>Import</b>, pick a button, done.</li>
         </ul>
 
@@ -7318,6 +7434,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v164', '2026-09-11 · 09:30 UTC', false, 'Re-send now covers the grab lists — and Sync says which ones have reached your account',
+      '<b>You checked a grab list on both devices the morning after v163 and it had not travelled.</b> A look in your account showed why it was hard to see: exactly <b>one</b> of the six lists had arrived — <em>Outdoor run</em> — and nothing anywhere said so. v163 lifts a device’s lists into the account <b>once, when it first opens</b>; if that moment passes with the device offline, signed out, or with the lists sitting in a different browser container from the one that opened, the lists stay where they were and the app quietly considers the job done. There was no second attempt and no button that made one.<br><br><b>(1) Re-send my lists now sends the grab lists too.</b> Before, <b>Settings → Sync your devices → Re-send my lists</b> could only repeat entries the account already held — a grab list still sitting in this device’s own storage had no way up at all, and the button said “Sent” regardless. Now it <b>lifts any grab list that exists only on this device</b> first, then sends. It still only ever <b>adds</b>: a list the account already has is left alone, so pressing it on the wrong device cannot overwrite the right one. Press it on the device whose lists are <b>right</b>, exactly as for the other lists.<br><br><b>(2) Sync now says where the grab lists stand.</b> A new line under the buttons reads, for instance, <b>“Grab lists: 3 in your account · 2 only on this device (Bike, Pool) — press Re-send my lists to send them up”</b>. That is the whole point: a list that has not reached the account must say so, on the device that has it, in a sentence you can act on — the same lesson the storage places taught in v129.<br><br><b>(3) When two copies disagree, it asks you.</b> Only one list had reached the account, and your phone — the device whose lists matter — still held its own copy of the same list. Adding-if-absent would have made the phone quietly <em>show the account’s copy</em> instead of its own, which reads as “my list changed on its own”. So where this device’s copy and the account’s differ, <b>Home</b> now shows a card naming the list, with <b>Use this device’s</b> and <b>Keep the account’s</b>. Asked once; whichever you pick, the two agree from then on.<br><br><b>(4) And it writes down what it did.</b> Each lift, and each answer to that question, is recorded under <b>Settings → Diagnostics</b>, so “did my lists go up?” can be answered from the phone rather than by inspecting the account.',
+      'A grab list that stayed behind on one device now tells you so, and one press sends it up.'),
     v('v163', '2026-09-10 · 16:00 UTC', false, 'Repeat a trip, catch what runs out while you’re away, and the grab lists reach your other device',
       '<b>Three of them, and each one finishes something the app had already started.</b><br><br><b>(1) “Same as last summer” is now a thing you can do.</b> The app has always had <b>Trip presets</b> — but a preset saves your <em>answers</em> to the Home form (transport, season, which activities are ticked) and is <b>spent the instant you press Create Event</b>. It contains no items at all. So the one thing you would actually want to repeat — <b>the list as it finally ended up</b>, after a week of adding the things you had forgotten and taking out the things you had not needed — was the one thing there was no way to repeat.<br><br>Open any trip’s <b>⋯</b> menu (or long-press its card) and there is now <b>“Start a new trip from this one”</b>. Name it, and you get the whole list exactly as that trip finished, with <b>nothing ticked</b>. What is deliberately left behind is everything that belonged to <em>that</em> trip rather than to the kind of trip it was: its dates, its weather, its pin on the map, its ticks and its review. A preset is still the right tool when you want the <em>form</em> filled in; this is for when you want the <em>list</em>.<br><br><b>(2) The trip now checks what will still be good when you get there.</b> Every item can carry a <b>replace-by / expiry date</b>, and the <b>Shopping list</b> has watched those for a long time — but it judges them against <b>today</b>, plus a fixed month. That is the wrong question the moment a trip has dates on it. Sunscreen that runs out in sixty days raises nothing today, and then quietly goes off halfway through a trip you leave for in seven weeks. And a three-week trip departing in twenty-five days takes “expiring soon” gear along and says nothing whatever about the fortnight it spends out of date.<br><br>A trip knows when it ends, so that is now what its own gear is measured against. Open a trip and anything that <b>will not last it</b> is listed at the top: what is <b>already past its date</b>, and what <b>runs out while you are away</b>, each with the date, and a button through to the Shopping list. It only appears when there is something to say.<br><br><b>(3) The workout grab lists reach your other device.</b> <b>v161</b> got them into your backups, which was the urgent half. This is the other one: fix a typo on the Mac and the phone hands you the corrected list on the way out of the door. Names, doodles, colours and contents all travel.<br><br><b>How it is done matters more than that it is done.</b> They ride in the <b>list of lists this app has already been syncing since v120</b> — as a sixth kind of entry alongside your storage places, packers, owners, conditions and trip presets — rather than in a new store of their own. That is deliberate: a <em>new</em> synced store is exactly what caused the fault in <b>v120</b>, where your iPhone recorded an empty first download as “done” and afterwards only ever received changes. New entries in a store that is already syncing are ordinary changes, and ordinary changes are the one thing that has demonstrably worked all along.<br><br>Your existing lists are <b>lifted into the account once</b>, by whichever device opens this version first — and only ever <b>added</b>, never written over the top: a button the account already knows about is left completely alone, so the second device contributes only the buttons the first one had never edited. A button you have never touched has no entry at all and simply shows the factory list, which is right. And your device keeps its own copy either way, so the lists still work with no signal and while signed out.',
       'Repeat a good trip in two taps, stop finding out at the campsite that something expired — and edit a grab list on either device.'),
@@ -8282,6 +8401,21 @@ async function syncCard(loaded = {}) {
        <p class="muted sync-note">Photos, the automatic backups, and how each device looks — theme, view, which sections are open — deliberately stay on the device they belong to.</p>`
     : `<p class="data-status">${ic('warn', 'sm')}<b>Not syncing on this device</b></p>
        <p class="muted">Sign in with your e-mail to keep this device in step with your others. You'll get a one-time code by e-mail — there's no password. Everything here keeps working offline either way.</p>`;
+  // (v164) One sentence on where the grab lists stand — the thing that was
+  // invisible while only one of six had reached the account.
+  function grabSyncLine() {
+    const g = grabSyncSummary();
+    if (!g.inAccount && !g.onlyHere.length) return '<p class="muted sync-note"><b>Grab lists:</b> none edited yet — every device shows the factory six.</p>';
+    // Signed out is the one case where the cure is not the Re-send button, so the
+    // sentence changes with it: the lists cannot leave this device until you sign in.
+    const cure = st.signedIn
+      ? `press <b>Re-send my lists</b> to send ${g.onlyHere.length === 1 ? 'it' : 'them'} up`
+      : `${g.onlyHere.length === 1 ? 'it goes' : 'they go'} up once you <b>sign in</b>`;
+    const here = g.onlyHere.length
+      ? ` · <b class="warn">${g.onlyHere.length} only on this device</b> (${esc(g.onlyHereNames.join(', '))}) — ${cure}`
+      : ' · everything edited on this device is there';
+    return `<p class="muted sync-note"><b>Grab lists:</b> ${g.inAccount} ${st.signedIn ? 'in your account' : 'ready for your account'}${here}.</p>`;
+  }
   const el = h(`<div class="card block sync-card">
     <h2>Sync your devices</h2>
     ${body}
@@ -8292,7 +8426,8 @@ async function syncCard(loaded = {}) {
       ${st.signedIn ? '<button class="btn ghost" data-sync="resend">Re-send my lists to my other devices</button>' : ''}
       <button class="btn ghost danger-txt" data-sync="reset">Replace this device with the account copy</button>
     </div>
-    ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Item conditions, Trip presets, Packers, Owners or Storage places look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
+    ${grabSyncLine()}
+    ${st.signedIn ? '<p class="muted sync-note"><b>Re-send my lists</b> is for when your <b>When</b>, Item conditions, Trip presets, Packers, Owners, Storage places <b>or workout grab lists</b> look short on your <em>other</em> device. Press it on the device whose lists are <b>right</b> — it sends them again, and adds to the other device without removing anything.</p>' : ''}
     <p class="muted sync-note">Use <b>Replace this device</b> only on a device holding the <em>wrong</em> catalogue — it erases what is on this one and takes the account's copy instead. The device with your real catalogue should <b>sign in</b>, not this. It is <b>two steps</b>: it erases and reloads, and then you have to <b>sign in again</b> before anything downloads.</p>
     <h3 class="sync-check-h">Is this device missing anything?</h3>
     <div id="sync-check-slot">${listCheckBlock(audit)}</div>
@@ -8352,10 +8487,19 @@ async function syncCard(loaded = {}) {
         return;
       }
       if (act === 'resend') {
+        // (v164) Lift any grab list that only exists on this device FIRST, so the
+        // re-send below has it to send. Before this, Re-send could only repeat rows
+        // the account already held — a grab list still sitting in this browser's
+        // own storage had no way up at all, and the button said "Sent" regardless.
+        const g = await liftGrabLists({ force: true });
         const r = await db.republishSharedLists();
-        showToast(r.sent
-          ? `Sent ${r.sent} entr${r.sent === 1 ? 'y' : 'ies'} — open the app on your other device to pull them in.`
+        const bits = [];
+        if (r.sent) bits.push(`Sent ${r.sent} entr${r.sent === 1 ? 'y' : 'ies'}`);
+        if (g.lifted) bits.push(`${g.lifted} grab list${g.lifted === 1 ? '' : 's'} added to your account`);
+        showToast(bits.length
+          ? `${bits.join(' · ')} — open the app on your other device to pull them in.`
           : 'Nothing to send yet — this device has no lists of its own.');
+        render();
         return;
       }
       if (act === 'in') { await db.signIn(); showToast('Signed in — syncing now.'); }

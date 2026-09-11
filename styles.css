@@ -711,16 +711,31 @@ em {
    Top-aligned, because the message often runs to two or three lines. */
 .nudge.backup,
 .nudge.sync,
-.nudge.review {
+.nudge.review,
+.nudge.grabconf {
   flex-wrap: wrap;
   align-items: flex-start;
 }
 .nudge.backup .nudge-ic,
 .nudge.sync .nudge-ic,
-.nudge.review .nudge-ic { margin-top: 1px; }
+.nudge.review .nudge-ic,
+.nudge.grabconf .nudge-ic { margin-top: 1px; }
 .nudge.backup .nudge-body,
 .nudge.sync .nudge-body,
-.nudge.review .nudge-body { flex: 1 1 15rem; }
+.nudge.review .nudge-body,
+.nudge.grabconf .nudge-body { flex: 1 1 15rem; }
+
+/* (v164) Two versions of a grab list — a QUESTION, not an alarm. Neutral ink tint
+   so it sits apart from every coloured reminder; the two answers are the only
+   colour on it, and the one that keeps this device's copy is the filled one
+   because on the phone that is nearly always the right answer. */
+.nudge.grabconf {
+  background: color-mix(in srgb, var(--ink) 6%, var(--card));
+  border-color: color-mix(in srgb, var(--ink) 22%, var(--line));
+}
+.nudge.grabconf .nudge-ic { color: color-mix(in srgb, var(--ink) 70%, var(--muted)); }
+.nudge.grabconf .nudge-acts { flex-wrap: wrap; gap: 6px; }
+.nudge.grabconf .btn { white-space: nowrap; }
 .nudge-acts {
   flex: 0 0 auto;
   display: flex;
