@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v165';
+const APP_VERSION = 'v166';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2440,6 +2440,10 @@ async function renderHome() {
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(`<div class="topbar"><h1 class="grow">AMS Packing List</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a></div>`));
 
+  // (v166) Every reminder is one ROW in one card. Five separate cards of 93px each
+  // — the review one 183 — put the trip form 950px down the phone; the same five
+  // now take about a third of that, and read as one list of things waiting.
+  const rem = h('<div class="card reminders"></div>');
   // On-open reminder: the soonest trip that has items due to pack now.
   //
   // 🚨 `daysToGo >= 0` is load-bearing, not tidiness. A trip in the past has a
@@ -2453,9 +2457,9 @@ async function renderHome() {
   nudges.sort((a, b) => a.n.daysToGo - b.n.daysToGo);
   if (nudges.length) {
     const { e, n } = nudges[0];
-    wrap.appendChild(h(`<a class="nudge" href="#/event/${e.id}/pack">
+    rem.appendChild(h(`<a class="nudge" href="#/event/${e.id}/pack">
       <span class="nudge-ic">${ic('clock','md')}</span>
-      <span class="nudge-body"><b>${esc(e.name || 'Trip')} ${esc(n.label)}</b> — ${n.dueCount} item${n.dueCount === 1 ? '' : 's'} to pack now<span class="nudge-sub">${esc(n.focusLabel)}</span></span>
+      <span class="nudge-body"><b>${esc(e.name || 'Trip')} ${esc(n.label)}</b> — ${n.dueCount} to pack now</span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
   }
@@ -2471,20 +2475,20 @@ async function renderHome() {
     const { event: rev, endedDaysAgo } = pending[0];
     const when = endedDaysAgo === 1 ? 'yesterday' : `${endedDaysAgo} days ago`;
     const more = pending.length > 1 ? ` · ${pending.length - 1} more waiting` : '';
-    const nudge = h(`<div class="nudge review">
+    // (v166) The whole row is the link, like every other reminder — a text button
+    // beside the sentence could not fit a phone-width row without wrapping.
+    const nudge = h(`<a class="nudge review" href="#/event/${rev.id}/review">
       <span class="nudge-ic">${ic('check','md')}</span>
-      <span class="nudge-body"><b>How was ${esc(rev.name || 'your trip')}?</b> — you got back ${esc(when)}. Tell the app what you didn’t use and it starts trimming your lists.<span class="nudge-sub">Takes a minute${esc(more)}</span></span>
-      <span class="nudge-acts">
-        <a class="btn sm" href="#/event/${rev.id}/review">${ic('check','sm')}<span>Review it</span></a>
-        <button class="nudge-x" type="button" aria-label="Not this one" title="Not this one">${ic('close','sm')}</button>
-      </span>
-    </div>`);
+      <span class="nudge-body"><b>How was ${esc(rev.name || 'your trip')}?</b> — back ${esc(when)}${esc(more)}</span>
+      <span class="nudge-x" role="button" tabindex="0" aria-label="Not this one" title="Not this one">${ic('close','sm')}</span>
+      <span class="nudge-go">${IC.fwd}</span>
+    </a>`);
     nudge.querySelector('.nudge-x').addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
       hushReview(rev.id);
       render();
     });
-    wrap.appendChild(nudge);
+    rem.appendChild(nudge);
   }
 
   // (v164) A grab list that exists in two different versions — this device's own
@@ -2509,16 +2513,16 @@ async function renderHome() {
       showToast(c === 'mine' ? `Sent this device’s ${n === 1 ? 'list' : `${n} lists`} to your account` : `Took the account’s ${n === 1 ? 'list' : `${n} lists`}`);
       render();
     });
-    wrap.appendChild(nudge);
+    rem.appendChild(nudge);
   }
 
   // Care reminder: gear that's overdue or due soon for maintenance.
   const care = maintenanceSummary(lists);
   if (care.due > 0) {
     const parts = [care.overdue ? `${care.overdue} overdue` : '', care.soon ? `${care.soon} due soon` : ''].filter(Boolean).join(' · ');
-    wrap.appendChild(h(`<a class="nudge care" href="#/maintenance">
+    rem.appendChild(h(`<a class="nudge care" href="#/maintenance">
       <span class="nudge-ic">${ic('toolbox','md')}</span>
-      <span class="nudge-body"><b>Maintenance due</b> — ${care.due} item${care.due === 1 ? ' needs' : 's need'} looking after<span class="nudge-sub">${esc(parts)}</span></span>
+      <span class="nudge-body"><b>Maintenance due</b> — ${esc(parts)}</span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
   }
@@ -2527,9 +2531,9 @@ async function renderHome() {
   // store, kind 'shopping'), surfaced with the Care-side nudges.
   const openShopping = openShoppingCount(actions);
   if (openShopping) {
-    wrap.appendChild(h(`<a class="nudge shop" href="#/shopping">
+    rem.appendChild(h(`<a class="nudge shop" href="#/shopping">
       <span class="nudge-ic">${ic('cart','md')}</span>
-      <span class="nudge-body"><b>Shopping list</b> — ${openShopping} to buy<span class="nudge-sub">Restocks &amp; replacements before your trip</span></span>
+      <span class="nudge-body"><b>Shopping list</b> — ${openShopping} to buy</span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
   }
@@ -2540,9 +2544,9 @@ async function renderHome() {
   if (openActions.length) {
     const high = openActions.filter((a) => a.priority === 'high').length;
     const detail = `${openActions.length} open${high ? ` · ${high} high-priority` : ''}`;
-    wrap.appendChild(h(`<a class="nudge todo" href="#/actions">
+    rem.appendChild(h(`<a class="nudge todo" href="#/actions">
       <span class="nudge-ic">${ic('note','md')}</span>
-      <span class="nudge-body"><b>To-dos to tackle</b> — ${detail}<span class="nudge-sub">Tap to open your Actions list</span></span>
+      <span class="nudge-body"><b>To-dos</b> — ${detail}</span>
       <span class="nudge-go">${IC.fwd}</span>
     </a>`));
   }
@@ -2566,7 +2570,7 @@ async function renderHome() {
       catch (err) { logDiag('sync', err); e.currentTarget.disabled = false; return; }
       render();
     });
-    wrap.appendChild(swap);
+    rem.appendChild(swap);
   }
 
   // LISTS THAT NEVER ARRIVED. The quiet one: a device that was already syncing
@@ -2589,7 +2593,7 @@ async function renderHome() {
       hushAudit(audit);
       render();
     });
-    wrap.appendChild(nudge);
+    rem.appendChild(nudge);
   }
 
   // Backup reminder: a saved file is the real insurance for on-device data. It
@@ -2609,7 +2613,7 @@ async function renderHome() {
     const laterLabel = `Remind me ${backupSnoozeDays(bstate.level) === 1 ? 'tomorrow' : 'next week'}`;
     const nudge = h(`<div class="nudge backup${urgent ? ' urgent' : ''}">
       <span class="nudge-ic">${ic(urgent ? 'warn' : 'save','md')}</span>
-      <span class="nudge-body"><b>${esc(title)}</b> — ${esc(msg)}<span class="nudge-sub">${esc(sub)}</span></span>
+      <span class="nudge-body"><b>${esc(title)}</b> — ${esc(msg)}</span>
       <span class="nudge-acts">
         <button class="btn sm nudge-save" type="button">${ic('save','sm')}<span>Save backup now</span></button>
         <button class="nudge-x" type="button" aria-label="${esc(laterLabel)}" title="${esc(laterLabel)}">${ic('close','sm')}</button>
@@ -2626,8 +2630,10 @@ async function renderHome() {
       snoozeBackupNudge(bstate.level);
       render();
     });
-    wrap.appendChild(nudge);
+    rem.appendChild(nudge);
   }
+
+  if (rem.childElementCount) wrap.appendChild(rem);
 
   // The workout grab lists — one compact row of buttons straight to the tiny
   // "bring these few things" checklists, built from GRAB_LISTS so adding a
@@ -2638,7 +2644,7 @@ async function renderHome() {
     return `<a class="grab-btn grab-c-${d.tone}" href="#/grab/${gid}" aria-label="${esc(d.title)}"><span class="grab-icon">${d.icon}</span><span>${esc(d.label)}</span></a>`;
   }).join('')}</div>`));
 
-  wrap.appendChild(h('<p class="muted pad">Set your trip details — your common base and your transport’s kit come in automatically. Tick any extra activities, then press <b>Create Event</b> to build one combined <b>Packing List</b> to pack from.</p>'));
+  wrap.appendChild(h('<p class="muted pad home-intro">Base and transport kit come in by themselves — tick any extra activities, then <b>Create Event</b>.</p>'));
 
   // The builder card — a fresh event, generated on submit.
   const card = h('<div class="card builder"></div>');
@@ -3890,14 +3896,20 @@ function tripSetupCard(ev) {
     blocks.push(`<div class="setup-block"><span class="setup-lbl">WET options</span>${contextTags}</div>`);
   }
 
-  return h(`<details class="setup" open>
+  // (v166) Closed by default. It is a recap of choices already made — 721px of it on
+  // the phone, on every trip, before the list. One tap opens it and that is remembered.
+  const det = h(`<details class="setup"${setupOpenPref() ? ' open' : ''}>
     <summary><span class="setup-title">${ic('sparkle','sm')}Trip setup</span><span class="setup-chev">${IC.fwd}</span></summary>
     <div class="setup-body">
       <div class="setup-grid">${tiles.join('')}</div>
       ${blocks.join('')}
     </div>
   </details>`);
+  det.addEventListener('toggle', () => { try { localStorage.setItem(SETUP_OPEN_KEY, det.open ? '1' : '0'); } catch { /* ignore */ } });
+  return det;
 }
+const SETUP_OPEN_KEY = 'ams-setup-open';
+function setupOpenPref() { try { return localStorage.getItem(SETUP_OPEN_KEY) === '1'; } catch { return false; } }
 
 // A glanceable "trip readiness" hero for the top of the event screen: a packed
 // progress ring plus the three numbers you check before a trip — days to go,
@@ -4632,7 +4644,7 @@ function openCoverEditor(list) {
       .map((c) => `<button type="button" class="cover-swatch" data-swatch="${esc(c)}" style="background:${esc(c)}" aria-label="${esc(c)}"></button>`)
       .join('');
     const modal = h(`<div class="modal cover-editor">
-      <h3>Cover for “${esc(list.name)}”</h3>
+      <h3>Cover &amp; settings for “${esc(list.name)}”</h3>
       <p class="modal-sub">Give this template an emoji and a colour so it stands out on the Templates grid. Leave the colour on <b>Auto</b> to let the app pick a consistent one for you.</p>
       <div class="cover-preview">
         <span class="cover-tile" data-tile><span class="cover-tile-emoji" data-tile-emoji></span></span>
@@ -4648,9 +4660,13 @@ function openCoverEditor(list) {
           ${swatches}
         </div>
       </div>
+      <div class="cover-settings">
+        <label class="field"><span>Group</span>${selectHtml('group', [{ value: '', label: '— no group —' }, ...GROUPS.map((g) => ({ value: g.id, label: `${g.id} · ${g.label}` }))], list.group || '')}</label>
+        <label class="field" title="One bag for everything in this template. Items can still differ one by one."><span>Default bag</span>${selectHtml('tpldefault', [{ value: '', label: '— each item decides —' }].concat(containerOpts(list.defaultContainer).map((c) => ({ value: c, label: c }))), list.defaultContainer || '')}</label>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn" data-x="cancel">Cancel</button>
-        <button type="button" class="btn primary" data-x="save">Save cover</button>
+        <button type="button" class="btn primary" data-x="save">Save</button>
       </div>
     </div>`);
 
@@ -4678,11 +4694,29 @@ function openCoverEditor(list) {
     modal.querySelector('[data-x="cancel"]').addEventListener('click', () => { close(); resolve(false); });
     modal.querySelector('[data-x="save"]').addEventListener('click', async () => {
       const nextEmoji = draftEmoji.trim().slice(0, 4);
-      const changed = nextEmoji !== (list.emoji || '') || draftColor !== (list.color || '');
+      // (v166) Group and Default bag live here now — they were two dropdowns above
+      // the template's toolbar, settings you touch once sitting over buttons you
+      // use daily. Same semantics as the old handlers, including the tidy-up offer.
+      const nextGroup = modal.querySelector('select[name=group]').value || '';
+      const nextBag = modal.querySelector('select[name=tpldefault]').value || '';
+      let changed = nextEmoji !== (list.emoji || '') || draftColor !== (list.color || '');
+      if (nextGroup !== (list.group || '')) { list.group = nextGroup; changed = true; }
+      if (nextBag !== (list.defaultContainer || '')) {
+        list.defaultContainer = nextBag;
+        changed = true;
+        // One bag for the whole template. Items that already carry that exact bag
+        // as a per-item exception are now saying the same thing twice, so offer to
+        // tidy them away — otherwise "differs here on purpose" means nothing.
+        const redundant = nextBag ? (list.items || []).filter((z) => z._ovContainer === nextBag) : [];
+        if (redundant.length && confirm(`“${list.name}” now packs everything into ${nextBag}.\n\n${redundant.length} item${redundant.length === 1 ? '' : 's'} here already had that bag set individually — clear those marks so they simply follow the template?`)) {
+          for (const z of redundant) z._ovContainer = '';
+        }
+      }
       if (changed) {
         list.emoji = nextEmoji;
         list.color = draftColor;
         if (!(await saveGuard(db.saveList(list)))) { resolve(false); return; }
+        ALL_LISTS = await db.getLists();
       }
       close();
       resolve(changed);
@@ -5513,12 +5547,9 @@ async function renderList(listId, openItemId) {
   } else if (isContainer) {
     wrap.appendChild(h(`<p class="muted pad">Your bags, duffels and backpacks as things in their own right — photos, capacity, where each one lives, how to look after it. Every one of them is offered when you choose where an item is packed.</p>`));
   }
-  const groupOpts = [{ value: '', label: '— no group —' }, ...GROUPS.map((g) => ({ value: g.id, label: `${g.id} · ${g.label}` }))];
   wrap.appendChild(h(`<div class="toolbar">
-    ${noTemplateChrome ? '' : `<label class="inline-field"><span>Group</span>${selectHtml('group', groupOpts, list.group)}</label>`}
-    ${noTemplateChrome ? '' : `<label class="inline-field" title="One bag for everything in this template. Items can still differ one by one."><span>Default bag</span>${selectHtml('tpldefault', [{ value: '', label: '— each item decides —' }].concat(containerOpts(list.defaultContainer).map((c) => ({ value: c, label: c }))), list.defaultContainer)}</label>`}
     <div class="spacer"></div>
-    ${noTemplateChrome ? '' : `<button class="btn ghost" data-cover><span class="cover-dot" style="background:${esc(listColor(list))}">${esc(listEmoji(list))}</span><span>Cover</span></button>`}
+    ${noTemplateChrome ? '' : `<button class="btn ghost" data-cover><span class="cover-dot" style="background:${esc(listColor(list))}">${esc(listEmoji(list))}</span><span>Cover &amp; settings</span></button>`}
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
     ${isLoose ? `<button class="btn ghost" data-batch>${IC.list}<span>Add several</span></button>` : ''}
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-kit>${ic('toolbox')}<span>Add a kit</span></button>`}
@@ -5539,10 +5570,6 @@ async function renderList(listId, openItemId) {
   const body = h('<div class="items"></div>');
   wrap.appendChild(body);
 
-  if (!noTemplateChrome) wrap.querySelector('select[name=group]').addEventListener('change', async (e) => {
-    list.group = e.target.value;
-    await saveGuard(db.saveList(list));
-  });
   // When arriving from the Care page's "All items" browser, open that item's
   // editor straight away (and expand its care panel).
   let openItem = (openItemId && list.items.some((x) => x.id === openItemId)) ? openItemId : null;
@@ -5599,15 +5626,6 @@ async function renderList(listId, openItemId) {
   // One bag for the whole template. Items that already carry that exact bag as a
   // per-item exception are now saying the same thing twice, so offer to tidy them
   // away — otherwise the "differs here on purpose" mark would be meaningless.
-  wrap.querySelector('select[name=tpldefault]')?.addEventListener('change', async (e) => {
-    const want = e.target.value;
-    list.defaultContainer = want;
-    const redundant = want ? (list.items || []).filter((z) => z._ovContainer === want) : [];
-    if (redundant.length && confirm(`“${list.name}” now packs everything into ${want}.\n\n${redundant.length} item${redundant.length === 1 ? '' : 's'} here already had ${want} set individually. Clear those so they simply follow the template?\n\nNothing moves either way — this only tidies up.`)) {
-      for (const z of redundant) z._ovContainer = '';
-    }
-    if (await saveGuard(db.saveList(list))) { ALL_LISTS = await db.getLists(); render(); }
-  });
   wrap.querySelector('[data-sections]')?.addEventListener('click', () => {
     manageSections(list).then((changed) => {
       if (!changed) return;
@@ -7098,6 +7116,7 @@ function howtoCard() {
 
         <h3>Building blocks: templates</h3>
         <p>Under the <b>Templates</b> tab your reusable templates are grouped three ways:</p>
+        <p><b>Where a template’s settings live (v166).</b> A template’s <b>Group</b> (GA / WET / OE) and its <b>Default bag</b> are set in its <b>Cover &amp; settings</b> editor — the first button in the template’s toolbar — together with its emoji and colour. They used to be two dropdowns above the toolbar, taking 220 pixels before the first item.</p>
         <ul>
           <li><b>GA — Goal Activity:</b> the activities that matter — Travel, Golf, Hiking, Diving…</li>
           <li><b>WET — Workout, Exercise &amp; Training:</b> Swim, Bike, Run, Strength, Mobility, Breath work.</li>
@@ -7170,6 +7189,9 @@ function howtoCard() {
           <li><b>They travel between your devices (v163)</b> — fix a typo on the Mac and the phone hands you the corrected list on the way out. Names, doodles, colours and contents all go. They ride in the <b>same list-of-lists the app has synced since v120</b> (alongside your storage places, packers, owners, conditions and trip presets) rather than in a store of their own — that is the point, because a brand-new synced store is exactly what went wrong in v120. Your existing lists are lifted into the account <b>once</b>, by whichever device opens v163 first, and only ever <b>added</b>: a button the account already knows about is never written over, so the second device contributes only what the first had never edited. Each device keeps its own copy too, so the lists still work with no signal and while signed out. <b>If one is missing on the other device (v164):</b> <b>Settings → Sync your devices</b> shows a <b>Grab lists</b> line saying how many are in your account and which exist only on this device; press <b>Re-send my lists</b> on the device that has them and they go up — it only ever adds. If a list exists in <em>two different versions</em> — this device's own and the account's — <b>Home</b> asks once which to keep. <b>And since v161 they are in your backups</b>: the six lists, their names, doodles, colours and contents travel in the backup file and in every automatic on-device copy, and come back on a restore. Before that they existed in exactly one place, which meant the app’s own advice for a sync problem — <b>“Replace this device with the account copy”</b>, which empties the device first — would quietly have taken them with it. A restore <b>merges</b>: a list your backup knows about comes back, a list it has never heard of is left exactly as it is here, so restoring can only ever give you a list back. A list you have never edited carries nothing and simply arrives as the factory list, which is right.</li>
           <li><b>Share a list</b> — the share arrow beside the pencil opens a <b>QR code</b> and a <b>link</b> carrying the list: its name, doodle, colour and everything on it. Whoever scans the code with the phone camera, or opens the link, is <b>offered the list</b> and taps which of their six Home buttons it should go on — that button’s list is replaced, the other five are untouched. Nothing is uploaded; the whole list travels inside the link. Because an installed app on the iPhone keeps its own storage (a link opened in Safari lands in Safari’s copy), there is also <b>Paste</b> under <b>Settings → Shared trips &amp; grab lists</b>: paste the link or the code, tap <b>Import</b>, pick a button, done.</li>
         </ul>
+
+        <h3>Density — Compact or Comfortable</h3>
+        <p><b>Settings → Appearance → Density.</b> <b>Compact</b> (the everyday setting since v166) tightens cards, rows and headings on every screen so the phone shows about a screen’s worth more; <b>Comfortable</b> puts the air back. The grab lists never change, and Packing Mode’s rows stay a full-thumb target in both.</p>
 
         <h3>Colour tells you where you are</h3>
         <p>Each of the six tabs has its <b>own colour</b>, and that colour flows through the whole screen — the page heading, the buttons, the chips and progress bars, the back/edit icons, and the tab itself. In the bottom bar <b>every tab always shows its colour</b>, and the one you're currently on fills in solid and goes bold — so a single glance tells you which part of the app you're in:</p>
@@ -7316,6 +7338,7 @@ function howtoCard() {
 
         <h3>Opening a trip — the readiness dashboard</h3>
         <p>Every trip opens with a small <b>readiness</b> summary at the very top, so you can see how ready you are at a glance before you scroll into the list:</p>
+        <p><b>Trip setup starts folded (v166).</b> The recap of the choices you made when you created the trip is one tap away under the hero, and stays open if you leave it open.</p>
         <ul>
           <li>A <b>progress ring</b> showing how much is packed — e.g. <b>43% · 3/8</b> — filling up as you tick items and turning <b>green</b> when everything's in.</li>
           <li><b>Days to go</b> — the countdown to your start date (it highlights when the trip is within a week; it shows “no date set” if you haven't given one).</li>
@@ -7388,6 +7411,7 @@ function howtoCard() {
 
         <h3>Countdown &amp; “pack now” nudges</h3>
  <p>With a start date set, each event shows a countdown, and a ⏰ banner surfaces the earliest phase that's due (based on how many days each phase is normally packed before departure). The <b>Home</b> screen also gathers a small set of reminder cards whenever they apply: the trip <b>⏰</b> pack-now nudge, a <b></b> maintenance nudge when gear is overdue or due soon, a <b>shopping</b> nudge when you’ve things to buy, a <b>“To-dos to tackle”</b> card counting your open actions (and calling out how many are high-priority), a green <b>trip review</b> card once a trip is over, and a <b></b> backup reminder when it’s been a while since your last export. These are on-open reminders — the app can't push background notifications.</p>
+        <p><b>One card, one line each (v166).</b> All of Home’s reminders — pack now, trip review, maintenance, shopping, to-dos, backup, sync — are rows in a single card at the top of Home rather than a stack of separate tinted cards. Each keeps its colour as a thin edge and its icon.</p>
         <p><b>Which day it counts from (v165).</b> Before a trip, the countdown counts down to the day you leave. Once you are away, the trip card says <b>Away now</b> and the trip's own tile says which day of the trip it is. After you are home, both count from the day you <em>got back</em> — the same number Home uses when it asks how the trip went.</p>
         <p>Home keeps <b>one</b> pack-now slot, and it belongs to a trip you still have to pack for. Before v161 a trip that had already <em>happened</em> could take it: a finished trip still holding a few unticked items counted as “sooner” than any trip in the future, so it sat at the top for good reading <b>“Norway 40 days ago — 12 items to pack now”</b>. Finished trips now have their own card — the review one — and leave that slot alone.</p>
 
@@ -7482,6 +7506,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v166', '2026-09-12 · 10:30 UTC', false, 'Less air — eight ways the screens get tighter, and a Density switch',
+      '<b>Your words: “a general feeling that there is a lot of air in the user interface.” Measured, you were right — on the phone, text covered only 12–20% of the first screen on Home, Events and a trip.</b> Eight changes, in order of how much room each gives back.<br><br><b>(1) Home’s reminders are one card, one line each.</b> Five separate cards — 93 pixels apiece, the review one 183 — meant the trip form did not begin until <b>950 pixels down</b>, more than a full screen. They are now rows in a single card, each keeping its colour as a thin edge and its icon, so you still tell them apart before reading. The form starts about 400 pixels sooner.<br><br><b>(2) Trip setup starts folded.</b> The recap of the choices you made when you created a trip was <b>721 pixels tall and open by default</b>, on every trip, above the list. It is one tap away now and remembers if you leave it open.<br><br><b>(3) Home’s introduction is one line.</b> 116 pixels of explanation every time you opened the app is now a single sentence.<br><br><b>(4) A template’s settings moved out of the toolbar.</b> <b>Group</b> and <b>Default bag</b> are things you set once; they sat above the buttons you use daily, 220 pixels before the first item. They now live in the <b>Cover &amp; settings</b> editor, and the toolbar is one row: Cover &amp; settings · Sections · Add a kit · Add item.<br><br><b>(5)–(8) Compact density, and a switch.</b> Packing Mode rows go from 71 to about 59 pixels — 32 items a phase, so a full screen less scrolling — while staying a full-thumb target. The trip hero is a smaller ring with the three numbers in a row beneath. Section and group headings lose most of their top margin. Cards, Settings folds, Events cards and the three Care cards are each a notch tighter. All of that is <b>Compact</b>, the everyday setting, under <b>Settings → Appearance → Density</b>; <b>Comfortable</b> puts every bit of the air back. The grab lists are untouched either way.',
+      'The phone shows a screen’s worth more on every tab — and if any of it ever feels cramped, one switch puts the air back.'),
     v('v165', '2026-09-11 · 13:30 UTC', false, 'A walk through every screen — one real bug, and a round of polish',
       '<b>You asked for the whole app to be walked through, screen by screen, with an eye for anything crude.</b> Nineteen screens, at phone size and Mac size, plus an automatic check of every one for text that cannot be read, buttons too small to hit, and things poking off the edge. Here is what it found.<br><br><b>The bug: the Care list showed the same item once per template.</b> Since v108 a jacket filed under Golf, Hiking and Travel is <em>one</em> jacket — but the maintenance list still walked every template and listed it three times, Home said <b>“3 overdue”</b> for one item, and pressing <b>Done</b> on one row quietly cleared the other two. It is now one row, naming every template it belongs to.<br><br><b>A finished trip now counts from the day you got home.</b> The Events card said <b>“10 days ago”</b> for a trip that ended three days ago, while Home said <b>“you got back 3 days ago”</b> — two different numbers for one trip, because the card counted from the day you <em>left</em>. It counts from the return now, and so does the big tile at the top of a trip. A trip you are <em>on</em> no longer counts up from a departure that has already happened either: the card says <b>“Away now”</b> and the tile says <b>“Day 3 of 8”</b>.<br><br><b>Five things that were hard to read, fixed.</b> The amber heading on the “won’t last the trip” card, the green <b>Review it</b> button text, the <b>Used / Didn’t use</b> pills on the review, the green <b>“in 5 days”</b> badge and the <b>Ready to go</b> button all measured between 2.9 and 3.4 to 1 against their backgrounds; the minimum for text that size is 4.5. Each is a shade deeper now and passes — same colours, just less washed out.<br><br><b>And the small crude things.</b> The “Long-press a trip…” hint on Events wrapped its bold word in half beside three lines of text — it is one short sentence now. <b>Loose items</b> on Templates broke its own name onto two lines. The Event settings form repeated <b>“8 days · 7 nights”</b> directly beneath a field that already said it. The introductions on <b>Containers</b> and <b>All items · table</b> ran to six and seven lines on the phone before the first thing you came for; each is two now. <b>Home and Event settings could be dragged sideways on the phone</b> — the invisible checkbox behind each activity pill was sitting a few hundred pixels wide, past the edge of the screen; it now sits exactly behind its pill, and the app as a whole can no longer scroll sideways. The review screen, new last week, had more explanation than list above its first row — trimmed — and its “didn’t use” rows lose their strikethrough, for exactly the reason the grab lists lost theirs in v141: the grey ground and the red pill already say it.<br><br><b>And four you chose from the list of judgement calls.</b> The small round buttons on every row — the pencil you hit with a thumb — grow from 34 to <b>40 pixels</b>, without making a row taller. On the <b>Care</b> tab the whole catalogue used to sit open beneath the maintenance list, making the page some thirty thousand pixels tall on the phone; <b>All items</b> there now starts <b>folded</b>, with its count on the line, and remembers whether you left it open. <b>Template names</b> on the Templates grid may run to <b>two lines</b> before they are cut short, so “Breath work” and “Plane (base)” keep their second word on the Mac. And the last of the long introductions — the maintenance list, Maintenance mode and the card that leads to it from Settings — are each one line now.',
       'The Care list stops counting one jacket three times, a finished trip says when you got home, and nothing on any screen is too faint to read.'),
@@ -9279,7 +9306,11 @@ async function renderSettings() {
   const theme = h(`<div class="card block">
     <h2>Appearance</h2>
     ${radioRow('theme', [{ value: 'system', label: 'System' }, { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }], currentTheme())}
+    <p class="muted density-lbl">Density</p>
+    ${radioRow('density', [{ value: 'compact', label: 'Compact' }, { value: 'comfortable', label: 'Comfortable' }], currentDensity())}
+    <p class="muted sync-note">Compact is the everyday setting — tighter cards, rows and headings. Comfortable puts the air back. The grab lists and the tap targets in Packing Mode stay the same either way.</p>
   </div>`);
+  theme.addEventListener('change', (e) => { if (e.target && e.target.name === 'density') setDensity(e.target.value); });
   const howtoEl = howtoCard();
   const vhistEl = versionHistoryCard();
 
@@ -9682,6 +9713,17 @@ async function exportAllEventsXlsx() {
 }
 
 // ---------- theme ----------
+// (v166) Density. Compact is the default — tighter cards, rows and headings on every
+// screen except the two glasses-off ones (the grab lists and Packing Mode's tap
+// targets keep their size). Comfortable puts the air back.
+const DENSITY_KEY = 'ams-density';
+function currentDensity() { try { return localStorage.getItem(DENSITY_KEY) === 'comfortable' ? 'comfortable' : 'compact'; } catch { return 'compact'; } }
+function applyDensity() { document.documentElement.classList.toggle('compact', currentDensity() === 'compact'); }
+function setDensity(v) {
+  try { localStorage.setItem(DENSITY_KEY, v === 'comfortable' ? 'comfortable' : 'compact'); } catch { /* ignore */ }
+  applyDensity();
+  $$('.card.block .seg').forEach((sg) => sg.classList.toggle('on', sg.querySelector('input')?.checked));
+}
 const THEME_KEY = 'ams-theme';
 function currentTheme() { try { return localStorage.getItem(THEME_KEY) || 'system'; } catch { return 'system'; } }
 function setTheme(v) {
@@ -10611,6 +10653,7 @@ function currentSection() {
   return 'home';
 }
 function applyMode() {
+  applyDensity();
   const s = currentSection();
   if (document.documentElement.dataset.section !== s) document.documentElement.dataset.section = s;
 }

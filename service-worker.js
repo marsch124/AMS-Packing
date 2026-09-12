@@ -3,7 +3,7 @@
 /* Bump this with APP_VERSION in js/app.js. PREFIX is separate so that clearing
    out old copies never touches the sibling AMS apps sharing this web address. */
 const PREFIX = 'ams-packing-list-v';
-const CACHE = 'ams-packing-list-v165';
+const CACHE = 'ams-packing-list-v166';
 const ASSETS = [
   './',
   './index.html',
