@@ -782,6 +782,42 @@ em {
 }
 .expire-band .btn { white-space: nowrap; }
 
+/* (v166) All of Home's reminders in ONE card, one row each. Five separate cards
+   of 93px (the review one 183) put the trip form 950px down the phone. The colour
+   each reminder carried on its whole card now sits in a 3px edge and its icon —
+   still enough to tell them apart before reading, without five tinted slabs. */
+.card.reminders { padding: 0; overflow: hidden; margin: 0 0 14px; }
+.card.reminders .nudge {
+  margin: 0;
+  border: 0;
+  border-left: 3px solid var(--rem-tone, var(--brand));
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  padding: 9px 12px 9px 10px;
+  gap: 10px;
+}
+.card.reminders .nudge + .nudge { border-top: 1px solid var(--line); }
+.card.reminders .nudge-ic { color: var(--rem-tone, var(--brand)); font-size: 1.1rem; }
+/* Specificity matters here: the review/backup/sync variants set the body to a
+   15rem minimum LATER in this file, which forced their buttons onto a second line
+   at phone width. One more class on the selector outranks them. */
+.card.reminders .nudge .nudge-body { font-size: .95rem; flex: 1 1 6rem; }   /* 6rem: icon + gaps + button + ✕ + padding must fit in a 321px row */
+.card.reminders .nudge .nudge-acts { flex: none; margin-left: auto; }
+.card.reminders .nudge-acts .btn.sm { padding: 5px 9px; }
+/* the ✕ inside a linked row is a span, so it needs the button's own box */
+.card.reminders span.nudge-x { display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.card.reminders .nudge.review { flex-wrap: nowrap; align-items: center; }
+.card.reminders .nudge-body > b { color: inherit; }
+.card.reminders .nudge-acts { gap: 4px; }
+.card.reminders .nudge.review { --rem-tone: var(--ok); }
+.card.reminders .nudge.care, .card.reminders .nudge.sync { --rem-tone: var(--brand); }
+.card.reminders .nudge.shop, .card.reminders .nudge.backup { --rem-tone: var(--warn); }
+.card.reminders .nudge.todo { --rem-tone: var(--danger); }
+.card.reminders .nudge.grabconf { --rem-tone: var(--ink); }
+.card.reminders .nudge.backup.urgent { --rem-tone: var(--danger); border: 0; border-left: 3px solid var(--danger); box-shadow: none; }
+.card.reminders .nudge.backup.urgent .nudge-body > b { color: var(--danger); }
+
 /* Trip review — the one nudge that is good news: the trip happened, and the app
    is offering to learn from it. Green on purpose, and green is free here (the
    trip nudge is brand, backup and shopping are amber, to-dos are red), so the
@@ -6817,3 +6853,44 @@ table.grid {
 .grab-import-pick { margin-top: 4px; }
 .grab-import-pick .grab-btn { font: inherit; font-weight: 700; cursor: pointer; }
 .grab-import-skip { margin-bottom: 56px; }
+
+
+/* ============================================================
+   (v166) COMPACT density — on by default, Settings → Appearance → Density.
+   Tighter cards, rows and headings everywhere EXCEPT the two glasses-off
+   screens: the grab lists are untouched, and Packing Mode's rows shrink from
+   71px to about 59 — still a full-thumb target. Comfortable = none of this.
+   ============================================================ */
+html.compact .card { padding: 12px; }
+html.compact .card.block.sset-card { padding: 7px 13px; margin-bottom: 6px; }
+html.compact .card.ev.ticket { padding: 11px 12px 11px 18px; gap: 7px; }
+html.compact .cards { gap: 8px; }
+html.compact .section-h { margin: 14px 4px 6px; }
+html.compact .sec-h { padding: 5px 4px 3px; margin-top: 2px; }
+html.compact .nudge { padding: 10px 12px; margin-bottom: 10px; }
+html.compact .card.reminders .nudge { padding: 8px 12px 8px 10px; }
+html.compact .grab-row { margin-bottom: 12px; }
+html.compact .home-intro { margin-bottom: 8px; }
+/* Packing Mode rows: 16px of padding each side of the name was the air */
+html.compact .pack-item { padding: 10px 14px; }
+html.compact .pack-list { gap: 6px; }
+/* The trip hero: a smaller ring, the three numbers in a row beneath it */
+html.compact .readiness { gap: 8px; margin: 2px 0 10px; }
+html.compact .rd-main { gap: 10px; }
+html.compact .rd-ring { width: 84px; height: 84px; }
+html.compact .rd-ring-in { width: 62px; height: 62px; }
+html.compact .rd-ring-num { font-size: 1.2rem; }
+html.compact .rd-ring-cap { font-size: .7rem; margin-top: 1px; }
+html.compact .rd-side { flex-direction: row; gap: 6px; }
+html.compact .rd-stat { flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px; }
+html.compact .rd-lbl { font-size: .7rem; line-height: 1.15; }
+/* The three Care link cards: one-line descriptions */
+html.compact .care-link { padding: 9px 12px; }
+html.compact .care-link-sub { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Template screen: the toolbar and filter chips sit closer to the first item */
+html.compact .toolbar { margin-top: 8px; margin-bottom: 4px; }
+html.compact .item-filterbar { margin-bottom: 8px; }
+.density-lbl { margin: 12px 0 4px; font-size: .84rem; font-weight: 700; }
+
+/* (v166) the two template settings inside the Cover editor */
+.cover-settings { display: grid; gap: 8px; margin-top: 4px; }
