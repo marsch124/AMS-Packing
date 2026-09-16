@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v166';
+const APP_VERSION = 'v167';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2667,7 +2667,7 @@ async function renderHome() {
 
   // A very subtle build marker — findable when you go looking, ignorable otherwise.
   // Tapping it opens the full version history in Settings.
-  wrap.appendChild(h(`<a class="app-version" href="#/settings" title="AMS Packing List ${APP_VERSION} — tap for version history">AMS Packing List · ${APP_VERSION}</a>`));
+  wrap.appendChild(h(`<a class="app-version" data-testid="home-version" href="#/settings" title="AMS Packing List ${APP_VERSION} — tap for version history">AMS Packing List · ${APP_VERSION}</a>`));
   return wrap;
 }
 const HOME_EVENT_PREVIEW = 3;
@@ -2698,7 +2698,7 @@ function eventCardHTML(e) {
   const dw = deriveWeather(e);
   const wx = dw ? `<span class="ev-wx">${wIcon(dw.days[0].icon)} ${esc(dw.rangeLabel)}</span>` : '';
   const done = p.total > 0 && p.done >= p.total;
-  return `<a class="card ev ticket${done ? ' done' : ''}" href="#/event/${e.id}">
+  return `<a class="card ev ticket${done ? ' done' : ''}" data-testid="event-card" href="#/event/${e.id}">
     <div class="ev-top">
       <div class="ev-title-wrap">
         <span class="ev-name">${esc(e.name || 'Untitled event')}</span>
@@ -3371,7 +3371,7 @@ function eventForm(ev, lists, isEdit) {
          List-type radio used to open the form, which asked you to classify a trip
          you hadn't named yet. -->
     <label class="field"><span>Event name</span>
-      <input name="name" value="${esc(ev.name)}" placeholder="e.g. Dolomites road trip" autocomplete="off"></label>
+      <input name="name" data-testid="event-name" value="${esc(ev.name)}" placeholder="e.g. Dolomites road trip" autocomplete="off"></label>
     <div data-dates-slot></div>
     <p class="nights-hint muted" data-nights-hint></p>
     <label class="field"><span>Destination <em>(optional — for weather)</em></span>
@@ -3404,7 +3404,7 @@ function eventForm(ev, lists, isEdit) {
 
     <div class="actions">
       ${isEdit ? `<a class="btn lg" href="#/event/${ev.id}">Cancel</a>` : ''}
-      <button type="submit" class="btn primary lg">${isEdit ? 'Save & regenerate' : 'Create Event'}</button>
+      <button type="submit" class="btn primary lg" data-testid="event-submit">${isEdit ? 'Save & regenerate' : 'Create Event'}</button>
     </div>`;
 
   // Full trip vs Quick activity: quick mode drops the base + transport kit, so hide
@@ -3615,7 +3615,7 @@ async function renderEvent(eventId) {
   const wrap = h('<section class="screen"></section>');
   const topbar = h(`<div class="topbar">
     <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
-    <h1 class="grow">${esc(ev.name)}</h1>
+    <h1 class="grow" data-testid="event-title">${esc(ev.name)}</h1>
     <button class="iconbtn" type="button" data-rename aria-label="Rename event">${IC.edit}</button>
     <a class="iconbtn" href="#/event/${ev.id}/edit" aria-label="Event settings">${IC.gear}</a>
     <button class="iconbtn" type="button" data-evmenu aria-label="More actions for this trip" title="Mark everything packed, share, delete…">${IC.more}</button>
@@ -3963,7 +3963,7 @@ function readinessDashboard(ev, openTodos = 0) {
         <a class="rd-stat rd-link" href="#/actions"><span class="rd-val">${todoVal}</span><span class="rd-lbl">${todoLbl}</span></a>
       </div>
     </div>
-    ${p.total ? `<a class="btn primary lg pack-cta" href="#/event/${ev.id}/pack">${IC.bag}<span>${p.done >= p.total ? `All packed${ic('check','sm')}` : p.done ? 'Continue packing' : 'Start packing'}</span></a>` : ''}
+    ${p.total ? `<a class="btn primary lg pack-cta" data-testid="pack-cta" href="#/event/${ev.id}/pack">${IC.bag}<span>${p.done >= p.total ? `All packed${ic('check','sm')}` : p.done ? 'Continue packing' : 'Start packing'}</span></a>` : ''}
   </div>`);
 }
 
@@ -7506,6 +7506,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v167', '2026-09-16 · 12:00 UTC', false, 'The first automatic tests — run on every publish, before anything reaches you',
+      '<b>Nothing changes on screen. What changes is what happens between a change and your phone.</b><br><br>Until now, every version was checked by a person looking at it. From this one, <b>two automatic tests run on every publish</b>, on GitHub, before the version goes live: one opens the app and checks it shows its version; the other creates a trip from the Home form and checks it appears on the Events tab. If either fails, the publish is marked red and stops there.<br><br>The rule they follow is yours: <b>every control is found by an identifier, never by its words</b> — so the wording on a button can change without a test breaking, and a test only fails when something has actually stopped working. The controls the tests need carry those identifiers now; more are added one test at a time, each new version adding the test for whatever it touched.',
+      'A broken version can no longer reach your phone without the publish turning red first.'),
     v('v166', '2026-09-12 · 10:30 UTC', false, 'Less air — eight ways the screens get tighter, and a Density switch',
       '<b>Your words: “a general feeling that there is a lot of air in the user interface.” Measured, you were right — on the phone, text covered only 12–20% of the first screen on Home, Events and a trip.</b> Eight changes, in order of how much room each gives back.<br><br><b>(1) Home’s reminders are one card, one line each.</b> Five separate cards — 93 pixels apiece, the review one 183 — meant the trip form did not begin until <b>950 pixels down</b>, more than a full screen. They are now rows in a single card, each keeping its colour as a thin edge and its icon, so you still tell them apart before reading. The form starts about 400 pixels sooner.<br><br><b>(2) Trip setup starts folded.</b> The recap of the choices you made when you created a trip was <b>721 pixels tall and open by default</b>, on every trip, above the list. It is one tap away now and remembers if you leave it open.<br><br><b>(3) Home’s introduction is one line.</b> 116 pixels of explanation every time you opened the app is now a single sentence.<br><br><b>(4) A template’s settings moved out of the toolbar.</b> <b>Group</b> and <b>Default bag</b> are things you set once; they sat above the buttons you use daily, 220 pixels before the first item. They now live in the <b>Cover &amp; settings</b> editor, and the toolbar is one row: Cover &amp; settings · Sections · Add a kit · Add item.<br><br><b>(5)–(8) Compact density, and a switch.</b> Packing Mode rows go from 71 to about 59 pixels — 32 items a phase, so a full screen less scrolling — while staying a full-thumb target. The trip hero is a smaller ring with the three numbers in a row beneath. Section and group headings lose most of their top margin. Cards, Settings folds, Events cards and the three Care cards are each a notch tighter. All of that is <b>Compact</b>, the everyday setting, under <b>Settings → Appearance → Density</b>; <b>Comfortable</b> puts every bit of the air back. The grab lists are untouched either way.',
       'The phone shows a screen’s worth more on every tab — and if any of it ever feels cramped, one switch puts the air back.'),

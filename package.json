@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "start": "python3 -m http.server 8080"
+    "start": "python3 -m http.server 8080",
+    "test:ui": "playwright test"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
 }
