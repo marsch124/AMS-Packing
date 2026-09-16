@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v169';
+const APP_VERSION = 'v170';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -173,7 +173,8 @@ function busyEditing() {
   return !!(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 }
 // Redraw only when it cannot cost anything.
-function renderIfIdle() { if (!busyEditing()) render(); }
+// Returns the render's promise so a caller can wait for the screen to settle.
+function renderIfIdle() { return busyEditing() ? Promise.resolve() : render({ background: true }); }
 
 async function refreshShared() {
   const stored = await db.getSharedRows().catch(() => null);
@@ -7514,6 +7515,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v170', '2026-09-16 · 17:00 UTC', false, 'The same catch, one layer deeper',
+      'v169 guarded against a background redraw landing while you type — but it checked for typing when the redraw was <em>asked for</em>, and a redraw first reads the database, which on a slow phone takes real time. Typing that began during that read was invisible to the guard, and the finished redraw still swapped the form out from under it. The tests turned red again, exactly as they should. A background redraw now checks for typing <b>a second time, at the last moment before it swaps the screen</b>, and backs off; the fresh lists simply arrive with the next redraw. And the app no longer declares its start-up finished until those redraws have actually completed.',
+      'Typing in the first seconds after opening the app is safe on the slowest phone, not only on a fast Mac.'),
     v('v169', '2026-09-16 · 15:30 UTC', false, 'The tests caught one on their first day — a trip name typed too early could be lost',
       '<b>The new automatic tests earned their keep within hours.</b> On GitHub’s slower machines, two of them failed on their first attempt and passed on the second — and the reason was a real fault, not the tests. If you typed a trip name on Home <b>while the app was still finishing its start-up checks</b> (the ones that repair your lists between devices), the moment your finger moved from the name field to <b>Create Event</b> a background redraw could rebuild the form empty — and the trip was created as <b>“Untitled event”</b>. On a fast Mac that window is a few thousandths of a second; on a slow phone, first thing after an update, it is real.<br><br>Two things. The guard that stops the app redrawing over your typing now treats <b>a typed trip name as typing</b>, focused or not. And the app now marks the moment its start-up work is finished, so the tests wait for it and measure the app rather than a race.<br><br>Tests that only pass on a second try are no longer accepted: the publish turns red on the first failure.',
       'A trip name typed in the first seconds after opening the app can no longer vanish.'),
@@ -10628,13 +10632,20 @@ async function renderRoute() {
 }
 
 let rendering = false;
-async function render() {
+async function render({ background = false } = {}) {
   if (rendering) return; rendering = true;
   try {
     await refreshActions();     // fresh action data for badges, the editor buffer & the Actions screen
     await refreshKits();        // fresh kits for the add-a-kit pickers & packing-list clusters
     await refreshShared();      // the five lists you author — the other device may have changed them
     const node = await renderRoute();
+    // (v170) A BACKGROUND redraw checked for typing when it was asked for — but the
+    // reads above take real time on a slow device, and typing can begin meanwhile.
+    // Re-check at the last moment and back off: the fresh lists are picked up by
+    // the next redraw, while a half-typed trip name is gone for good if swapped
+    // out from under a finger. This was the race the CI tests kept catching —
+    // v169's guard could not see typing that started after the guard had run.
+    if (background && busyEditing()) return;
     app.innerHTML = '';
     app.appendChild(node);
     setActiveTab();
@@ -10789,7 +10800,7 @@ function watchForUpdate(reg) {
       if (r && r.repaired && r.after !== r.before) {
         logDiag('shared-resync', { before: r.before, after: r.after });
         await refreshShared();
-        renderIfIdle();
+        await renderIfIdle();
       }
       return db.migrateSharedLists();
     })
@@ -10797,14 +10808,14 @@ function watchForUpdate(reg) {
       if (r && r.added) {
         logDiag('shared-lists', { adopted: r.kinds, rows: r.added });
         await refreshShared();
-        renderIfIdle();
+        await renderIfIdle();
       }
       // The grab lists join the account here, AFTER the five older lists have
       // settled — so this runs on a device that has already seen the account's
       // copy and can therefore tell "the account has never heard of this button"
       // from "I simply have not downloaded it yet".
       await adoptGrabLists();
-      renderIfIdle();
+      await renderIfIdle();
     })
     .catch((err) => logDiag('shared-lists', err))
     // Start-up is settled: every background repair that could redraw a screen has
