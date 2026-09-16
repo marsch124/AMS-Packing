@@ -1,5 +1,6 @@
-# Runs on EVERY push and pull request: the model tests, then the UI tests.
-# A red run means the version must not go to the phone.
+# Every push and pull request runs the tests. A push to main that passes them is
+# then PUBLISHED to GitHub Pages by the deploy job — and only then. A red run
+# stops the release: the site simply stays at the previous version.
 name: Tests
 
 on:
@@ -30,3 +31,38 @@ jobs:
           name: playwright-report
           path: playwright-report
           retention-days: 14
+
+  # The release. `needs: tests` is the gate — GitHub does not start this job unless
+  # the tests job succeeded. Only a push to main publishes; branches and pull
+  # requests are tested but never deployed.
+  deploy:
+    needs: tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site (the app's files only — no tests, no tooling)
+        run: |
+          mkdir -p _site/js _site/icons
+          cp index.html styles.css manifest.webmanifest service-worker.js _site/
+          cp -R js/. _site/js/
+          cp -R icons/. _site/icons/
+          [ -d docs ] && cp -R docs _site/docs || true
+          touch _site/.nojekyll
+          ls -la _site
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v172';
+const APP_VERSION = 'v173';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -7517,6 +7517,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v173', '2026-09-16 · 21:30 UTC', false, 'A red run now stops the release',
+      '<b>Until now the tests could only warn.</b> They ran on every publish and turned the run red when something broke — but the version went live regardless, because publishing and testing were two separate things. From this version they are one: <b>a version reaches you only after every test has passed.</b> If a test fails, nothing is published and the app simply stays at the version you have. This is the first release to go out that way.',
+      'A broken version can no longer reach your phone at all — not even while I am looking the other way.'),
     v('v172', '2026-09-16 · 20:00 UTC', false, 'Test five — the trip review files what you missed',
       'Nothing changes on screen. The <b>fifth automatic test</b> creates a trip, opens its <b>Trip review</b>, types a thing you wished you’d had, saves — and then opens the template the review chose and checks the thing is now on it. That is the promise v162 made, and it is now checked on every publish. The review’s box, its Add button, its “which list” chooser and Save, every template card and every item row carry identifiers now. One test per version, as agreed.',
       'If a wished-for thing ever stopped landing on its template, the publish would turn red first.'),
