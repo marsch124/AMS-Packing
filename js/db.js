@@ -15,6 +15,7 @@
 // relational. All data stays on this device; export/import moves it as JSON/CSV/Excel.
 import {
   coerceList, coerceEvent, coerceItem, coerceMembership, coerceAction, coerceKit, normName,
+  CONTAINER_ROLE,
   resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
   buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
   id as newId, isPhotoRef, inlinePhotos, looksLikeEmail, ownerNameFromEmail,
@@ -503,6 +504,58 @@ export async function saveList(list) {
   ];
   await writeBatch(puts, dels);
   return list;
+}
+
+// --- An item on its own (v175) -------------------------------------------------
+//
+// 🚨 Until v175 the ONLY way to write an item was saveList(): items existed as a
+// side-effect of saving a template, which is exactly why a thing with no template
+// had to be parked in a fake "Loose items" list. These three treat the catalogue
+// as what it already is — the place your things live — so an item can be created,
+// read and edited with no template behind it at all.
+
+// Create or update ONE item, touching no membership. Returns the catalogue item.
+export async function saveCatalogItem(resolved) {
+  const { items } = await loadCatalog();
+  const byId = new Map(items.map((i) => [i.id, i]));
+  let cat = (resolved && resolved._itemId) ? byId.get(resolved._itemId) : null;
+  if (cat) applyIntrinsic(cat, resolved);          // steps over every field left undefined
+  else cat = catalogItemFromResolved(resolved);
+  await putOne(ITEMS, cat);
+  return cat;
+}
+
+// Delete ONE item and every membership pointing at it — a template must never be
+// left holding a row for a thing that no longer exists.
+export async function deleteCatalogItem(itemId) {
+  if (!itemId) return { memberships: 0 };
+  const { mems } = await loadCatalog();
+  const gone = mems.filter((m) => m.itemId === itemId);
+  await writeBatch([], [
+    { store: ITEMS, key: itemId },
+    ...gone.map((m) => ({ store: MEMBERSHIPS, key: m.id })),
+  ]);
+  return { memberships: gone.length };
+}
+
+// Every item you own, each with the templates it is on. Read from the CATALOGUE,
+// not by walking the templates — so a thing on no list is simply a thing on no
+// list, and appears here like everything else. Containers keep their own screen.
+export async function getItemsWithTemplates() {
+  const { items, mems, tmpls } = await loadCatalog();
+  const byTpl = new Map(tmpls.map((t) => [t.id, t]));
+  const homes = new Map();
+  const containerOnly = new Set();
+  for (const m of mems) {
+    const t = byTpl.get(m.templateId);
+    if (!t) continue;
+    if (t.role === CONTAINER_ROLE) { containerOnly.add(m.itemId); continue; }
+    if (!homes.has(m.itemId)) homes.set(m.itemId, []);
+    homes.get(m.itemId).push({ id: t.id, name: t.name || '', role: t.role || '' });
+  }
+  return items
+    .filter((it) => !(containerOnly.has(it.id) && !homes.has(it.id)))   // containers have their own screen
+    .map((it) => ({ item: it, templates: (homes.get(it.id) || []).sort((a, b) => a.name.localeCompare(b.name)) }));
 }
 
 export async function deleteList(id) {

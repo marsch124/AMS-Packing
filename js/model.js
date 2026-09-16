@@ -3263,6 +3263,22 @@ export function resolveMembership(item, m, tplDefaults = null) {
   });
 }
 
+// An item with NO template behind it, in the shape the editor expects (v175).
+//
+// 🚨 WHY THIS EXISTS. An item has always lived once in the catalogue, but every
+// VIEW of one was built by walking the templates — so a thing belonging to no
+// template could not be seen at all, and had to be parked in a fake list called
+// "Loose items". A thing you own does not need a list to exist. This resolves the
+// catalogue item against an EMPTY membership, so the same editor can open it:
+// every per-template answer comes back blank, every answer that belongs to the
+// item itself comes back as its own.
+export function resolveItemAlone(cat) {
+  const it = resolveMembership(cat, newMembership({ templateId: '', itemId: cat.id }));
+  it._itemId = cat.id;
+  it._memId = '';
+  return it;
+}
+
 // Every resolved item for a template, in membership order.
 export function resolveTemplateItems(template, catalog, memberships) {
   const itemsById = catalog instanceof Map ? catalog : new Map(asArray(catalog).map((i) => [i.id, i]));

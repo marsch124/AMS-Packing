@@ -6894,3 +6894,52 @@ html.compact .item-filterbar { margin-bottom: 8px; }
 
 /* (v166) the two template settings inside the Cover editor */
 .cover-settings { display: grid; gap: 8px; margin-top: 4px; }
+
+
+/* ---- Your things (#/things): the catalogue's own home (v175) ---- */
+.things-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  flex-wrap: wrap;
+}
+.things-bar .ai-searchbox { flex: 1 1 12rem; min-width: 0; }
+.things-count {
+  margin: 0 4px 6px;
+  font-size: .8rem;
+  color: color-mix(in srgb, var(--muted) 45%, var(--ink));
+}
+.things-list { display: grid; gap: 4px; }
+/* A row is a link, so it needs the entry's look without the button reset. */
+a.entry.thing-row {
+  color: inherit;
+  text-decoration: none;
+  align-items: center;
+}
+a.entry.thing-row .entry-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  text-align: left;
+}
+a.entry.thing-row .e-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thing-go { flex: none; color: var(--muted); display: inline-flex; }
+/* "On no list yet" is a fact, not a fault — amber, never red. */
+.thing-nolist { color: var(--warn-txt, var(--warn)); font-weight: 600; }
+/* The line the editor shows in place of the per-template panel. */
+.nolist-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: color-mix(in srgb, var(--warn) 9%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--line));
+  border-radius: 12px;
+  padding: 9px 12px;
+  margin: 0 0 10px;
+}

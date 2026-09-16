@@ -3,6 +3,7 @@ import {
   CATEGORIES, CONTAINERS, CONTAINER_ROLE, CONTAINER_LIST_NAME, containerNames, PHASES, PHASE_IDS, phase, phaseLabel, SEASONS, TRANSPORTS, CONTEXTS, DEFAULT_STORAGE_LOCATIONS,
   PHASE_DEFAULT_EMOJI, coercePhase, newPhase, setPhases, phasesCustomised, phaseOrFallback, phaseColor, phaseOrder, defaultPhaseId,
   ACTIVITY_ORDER, orderActivities,
+  resolveItemAlone,
   CATERING, cateringLabel, CHARGE_TYPES, chargeTypeShort, chargeTypeLabel, ITEM_CONDITIONS, RETIRE_REASONS, retireReasonLabel, CURRENCIES, GROUPS, GROUP_IDS, groupLabel, id, normName, newItem, newList, newEvent,
   TEMPLATE_DEFAULT_EMOJI, TEMPLATE_COLORS, listEmoji, listColor,
   isPhotoRef,
@@ -42,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v174';
+const APP_VERSION = 'v175';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -831,6 +832,102 @@ function manageGridColumns(order) {
 // columns grouped like the item editor: ① the item itself (intrinsic — edits apply
 // everywhere), ② in this list (qty/section — editable only when the item is in one
 // template), and ③ a tick-matrix of template membership. Reached from the Care tab.
+// ============================================================
+// Your things (#/things) — the catalogue's own home
+// ============================================================
+//
+// 🚨 WHY THIS SCREEN EXISTS. An item has lived once in the catalogue since v108,
+// but every VIEW of one was built by WALKING THE TEMPLATES — so a thing belonging
+// to no template could not be seen anywhere, and the app had to park it in a fake
+// list called "Loose items". This screen reads the catalogue directly. A thing on
+// no list is simply a thing on no list, and shows up here like everything else.
+const THINGS_NOLIST_KEY = 'ams-things-nolist';   // the "on no list" filter, remembered
+function thingsNoListOnly() { try { return localStorage.getItem(THINGS_NOLIST_KEY) === '1'; } catch { return false; } }
+
+async function renderThings() {
+  ALL_LISTS = await db.getLists();                  // the editor's template ticks read this
+  const rows = await db.getItemsWithTemplates();
+  const wrap = h('<section class="screen"></section>');
+  wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">Your things</h1>
+    <button class="btn primary" data-new data-testid="thing-new">${IC.plus}<span>New</span></button></div>`));
+  wrap.appendChild(h('<p class="muted pad">Everything you own, whether or not it is on a list yet. Tap one to change it — a change here reaches every list it is on.</p>'));
+
+  const homeless = rows.filter((r) => !r.templates.length).length;
+  const bar = h(`<div class="things-bar">
+    <label class="ai-searchbox">${IC.search}<input type="search" class="things-search" data-testid="thing-search" placeholder="Search your things…" autocomplete="off"></label>
+    ${homeless ? `<button type="button" class="fchip${thingsNoListOnly() ? ' on' : ''}" data-nolist data-testid="thing-filter-nolist">${ic('warn','sm')}On no list ${homeless}</button>` : ''}
+  </div>`);
+  wrap.appendChild(bar);
+  const body = h('<div class="items things-list"></div>');
+  wrap.appendChild(body);
+
+  let query = '';
+  const draw = () => {
+    const q = query.trim().toLowerCase();
+    let shown = rows.slice().sort((a, b) => (a.item.name || '').localeCompare(b.item.name || '', undefined, { sensitivity: 'base' }));
+    if (thingsNoListOnly()) shown = shown.filter((r) => !r.templates.length);
+    if (q) shown = shown.filter((r) => (r.item.name || '').toLowerCase().includes(q));
+    body.innerHTML = '';
+    if (!shown.length) {
+      body.appendChild(h(`<div class="empty"><p class="empty-s">${q ? 'Nothing matches that.' : 'Nothing here yet — tap <b>New</b> to add the first thing.'}</p></div>`));
+      return;
+    }
+    body.appendChild(h(`<p class="things-count">${shown.length} thing${shown.length === 1 ? '' : 's'}</p>`));
+    for (const r of shown) {
+      const where = r.templates.length
+        ? r.templates.map((t) => esc(t.name)).join(' · ')
+        : '<span class="thing-nolist">On no list yet</span>';
+      body.appendChild(h(`<a class="entry thing-row" data-testid="thing-row" href="#/thing/${encodeURIComponent(r.item.id)}">
+        <span class="entry-main">
+          <span class="e-name">${esc(r.item.name || '(unnamed)')}</span>
+          <span class="e-sub">${where}</span>
+        </span>
+        <span class="thing-go">${IC.fwd}</span>
+      </a>`));
+    }
+  };
+  draw();
+  $('.things-search', bar).addEventListener('input', (e) => { query = e.target.value; draw(); });
+  $('[data-nolist]', bar)?.addEventListener('click', (e) => {
+    const on = !thingsNoListOnly();
+    try { localStorage.setItem(THINGS_NOLIST_KEY, on ? '1' : '0'); } catch { /* ignore */ }
+    e.currentTarget.classList.toggle('on', on);
+    draw();
+  });
+  $('[data-new]', wrap).addEventListener('click', async () => {
+    const name = (prompt('What is it?') || '').trim();
+    if (!name) return;
+    // Created with NO list — the thing exists first; where it goes is a later,
+    // separate decision, which is the whole point of this screen.
+    //
+    // 🪤 NOT saveGuard(): it reports success as a BOOLEAN, so the new item's id
+    // would be lost and the next line would navigate to #/thing/undefined. When a
+    // save's RETURN VALUE is needed, catch it here instead.
+    let cat;
+    try {
+      cat = await db.saveCatalogItem(newItem({ name }));
+    } catch (err) {
+      logDiag('save', err);
+      alert('Sorry — that could not be saved. Please try again.');
+      return;
+    }
+    location.assign(`#/thing/${encodeURIComponent(cat.id)}`);
+  });
+  return wrap;
+}
+
+// One thing, on its own — the same editor every template uses, with no template
+// behind it (see itemEditor's `noList`).
+async function renderThing(itemId) {
+  ALL_LISTS = await db.getLists();
+  const cat = (await db.getCatalogItems()).find((i) => i.id === itemId);
+  if (!cat) { location.assign('#/things'); return h('<section></section>'); }
+  const wrap = h('<section class="screen"></section>');
+  wrap.appendChild(h(backBar(cat.name || 'Thing', '#/things')));
+  wrap.appendChild(itemEditor(null, resolveItemAlone(cat), () => {}, () => { location.assign('#/things'); }));
+  return wrap;
+}
+
 async function renderItemsGrid() {
   const wrap = h('<section class="screen screen-grid"></section>');
   wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">All items · table</h1></div>`));
@@ -5859,13 +5956,18 @@ function readSectionFromEditor(ed, list, it) {
   return existing.id;
 }
 
+// `list` may be NULL (v175): the item is being edited ON ITS OWN, with no template
+// behind it. Everything belonging to the THING ITSELF works exactly as before; the
+// per-template half (qty, this list's bag, its section, the conditions) lives on a
+// membership, has nowhere to be yet, and is simply not shown until it joins a list.
 function itemEditor(list, it, setOpen, draw) {
+  const noList = !list;
   const ed = h('<div class="editor item-editor"></div>');
   // A container (bag/duffel/backpack) is edited as an object in its own right: it
   // keeps the name / photos / capacity / storage / care / details fields, but drops
   // the packing-only ones (where it's packed, when, flags, conditions, sections,
   // template membership) that only make sense for things you put INTO a bag.
-  const isContainer = list.role === CONTAINER_ROLE;
+  const isContainer = !noList && list.role === CONTAINER_ROLE;
   STORAGES = collectStorages(ALL_LISTS); // freshest saved + in-use places for the dropdown
   // Care state that can't be read straight back from the DOM on save:
   //  - the photos are held here and only committed to the item on Save (so Cancel discards them),
@@ -5904,7 +6006,7 @@ function itemEditor(list, it, setOpen, draw) {
     // Real templates only — the Loose items bin is where things start, not a
     // place you "file into", so it never appears as a tickable row.
     const rows = ALL_LISTS.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE).map((l) => {
-      const here = l.id === list.id;
+      const here = !noList && l.id === list.id;
       const on = here || memberIds.has(l.id);
       return `<label class="check tmpl-check${on ? ' on' : ''}${here ? ' cur' : ''}">
         <input type="checkbox" name="tmpl" value="${esc(l.id)}"${on ? ' checked' : ''}${here ? ' disabled' : ''}>
@@ -5965,7 +6067,9 @@ function itemEditor(list, it, setOpen, draw) {
         <label class="field"><span>Container <em>everywhere</em></span>${selectHtml('container', ['', ...containerOpts(defContainer)].map((c) => ({ value: c, label: c || '— none (task) —' })), defContainer)}</label>
         <label class="field"><span>When <em>everywhere</em></span>${selectHtml('phase', phaseOpts(defPhase), defPhase)}</label>
       </div>
-      <p class="layer-note">Change these and every list that uses this item follows. To differ in <b>${esc(list.name)}</b> only, set the exception under <b>② In this list</b>.</p>
+      <p class="layer-note">${noList
+        ? 'These belong to the thing itself, so every list you later put it on starts from them.'
+        : `Change these and every list that uses this item follows. To differ in <b>${esc(list.name)}</b> only, set the exception under <b>② In this list</b>.`}</p>
       <label class="field"><span>Weight (g) <em>per unit</em></span><input type="number" name="weight" min="0" inputmode="numeric" value="${it.weight || ''}" placeholder="0"></label>
       <div class="checks">
         <label class="check${it.charging ? ' on' : ''}"><input type="checkbox" name="charging" ${it.charging ? 'checked' : ''}>${ic('bolt','sm')}Charging</label>
@@ -6057,7 +6161,8 @@ function itemEditor(list, it, setOpen, draw) {
       </details>
     </section>
 
-    ${isContainer ? '' : `<section class="layer layer-membership">
+    ${noList ? `<p class="layer-note nolist-note">${ic('list','sm')}This thing is on <b>no list yet</b>. Tick one below and you can then set how many, which bag and the conditions for that list.</p>` : ''}
+    ${(isContainer || noList) ? '' : `<section class="layer layer-membership">
       <div class="layer-h"><span class="layer-num">2</span><span class="layer-t">In this list · ${esc(list.name)}</span><span class="layer-sub">Just for this template — changing these here doesn't touch the item in other lists.</span></div>
       <label class="field"><span>Qty</span><input name="qty" value="${esc(it.qty)}" placeholder="optional"></label>
       ${list.role === 'loose' ? '' : `<label class="field"><span>Container <em>in this list only</em></span>
@@ -6207,7 +6312,7 @@ function itemEditor(list, it, setOpen, draw) {
         // database — quite possibly OTHER items in this very template — so carry
         // those changes into the copy being edited. Without this, saving one item
         // silently puts the old owner back on every other item in the template.
-        applyOwnerChanges(list, changes);
+        if (!noList) applyOwnerChanges(list, changes);
         // Follow what the manager did to the name this item was showing: renamed,
         // it keeps up; removed and re-assigned, it moves with its things.
         const keep = changes.has(normName(before)) ? changes.get(normName(before)) : before;
@@ -6267,8 +6372,17 @@ function itemEditor(list, it, setOpen, draw) {
     if (x === 'del') {
       const msg = isContainer
         ? `Delete the container “${it.name || 'this container'}”? Items already set to this container keep the name.`
-        : `Remove “${it.name || 'this item'}” from the ${list.name} template?`;
+        : noList
+          ? `Delete “${it.name || 'this item'}” altogether?\n\nIt goes from your things and from every list it is on. This cannot be undone.`
+          : `Remove “${it.name || 'this item'}” from the ${list.name} template?`;
       if (!confirm(msg)) return;
+      // With no list behind it there is no membership to remove instead, so Delete
+      // means the THING — and it takes its rows in every template with it.
+      if (noList) {
+        setOpen(null);
+        if (await saveGuard(db.deleteCatalogItem(it._itemId))) { ALL_LISTS = await db.getLists(); if (takeItemEditorReturn()) return; draw(); }
+        return;
+      }
       list.items = list.items.filter((z) => z.id !== it.id);
       setOpen(null);
       if (await saveGuard(db.saveList(list))) { if (takeItemEditorReturn()) return; draw(); }
@@ -6279,8 +6393,13 @@ function itemEditor(list, it, setOpen, draw) {
       it.weight = Math.max(0, parseInt($('input[name=weight]', ed).value, 10) || 0);
       // Packing-only fields — absent in container mode, so read them only then.
       if (!isContainer) {
-        it.qty = ($('input[name=qty]', ed).value || '').trim();
-        it.section = readSectionFromEditor(ed, list, it);
+        // 🚨 qty, the note, "per night" and the conditions all live on the MEMBERSHIP,
+        // in the "② In this list" panel — which is not rendered when there is no list
+        // (v175). Reading them then would find nothing and throw, so with no list
+        // they are simply left as they are: they become answerable the moment the
+        // thing joins a template.
+        if (!noList) it.qty = ($('input[name=qty]', ed).value || '').trim();
+        it.section = noList ? '' : readSectionFromEditor(ed, list, it);
         // "Which bag" is three separate answers, so read them into three separate
         // channels and derive the effective value from them. Writing only
         // `it.container` is what used to freeze the shared default forever.
@@ -6290,18 +6409,20 @@ function itemEditor(list, it, setOpen, draw) {
         it._ovContainer = ovSel ? ovSel.value : (it._ovContainer || '');
         it.container = it._ovContainer || it._tplContainer || it._defContainer;
         it.phase = it._ovPhase || it._defPhase;
-        it.perNight = $('input[name=perNight]', ed).checked;
+        if (!noList) it.perNight = $('input[name=perNight]', ed).checked;
         it.charging = $('input[name=charging]', ed).checked;
         it.chargeType = $('select[name=chargeType]', ed).value;
         it.liquid = $('input[name=liquid]', ed).checked;
         it.restricted = $('input[name=restricted]', ed).checked;
         it.consumable = $('input[name=consumable]', ed).checked;
-        it.note = ($('input[name=note]', ed).value || '').trim();
-        it.seasons = $$('input[name=seasons]:checked', ed).map((n) => n.value);
-        it.contexts = $$('input[name=contexts]:checked', ed).map((n) => n.value);
-        it.transports = $$('input[name=transports]:checked', ed).map((n) => n.value);
-        it.catering = $$('input[name=catering]:checked', ed).map((n) => n.value);
-        it.weather = $$('input[name=weather]:checked', ed).map((n) => n.value);
+        if (!noList) {
+          it.note = ($('input[name=note]', ed).value || '').trim();
+          it.seasons = $$('input[name=seasons]:checked', ed).map((n) => n.value);
+          it.contexts = $$('input[name=contexts]:checked', ed).map((n) => n.value);
+          it.transports = $$('input[name=transports]:checked', ed).map((n) => n.value);
+          it.catering = $$('input[name=catering]:checked', ed).map((n) => n.value);
+          it.weather = $$('input[name=weather]:checked', ed).map((n) => n.value);
+        }
       } else {
         it.capacityL = Math.max(0, parseFloat($('input[name=capacityL]', ed).value) || 0);
         it.maxKg = Math.max(0, parseFloat($('input[name=maxKg]', ed).value) || 0);
@@ -6363,12 +6484,22 @@ function itemEditor(list, it, setOpen, draw) {
       const actionsToSave = actions.filter((a) => (a.text || '').trim());
       setOpen(null);
       const ok = await saveGuard((async () => {
-        await db.saveList(list); // this template: the item's shared edits + its membership here
-        if (!nameKey) return;
-        // The item's stable catalog id. A brand-new item earns its id from the save
-        // just done, so look it up by name in the freshly-resolved template.
-        let itemId = it._itemId
-          || (await db.getList(list.id))?.items.find((z) => (z.name || '').trim().toLowerCase() === nameKey)?._itemId;
+        // With no template behind it the item goes STRAIGHT into the catalogue —
+        // the whole point of v175 — and its id comes straight back, rather than
+        // having to be fished out of a freshly-resolved template by name.
+        let itemId;
+        if (noList) {
+          if (!nameKey) return;
+          itemId = (await db.saveCatalogItem(it)).id;
+          it._itemId = itemId;
+        } else {
+          await db.saveList(list); // this template: the item's shared edits + its membership here
+          if (!nameKey) return;
+          // The item's stable catalog id. A brand-new item earns its id from the save
+          // just done, so look it up by name in the freshly-resolved template.
+          itemId = it._itemId
+            || (await db.getList(list.id))?.items.find((z) => (z.name || '').trim().toLowerCase() === nameKey)?._itemId;
+        }
         if (!itemId) return;
         // Commit this item's to-dos (tied by the stable catalog id).
         await db.replaceItemActions(itemId, it.name, actionsToSave);
@@ -6378,7 +6509,7 @@ function itemEditor(list, it, setOpen, draw) {
         // everywhere the moment saveList propagates it above.
         const all = await db.getLists();
         for (const l of all) {
-          if (l.id === list.id) continue;
+          if (!noList && l.id === list.id) continue;
           const w = wanted.find((x) => x.id === l.id);
           if (!w) continue;
           const here = (l.items || []).some((z) => z._itemId === itemId);
@@ -6386,7 +6517,7 @@ function itemEditor(list, it, setOpen, draw) {
             // A LINK: adds a membership, never rewrites the shared item. The section
             // travels by NAME — if this template has a section called the same thing
             // the item lands in it, otherwise it arrives Ungrouped, ready to file.
-            l.items.unshift(linkFromResolved(it, itemId, { section: mapSectionAcrossTemplates(it.section, list, l) }));
+            l.items.unshift(linkFromResolved(it, itemId, { section: noList ? '' : mapSectionAcrossTemplates(it.section, list, l) }));
             await db.saveList(l);
           } else if (!w.checked && here) {
             l.items = l.items.filter((z) => z._itemId !== itemId); // drop this template's membership
@@ -6402,7 +6533,7 @@ function itemEditor(list, it, setOpen, draw) {
           if (loose && loose.items.some((z) => z._itemId === itemId)) {
             loose.items = loose.items.filter((z) => z._itemId !== itemId);
             await db.saveList(loose);
-            if (list.role === 'loose') list.items = list.items.filter((z) => z._itemId !== itemId);
+            if (!noList && list.role === 'loose') list.items = list.items.filter((z) => z._itemId !== itemId);
           }
         }
       })());
@@ -6450,6 +6581,12 @@ async function renderMaintenance() {
   wrap.appendChild(h(`<div class="topbar"><h1 class="grow">Care &amp; maintenance</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a></div>`));
 
   const lists = await db.getLists();
+  // The catalogue's own home — every thing you own, list or no list (v175).
+  wrap.appendChild(h(`<a class="care-link" href="#/things" data-testid="care-things">
+    <span class="care-link-ic">${ic('list','md')}</span>
+    <span class="care-link-body"><b>Your things</b><span class="care-link-sub">Everything you own, on a list or not — search, change, add</span></span>
+    <span class="care-link-go">${IC.fwd}</span>
+  </a>`));
   // Entry point to the Containers catalogue (bags/duffels/backpacks as objects).
   const containerCount = (lists.find((l) => l.role === CONTAINER_ROLE)?.items || []).length;
   wrap.appendChild(h(`<a class="care-link" href="#/containers">
@@ -7161,6 +7298,7 @@ function howtoCard() {
 
         <h3>Loose items — things not in a template yet</h3>
  <p>You don’t have to file an item into a template just to keep it. At the top of the <b>Templates</b> tab there’s a <b>Loose items</b> card — a holding place for anything you want to jot down before you’ve decided where or when to pack it. Open it and use <b>Add several</b> to type or paste a whole batch (<b>one item per line</b>), or <b>Add item</b> for a single one. Loose items are <b>never</b> added to a trip and never appear in the activity picker; they simply wait. When you’re ready, open a loose item and tick a template under <b>In these templates</b> — it’s filed there and <b>automatically drops out</b> of the Loose items list. Anything still loose (here or in the Care tab’s <b>All items</b>) carries a <b>No template</b> flag so it’s never quietly forgotten.</p>
+        <p><b>Since v175 there is a better home for them: Care → Your things.</b> That screen reads your catalogue <em>directly</em> rather than walking the templates, so it shows <b>everything you own</b> — on a list or not — with anything on no list marked. <b>New</b> there asks only what the thing is; where it goes is a separate decision you can make later, or never. Open a thing with no list and everything belonging to <b>the thing itself</b> works as usual; the per-list half (how many, which bag, its section, the conditions) appears once you tick a list.</p>
 
         <h3>Containers — your bags as objects</h3>
  <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
@@ -7517,6 +7655,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v175', '2026-09-16 · 22:30 UTC', false, 'Your things — an item no longer needs a list in order to exist',
+      '<b>Your words: “I want the item to live, even if it is not connected to any packing list yet.” You were putting your finger on something real.</b><br><br>Since <b>v108</b> each of your things has lived <em>once</em>, in one catalogue — which is why renaming a jacket renames it everywhere. But every <em>view</em> of your things was built by <b>walking the templates</b>. So a thing that belonged to no template could not be seen anywhere at all, and the app had to park it in a made-up list called <b>“Loose items”</b> — a template that is not a template. That is the strange function you were feeling: the storage was honest, the app still pretended your things were children of lists.<br><br><b>Care → Your things</b> is the catalogue’s own home. It reads your things <em>directly</em>, so a thing on no list is simply a thing on no list, and sits there with everything else. Search it, tap anything to change it — a change reaches every list that thing is on, as always. <b>New</b> asks only what the thing is: no “which list?” first. Anything on no list is marked, and one tap shows you just those.<br><br>Open a thing that is on no list and the editor says so plainly. Everything belonging to <b>the thing itself</b> — its name, weight, where it is kept, its photos, its care record, who owns it, what it cost — works exactly as it always has. The half that belongs to <em>a list</em> — how many, which bag, its section, the conditions — has nowhere to live until it joins one, so it appears the moment you tick a list.<br><br>Nothing moved and nothing was taken away: templates work exactly as before, and “Loose items” is still there for now. This is the first of three steps.',
+      'A thing you own can now exist on its own — bought today, filed onto a list whenever you feel like it, or never.'),
     v('v174', '2026-09-16 · 23:00 UTC', false, 'Test six — one item, one row on the Care list',
       'Nothing changes on screen. The <b>sixth automatic test</b> guards the bug v165 fixed: it gives a thing that sits in several templates a care schedule, opens <b>Care</b>, and checks it is listed <b>once</b> — naming every template it belongs to — rather than once per template. Each row on the maintenance list carries an identifier now. One test per version, as agreed.',
       'The Care list can never again count one jacket three times without the publish turning red first.'),
@@ -10616,6 +10757,9 @@ async function renderRoute() {
   if (hash === '#/map') return renderMap();
   if (hash === '#/lists') return renderLists();
   if (hash === '#/maintenance') return renderMaintenance();
+  if (hash === '#/things') return renderThings();
+  const thingId = m(/^#\/thing\/([^/]+)$/);
+  if (thingId) return renderThing(decodeURIComponent(thingId));
   if (hash === '#/containers') return renderContainers();
   if (hash === '#/items') return renderItemsGrid();
   if (hash === '#/actions') return renderActions();
@@ -10677,7 +10821,7 @@ function setActiveTab() {
   const hash = location.hash || '#/';
   const base = hash.startsWith('#/events') || hash.startsWith('#/event/') || hash === '#/map' ? '#/events'
     : hash.startsWith('#/list') || hash === '#/refine' ? '#/lists'
-    : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') || hash.startsWith('#/shopping') ? '#/maintenance'
+    : hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') || hash.startsWith('#/shopping') || hash.startsWith('#/things') || hash.startsWith('#/thing/') ? '#/maintenance'
     : hash.startsWith('#/actions') ? '#/actions'
     : hash.startsWith('#/settings') || hash.startsWith('#/overview') ? '#/settings' : '#/';
   $$('.tabbar a').forEach((a) => a.classList.toggle('active', a.getAttribute('href') === base));
@@ -10689,7 +10833,7 @@ function currentSection() {
   const hash = location.hash || '#/';
   if (hash.startsWith('#/events') || hash.startsWith('#/event/') || hash === '#/map') return 'events';
   if (hash.startsWith('#/list') || hash === '#/refine') return 'templates';
-  if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') || hash.startsWith('#/shopping')) return 'care';
+  if (hash.startsWith('#/maintenance') || hash.startsWith('#/containers') || hash.startsWith('#/items') || hash.startsWith('#/shopping') || hash.startsWith('#/things') || hash.startsWith('#/thing/')) return 'care';
   if (hash.startsWith('#/actions')) return 'actions';
   if (hash.startsWith('#/settings') || hash.startsWith('#/overview')) return 'settings';
   return 'home';
