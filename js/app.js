@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v171';
+const APP_VERSION = 'v172';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -3709,7 +3709,7 @@ async function renderEvent(eventId) {
     <button class="btn ghost" data-act="kit">${ic('toolbox')}<span>Kit</span></button>
     <button class="btn ghost" data-act="regen">${IC.refresh}<span>Regenerate</span></button>
     <button class="btn ghost" data-act="preset">${IC.star}<span>Save as preset</span></button>
-    <button class="btn ghost" data-act="review">${IC.check}<span>Trip review</span></button>
+    <button class="btn ghost" data-act="review" data-testid="event-review">${IC.check}<span>Trip review</span></button>
     <button class="btn ghost" data-act="share">${IC.share}<span>Share</span></button>
     <button class="btn ghost" data-act="xlsx">${IC.sheet}<span>Excel</span></button>
   </div>`);
@@ -5266,8 +5266,8 @@ async function renderReview(eventId) {
     <h2>Anything you wished you’d had?</h2>
     <p class="muted">The thing you had to buy, borrow or do without. Add it here and it goes onto a list, so next time it comes with you.</p>
     <div class="rev-miss-add">
-      <input class="rev-miss-in" type="text" placeholder="e.g. Power bank" autocomplete="off">
-      <button class="btn" type="button" data-add>${IC.plus}<span>Add</span></button>
+      <input class="rev-miss-in" type="text" data-testid="review-miss-input" placeholder="e.g. Power bank" autocomplete="off">
+      <button class="btn" type="button" data-add data-testid="review-miss-add">${IC.plus}<span>Add</span></button>
     </div>
     <div class="rev-miss-list"></div>
   </div>`);
@@ -5278,7 +5278,7 @@ async function renderReview(eventId) {
     for (const m of missing) {
       const row = h(`<div class="rev-miss-row">
         <span class="rev-miss-name">${esc(m.name)}</span>
-        <select class="rev-miss-where" aria-label="Which list should it go on?">
+        <select class="rev-miss-where" data-testid="review-miss-where" aria-label="Which list should it go on?">
           ${fileOpts.map((l) => `<option value="${esc(l.id)}"${l.id === m.listId ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}
         </select>
         <button class="iconbtn" type="button" data-drop aria-label="Remove">${IC.close}</button>
@@ -5381,7 +5381,7 @@ async function renderReview(eventId) {
     }
   });
 
-  const save = h(`<div class="pack-footer"><div class="spacer"></div><button class="btn primary lg" data-save>Save review</button></div>`);
+  const save = h(`<div class="pack-footer"><div class="spacer"></div><button class="btn primary lg" data-save data-testid="review-save">Save review</button></div>`);
   wrap.appendChild(save);
   $('[data-save]', save).addEventListener('click', async () => {
     for (const e of items) e.used = !!used.get(e.id);
@@ -5484,7 +5484,7 @@ async function renderLists() {
   // A visual cover card: a coloured tile with the template's emoji, its name and
   // an item count. Colour + emoji come from the template's cover (with sensible
   // hashed/default fallbacks), so the grid reads at a glance and by colour.
-  const card = (l) => h(`<a class="tmpl-card" href="#/list/${l.id}" style="--cover:${esc(listColor(l))}">
+  const card = (l) => h(`<a class="tmpl-card" data-testid="template-card" href="#/list/${l.id}" style="--cover:${esc(listColor(l))}">
       <span class="tmpl-cover"><span class="tmpl-emoji">${esc(listEmoji(l))}</span></span>
       <span class="tmpl-body">
         <span class="tmpl-name">${esc(l.name)}</span>
@@ -5812,7 +5812,7 @@ function listItemRow(list, it, getOpen, setOpen, draw) {
     + `${it.retired ? `<span class="badge retired" title="${esc('Not in use' + (it.retiredReason ? ` — ${retireReasonLabel(it.retiredReason)}` : '') + ' — kept on record, never added to a trip')}">${ic('ban','xs')}Not in use</span>` : ''}`
     + conditionBadgeHTML(it);
   const thumb = it.thumb ? `<img class="row-thumb" src="${esc(it.thumb)}" alt="">` : '';
-  const row = h(`<div class="entry${it.retired ? ' retired' : ''}">
+  const row = h(`<div class="entry${it.retired ? ' retired' : ''}" data-testid="item-row">
     ${thumb}
     <button class="entry-main" type="button">
       <span class="e-name">${esc(it.name || '(unnamed)')}${it.qty ? ` <em>×${esc(it.qty)}</em>` : ''} ${badges}</span>
@@ -7517,6 +7517,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v172', '2026-09-16 · 20:00 UTC', false, 'Test five — the trip review files what you missed',
+      'Nothing changes on screen. The <b>fifth automatic test</b> creates a trip, opens its <b>Trip review</b>, types a thing you wished you’d had, saves — and then opens the template the review chose and checks the thing is now on it. That is the promise v162 made, and it is now checked on every publish. The review’s box, its Add button, its “which list” chooser and Save, every template card and every item row carry identifiers now. One test per version, as agreed.',
+      'If a wished-for thing ever stopped landing on its template, the publish would turn red first.'),
     v('v171', '2026-09-16 · 18:30 UTC', false, 'Test four — the Density switch',
       'Nothing changes on screen. The <b>fourth automatic test</b> opens <b>Settings → Appearance</b>, switches Density to <b>Comfortable</b>, checks the whole app loosens, reloads to check the choice is remembered, and switches back. Every choice in every Settings switch, and every folding section, now carries an identifier for the tests to find it by. One test per version, as agreed.',
       'If the Density switch ever stopped working — or forgot your choice — the publish would turn red first.'),
