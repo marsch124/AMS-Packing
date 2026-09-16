@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v170';
+const APP_VERSION = 'v171';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -1414,7 +1414,9 @@ function radioRow(name, options, selected) {
   return `<div class="segmented">${options.map((o) => {
     const val = typeof o === 'object' ? o.value : o;
     const label = typeof o === 'object' ? o.label : o;
-    return `<label class="seg${val === selected ? ' on' : ''}"><input type="radio" name="${name}" value="${esc(val)}"${val === selected ? ' checked' : ''}>${esc(label)}</label>`;
+    // Every choice carries an identifier — `${name}-${value}` — so a test can pick
+    // it by what it IS (density-comfortable) rather than by the word on it.
+    return `<label class="seg${val === selected ? ' on' : ''}" data-testid="${esc(name)}-${esc(val)}"><input type="radio" name="${name}" value="${esc(val)}"${val === selected ? ' checked' : ''}>${esc(label)}</label>`;
   }).join('')}</div>`;
 }
 function checkRow(name, options, selectedArr) {
@@ -6549,7 +6551,7 @@ async function renderMaintenance() {
   const headH2 = items.querySelector('.ai-head > h2');
   if (headH2) headH2.remove();                        // the fold's own line names it
   const fold = h(`<div class="card block sset-card" style="--tone:var(--brand)">
-    <details class="howto sset" data-sset="care-items"${settingsOpen('care-items', false) ? ' open' : ''}>
+    <details class="howto sset" data-sset="care-items" data-testid="fold-care-items"${settingsOpen('care-items', false) ? ' open' : ''}>
       ${foldSummary('All items', `${uniq} item${uniq === 1 ? '' : 's'} — search, filter, or add one`, 'list')}
     </details></div>`);
   const det = fold.querySelector('details');
@@ -7515,6 +7517,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v171', '2026-09-16 · 18:30 UTC', false, 'Test four — the Density switch',
+      'Nothing changes on screen. The <b>fourth automatic test</b> opens <b>Settings → Appearance</b>, switches Density to <b>Comfortable</b>, checks the whole app loosens, reloads to check the choice is remembered, and switches back. Every choice in every Settings switch, and every folding section, now carries an identifier for the tests to find it by. One test per version, as agreed.',
+      'If the Density switch ever stopped working — or forgot your choice — the publish would turn red first.'),
     v('v170', '2026-09-16 · 17:00 UTC', false, 'The same catch, one layer deeper',
       'v169 guarded against a background redraw landing while you type — but it checked for typing when the redraw was <em>asked for</em>, and a redraw first reads the database, which on a slow phone takes real time. Typing that began during that read was invisible to the guard, and the finished redraw still swapped the form out from under it. The tests turned red again, exactly as they should. A background redraw now checks for typing <b>a second time, at the last moment before it swaps the screen</b>, and backs off; the fresh lists simply arrive with the next redraw. And the app no longer declares its start-up finished until those redraws have actually completed.',
       'Typing in the first seconds after opening the app is safe on the slowest phone, not only on a fast Mac.'),
@@ -8703,7 +8708,7 @@ function foldCard(id, cardEl, summaryText, { icon = 'dot', tone = null, open = f
   cardEl.classList.remove('card', 'block');
   cardEl.classList.add('howto-body');
   const outer = h(`<div class="card block sset-card" style="--tone:${toneOf(tone || id)}">
-    <details class="howto sset" data-sset="${esc(id)}"${settingsOpen(id, open) ? ' open' : ''}>
+    <details class="howto sset" data-sset="${esc(id)}" data-testid="fold-${esc(id)}"${settingsOpen(id, open) ? ' open' : ''}>
       ${foldSummary(title, summaryText, icon)}
     </details></div>`);
   const det = outer.querySelector('details');
