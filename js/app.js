@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v167';
+const APP_VERSION = 'v168';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -5050,7 +5050,7 @@ async function renderPackMode(eventId) {
     if (overall.done >= overall.total) { body.appendChild(finishScreen(ev, overall)); return; }
 
     // Overall progress
-    body.appendChild(h(`<div class="pack-overall"><div class="bar big"><span style="width:${overall.pct}%"></span></div><div class="ev-prog">${overall.done}/${overall.total} packed · ${overall.pct}%</div></div>`));
+    body.appendChild(h(`<div class="pack-overall"><div class="bar big"><span style="width:${overall.pct}%"></span></div><div class="ev-prog" data-testid="pack-progress">${overall.done}/${overall.total} packed · ${overall.pct}%</div></div>`));
 
     // Clamp the phase index and grab the current step
     packState.idx = Math.max(0, Math.min(packState.idx, steps.length - 1));
@@ -5064,7 +5064,7 @@ async function renderPackMode(eventId) {
         <div class="pack-phase-t">${step.phase.emoji ? `<span class="grp-ic" aria-hidden="true">${esc(step.phase.emoji)}</span> ` : ''}${esc(step.phase.label)}</div>
         <div class="pack-phase-n">Phase ${packState.idx + 1} of ${steps.length} · ${step.remaining} of ${step.total} left</div>
       </div>
-      <button class="iconbtn" data-nav="next" ${packState.idx >= steps.length - 1 ? 'disabled' : ''} aria-label="Next phase">${IC.fwd}</button>
+      <button class="iconbtn" data-nav="next" data-testid="pack-next" ${packState.idx >= steps.length - 1 ? 'disabled' : ''} aria-label="Next phase">${IC.fwd}</button>
     </div>`);
     body.appendChild(stepper);
     if (step.phase.hint) body.appendChild(h(`<p class="pack-hint">${esc(step.phase.hint)}</p>`));
@@ -5168,7 +5168,7 @@ function packRow(ev, entry, redraw, packerSaid = false, saidBy = '') {
   ].filter(Boolean).join(' · ');
   const editing = packState.editId === entry.id;
   const row = h(`<div class="pack-row${editing ? ' editing' : ''}">
-    <button class="pack-item${entry.checked ? ' done' : ''}" type="button">
+    <button class="pack-item${entry.checked ? ' done' : ''}" type="button" data-testid="pack-toggle" aria-pressed="${entry.checked ? 'true' : 'false'}">
       <span class="pack-box">${entry.checked ? IC.check : ''}</span>
       <span class="pack-body">
         <span class="pack-name">${esc(entry.name)}${entry.qty ? ` <em>×${esc(entry.qty)}</em>` : ''}${entry.charging ? ` <span class="badge charge" title="${esc('Needs charging' + (chargeTypeShort(entry.chargeType) ? ` — ${chargeTypeLabel(entry.chargeType)}` : ''))}">${ic('bolt','xs')}${chargeTypeShort(entry.chargeType) ? `${esc(chargeTypeShort(entry.chargeType))}` : ''}</span>` : ''}</span>
@@ -7506,6 +7506,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v168', '2026-09-16 · 14:00 UTC', false, 'Test three — a tick in Packing Mode',
+      'Nothing changes on screen. The <b>third automatic test</b> joins the two from v167 and runs with them on every publish: it creates a trip, opens <b>Packing Mode</b>, ticks the first thing, and checks that the count moves from 0 to 1 — and that the tick is still there after the page is reloaded. The three controls it touches (the tick, the progress line, the next-phase arrow) carry their identifiers now. One test per version, as agreed.',
+      'A tick that stopped sticking would turn the publish red before it reached your phone.'),
     v('v167', '2026-09-16 · 12:00 UTC', false, 'The first automatic tests — run on every publish, before anything reaches you',
       '<b>Nothing changes on screen. What changes is what happens between a change and your phone.</b><br><br>Until now, every version was checked by a person looking at it. From this one, <b>two automatic tests run on every publish</b>, on GitHub, before the version goes live: one opens the app and checks it shows its version; the other creates a trip from the Home form and checks it appears on the Events tab. If either fails, the publish is marked red and stops there.<br><br>The rule they follow is yours: <b>every control is found by an identifier, never by its words</b> — so the wording on a button can change without a test breaking, and a test only fails when something has actually stopped working. The controls the tests need carry those identifiers now; more are added one test at a time, each new version adding the test for whatever it touched.',
       'A broken version can no longer reach your phone without the publish turning red first.'),
