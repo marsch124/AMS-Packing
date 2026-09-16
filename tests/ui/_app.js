@@ -7,6 +7,8 @@ export async function openApp(page, hash = '#/') {
   await page.route(/dexie\.cloud/, (route) => route.abort());
   await page.goto(`/index.html${hash}`);
   await expect(page.getByTestId('app-version')).toHaveText(/v\d+/);
+  // Start-up repairs can redraw a screen; the app flags when they are all done.
+  await expect(page.locator('html[data-ready="1"]')).toBeAttached({ timeout: 20_000 });
 }
 
 // Create a trip from the Home form and land on it. Returns the name used.

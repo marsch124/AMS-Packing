@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v168';
+const APP_VERSION = 'v169';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -161,6 +161,14 @@ function busyEditing() {
   // the whole event form — and the half-typed trip name with it.
   // `.grab-editing` = a workout grab list is in edit mode — same protection.
   if (document.querySelector('.editor, .act-editor, .overlay, .dr-open, .grab-editing')) return true;
+  // (v169) A trip name typed into the Home form is someone's typing whether or not
+  // the field still has focus. The focus test alone lost it: in the instant the
+  // finger moves from the field to Create Event, focus is on the button, and a
+  // background refresh landing right then rebuilt the form empty — the trip was
+  // created as "Untitled event". Found by the CI tests on a slow runner, where
+  // the start-up list repairs finish exactly while the test is pressing Create.
+  const draft = document.querySelector('.builder input[name=name]');
+  if (draft && draft.value.trim()) return true;
   const el = document.activeElement;
   return !!(el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 }
@@ -7506,6 +7514,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v169', '2026-09-16 · 15:30 UTC', false, 'The tests caught one on their first day — a trip name typed too early could be lost',
+      '<b>The new automatic tests earned their keep within hours.</b> On GitHub’s slower machines, two of them failed on their first attempt and passed on the second — and the reason was a real fault, not the tests. If you typed a trip name on Home <b>while the app was still finishing its start-up checks</b> (the ones that repair your lists between devices), the moment your finger moved from the name field to <b>Create Event</b> a background redraw could rebuild the form empty — and the trip was created as <b>“Untitled event”</b>. On a fast Mac that window is a few thousandths of a second; on a slow phone, first thing after an update, it is real.<br><br>Two things. The guard that stops the app redrawing over your typing now treats <b>a typed trip name as typing</b>, focused or not. And the app now marks the moment its start-up work is finished, so the tests wait for it and measure the app rather than a race.<br><br>Tests that only pass on a second try are no longer accepted: the publish turns red on the first failure.',
+      'A trip name typed in the first seconds after opening the app can no longer vanish.'),
     v('v168', '2026-09-16 · 14:00 UTC', false, 'Test three — a tick in Packing Mode',
       'Nothing changes on screen. The <b>third automatic test</b> joins the two from v167 and runs with them on every publish: it creates a trip, opens <b>Packing Mode</b>, ticks the first thing, and checks that the count moves from 0 to 1 — and that the tick is still there after the page is reloaded. The three controls it touches (the tick, the progress line, the next-phase arrow) carry their identifiers now. One test per version, as agreed.',
       'A tick that stopped sticking would turn the publish red before it reached your phone.'),
@@ -10795,7 +10806,11 @@ function watchForUpdate(reg) {
       await adoptGrabLists();
       renderIfIdle();
     })
-    .catch((err) => logDiag('shared-lists', err));
+    .catch((err) => logDiag('shared-lists', err))
+    // Start-up is settled: every background repair that could redraw a screen has
+    // had its turn. The UI tests wait for this before they touch anything, so they
+    // measure the app rather than the race between a finger and a start-up repair.
+    .finally(() => { document.documentElement.dataset.ready = '1'; });
   // Item editors open via partial re-renders (not the router), so watch the
   // app subtree and re-evaluate the accent mode whenever the DOM changes.
   new MutationObserver(applyMode).observe(app, { childList: true, subtree: true });

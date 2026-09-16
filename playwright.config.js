@@ -10,7 +10,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
-  retries: process.env.CI ? 1 : 0,
+  retries: 0,   // a test that passes on a retry is a flaky test, not a green one — v169 caught a real bug that way
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   use: { baseURL: 'http://127.0.0.1:4173', trace: 'on-first-retry' },
   // The phone is where he lives; test at its size.
