@@ -42,7 +42,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v173';
+const APP_VERSION = 'v174';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -6993,7 +6993,7 @@ function careRow(row, markDone) {
   const bits = [esc(listName)];
   if (item.storage) bits.push(`${ic('pin','xs')}${esc(item.storage)}`);
   const nextBit = status.scheduled && status.nextDue ? ` · next ${esc(prettyDate(status.nextDue))}` : '';
-  const wrapEl = h(`<div class="care-item ${status.state}${careExpanded === item.id ? ' open' : ''}">
+  const wrapEl = h(`<div class="care-item ${status.state}${careExpanded === item.id ? ' open' : ''}" data-testid="care-row">
     <div class="care-row">
       ${thumb}
       <button class="care-main" type="button" data-expand>
@@ -7517,6 +7517,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v174', '2026-09-16 · 23:00 UTC', false, 'Test six — one item, one row on the Care list',
+      'Nothing changes on screen. The <b>sixth automatic test</b> guards the bug v165 fixed: it gives a thing that sits in several templates a care schedule, opens <b>Care</b>, and checks it is listed <b>once</b> — naming every template it belongs to — rather than once per template. Each row on the maintenance list carries an identifier now. One test per version, as agreed.',
+      'The Care list can never again count one jacket three times without the publish turning red first.'),
     v('v173', '2026-09-16 · 21:30 UTC', false, 'A red run now stops the release',
       '<b>Until now the tests could only warn.</b> They ran on every publish and turned the run red when something broke — but the version went live regardless, because publishing and testing were two separate things. From this version they are one: <b>a version reaches you only after every test has passed.</b> If a test fails, nothing is published and the app simply stays at the version you have. This is the first release to go out that way.',
       'A broken version can no longer reach your phone at all — not even while I am looking the other way.'),
