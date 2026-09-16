@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v175';
+const APP_VERSION = 'v176';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -6006,10 +6006,13 @@ function itemEditor(list, it, setOpen, draw) {
     // Real templates only — the Loose items bin is where things start, not a
     // place you "file into", so it never appears as a tickable row.
     const rows = ALL_LISTS.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE).map((l) => {
+      // (v176) The list you arrived through is marked "here", but it is NOT locked
+      // any more. Membership belongs to the ITEM: if a thing does not belong on this
+      // list, you say so here, and it keeps living in Your things either way.
       const here = !noList && l.id === list.id;
       const on = here || memberIds.has(l.id);
-      return `<label class="check tmpl-check${on ? ' on' : ''}${here ? ' cur' : ''}">
-        <input type="checkbox" name="tmpl" value="${esc(l.id)}"${on ? ' checked' : ''}${here ? ' disabled' : ''}>
+      return `<label class="check tmpl-check${on ? ' on' : ''}${here ? ' cur' : ''}" data-testid="tmpl-check" data-list="${esc(l.id)}">
+        <input type="checkbox" name="tmpl" value="${esc(l.id)}"${on ? ' checked' : ''}>
         <span>${esc(l.name)}${here ? ' <em>· here</em>' : ''}</span></label>`;
     }).join('');
     return rows || '<p class="inlists-empty">No templates yet.</p>';
@@ -6184,13 +6187,14 @@ function itemEditor(list, it, setOpen, draw) {
         </fieldset>
       </div>
       <label class="field"><span>Note</span><input name="note" value="${esc(it.note)}"></label>
-    </section>
+    </section>`}
 
-    <section class="layer layer-templates">
-      <div class="layer-h"><span class="layer-num">3</span><span class="layer-t">In these templates</span><span class="layer-sub">Which reusable lists this one item belongs to.</span></div>
+    ${isContainer ? '' : `<section class="layer layer-templates">
+      <div class="layer-h"><span class="layer-num">${noList ? 2 : 3}</span><span class="layer-t">In these templates</span><span class="layer-sub">Which reusable lists this one item belongs to.</span></div>
       <div class="inlists">
-        <p class="inlists-hint">Tick a template to add this item to it, untick to remove it. Changes apply when you <b>Save</b>.</p>
+        <p class="inlists-hint">Tick a template to add this item to it, untick to remove it — including the one you came in through. Untick them all and it simply lives in <b>Your things</b>. Changes apply when you <b>Save</b>.</p>
         <div class="inlists-matrix">${inListsHTML}</div>
+        <p class="inlists-none" data-inlists-none data-testid="thing-nolist-hint" hidden>${ic('warn','sm')}On <b>no list</b> — it still lives in <b>Your things</b>, ready to be put on one whenever you like.</p>
       </div>
     </section>`}
 
@@ -6276,7 +6280,16 @@ function itemEditor(list, it, setOpen, draw) {
     input.focus();
   };
 
+  // (v176) Say plainly, as it happens, when the last list has been unticked — the
+  // thing is not lost, it has simply gone back to living on its own.
+  const noneEl = $('[data-inlists-none]', ed);
+  const paintNone = () => {
+    if (!noneEl) return;
+    noneEl.hidden = $$('input[name=tmpl]', ed).some((b) => b.checked);
+  };
+  paintNone();
   ed.addEventListener('change', async (e) => {
+    if (e.target && e.target.name === 'tmpl') paintNone();
     if (e.target.matches('[data-act-done]')) e.target.closest('.act-row')?.classList.toggle('done', e.target.checked);
     if (e.target.type === 'checkbox' && !e.target.matches('[data-act-done]')) e.target.closest('label')?.classList.toggle('on', e.target.checked);
     if (e.target.name === 'charging') $('.charge-type-field', ed)?.classList.toggle('hidden', !e.target.checked);
@@ -6488,10 +6501,21 @@ function itemEditor(list, it, setOpen, draw) {
         // the whole point of v175 — and its id comes straight back, rather than
         // having to be fished out of a freshly-resolved template by name.
         let itemId;
+        // (v176) Did you untick the list you came in through? Then this template is
+        // losing the item — but the item itself keeps every edit you just made, so
+        // it is written to the catalogue FIRST and only then dropped from the list.
+        // Doing it the other way round would lose the edits with the membership.
+        const keepHere = noList || (wanted.find((x) => x.id === list.id)?.checked !== false);
         if (noList) {
           if (!nameKey) return;
           itemId = (await db.saveCatalogItem(it)).id;
           it._itemId = itemId;
+        } else if (!keepHere) {
+          if (!nameKey) return;
+          itemId = (await db.saveCatalogItem(it)).id;
+          it._itemId = itemId;
+          list.items = list.items.filter((z) => z.id !== it.id);
+          await db.saveList(list);
         } else {
           await db.saveList(list); // this template: the item's shared edits + its membership here
           if (!nameKey) return;
@@ -7299,6 +7323,8 @@ function howtoCard() {
         <h3>Loose items — things not in a template yet</h3>
  <p>You don’t have to file an item into a template just to keep it. At the top of the <b>Templates</b> tab there’s a <b>Loose items</b> card — a holding place for anything you want to jot down before you’ve decided where or when to pack it. Open it and use <b>Add several</b> to type or paste a whole batch (<b>one item per line</b>), or <b>Add item</b> for a single one. Loose items are <b>never</b> added to a trip and never appear in the activity picker; they simply wait. When you’re ready, open a loose item and tick a template under <b>In these templates</b> — it’s filed there and <b>automatically drops out</b> of the Loose items list. Anything still loose (here or in the Care tab’s <b>All items</b>) carries a <b>No template</b> flag so it’s never quietly forgotten.</p>
         <p><b>Since v175 there is a better home for them: Care → Your things.</b> That screen reads your catalogue <em>directly</em> rather than walking the templates, so it shows <b>everything you own</b> — on a list or not — with anything on no list marked. <b>New</b> there asks only what the thing is; where it goes is a separate decision you can make later, or never. Open a thing with no list and everything belonging to <b>the thing itself</b> works as usual; the per-list half (how many, which bag, its section, the conditions) appears once you tick a list.</p>
+        <p><b>Putting a thing on a list, or taking it off (v176).</b> Open any thing and its <b>In these templates</b> block lists every template with a tick. Tick one to add it, untick one to remove it — <em>including the list you opened the thing from</em>. Untick them all and the thing simply lives in <b>Your things</b> until you want it on something. The ticks apply when you press <b>Save</b>.</p>
+        <p><b>Taking something off a list never destroys it (v176).</b> Removing a thing from a template — or deleting the whole template — removes it from <em>that list</em> only. The thing itself keeps living in <b>Your things</b> with its photos, care record and purchase details intact. To be rid of a thing altogether, open it and use <b>Delete</b>, which says exactly what it will do.</p>
 
         <h3>Containers — your bags as objects</h3>
  <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
@@ -7655,6 +7681,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v176', '2026-09-17 · 09:00 UTC', false, 'Which lists a thing is on is now the thing’s own business',
+      '<b>Step two of three.</b> A thing’s editor has always had a list of your templates with ticks — but the one you had <em>arrived through</em> was ticked and <b>locked</b>, because that list was treated as the thing’s owner. So the only way to take something off a template was to open that template and remove it from there.<br><br><b>Now every tick is yours to set, including the one you came in through.</b> Untick it and the thing leaves that list while keeping every change you just made. Untick them all and it simply goes back to living in <b>Your things</b> — and the editor says so as you do it, rather than leaving you wondering where it went.<br><br><b>And a correction to v175.</b> The tick list was sitting inside the same block as the per-list panel, so a thing on <em>no</em> list showed no tick list at all — exactly the thing v175’s own note told you to use. It is its own block now and always appears. My mistake, and it was not caught by a test, which is why v176 brings one.<br><br><b>The change underneath, and it matters.</b> Taking a thing off its <em>last</em> list used to <b>delete the thing</b> — quietly, with its photos, its care record and what you paid for it. That was reasonable when a thing with no list could not be seen; it is plainly wrong now that it can. <b>Taking something off a list now only takes it off that list.</b> The thing goes back to <b>Your things</b>, and destroying it is a separate, deliberate act with its own confirmation. The same is true of deleting a whole template: the template goes, the things it held stay.',
+      'Where a thing belongs is decided on the thing, in one place — not by hunting through the templates that hold it.'),
     v('v175', '2026-09-16 · 22:30 UTC', false, 'Your things — an item no longer needs a list in order to exist',
       '<b>Your words: “I want the item to live, even if it is not connected to any packing list yet.” You were putting your finger on something real.</b><br><br>Since <b>v108</b> each of your things has lived <em>once</em>, in one catalogue — which is why renaming a jacket renames it everywhere. But every <em>view</em> of your things was built by <b>walking the templates</b>. So a thing that belonged to no template could not be seen anywhere at all, and the app had to park it in a made-up list called <b>“Loose items”</b> — a template that is not a template. That is the strange function you were feeling: the storage was honest, the app still pretended your things were children of lists.<br><br><b>Care → Your things</b> is the catalogue’s own home. It reads your things <em>directly</em>, so a thing on no list is simply a thing on no list, and sits there with everything else. Search it, tap anything to change it — a change reaches every list that thing is on, as always. <b>New</b> asks only what the thing is: no “which list?” first. Anything on no list is marked, and one tap shows you just those.<br><br>Open a thing that is on no list and the editor says so plainly. Everything belonging to <b>the thing itself</b> — its name, weight, where it is kept, its photos, its care record, who owns it, what it cost — works exactly as it always has. The half that belongs to <em>a list</em> — how many, which bag, its section, the conditions — has nowhere to live until it joins one, so it appears the moment you tick a list.<br><br>Nothing moved and nothing was taken away: templates work exactly as before, and “Loose items” is still there for now. This is the first of three steps.',
       'A thing you own can now exist on its own — bought today, filed onto a list whenever you feel like it, or never.'),

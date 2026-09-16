@@ -6943,3 +6943,23 @@ a.entry.thing-row .e-sub {
   padding: 9px 12px;
   margin: 0 0 10px;
 }
+
+/* 🪤 A class that sets `display` OUTRANKS the browser's own `[hidden]` rule (same
+   specificity, later sheet wins) — so `el.hidden = true` did nothing to the note
+   below until this existed. One global guard, so it can never bite again. */
+[hidden] { display: none !important; }
+
+/* (v176) "you have unticked the last list" — a fact, not a warning. */
+.inlists-none {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0 0;
+  padding: 8px 11px;
+  border-radius: 10px;
+  font-size: .86rem;
+  background: color-mix(in srgb, var(--warn) 9%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+}
+/* The list you came in through: marked, but no longer locked. */
+.tmpl-check.cur { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }

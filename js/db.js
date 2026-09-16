@@ -438,8 +438,8 @@ export async function getList(id) {
 
 // Decompose an edited (resolved) list back into the shared catalog + memberships.
 // Intrinsic edits flow to the shared item; container/phase/conditions/qty/note flow
-// to the membership (as overrides). Removed items drop their membership; a catalog
-// item referenced by no template is cleaned up.
+// to the membership (as overrides). Removed items drop their MEMBERSHIP only — the
+// thing itself survives with no list (v176), and is deleted deliberately or not at all.
 export async function saveList(list) {
   const { items, mems } = await loadCatalog();
   const itemsById = new Map(items.map((i) => [i.id, i]));
@@ -484,11 +484,17 @@ export async function saveList(list) {
 
   // Memberships of THIS template that are no longer present -> delete.
   const delMems = mems.filter((m) => m.templateId === list.id && !presentMemIds.has(m.id)).map((m) => m.id);
-  // Orphan catalog items: referenced by no membership after this change.
-  const finalMems = mems.filter((m) => m.templateId !== list.id).concat(putMems);
-  const referenced = new Set(finalMems.map((m) => m.itemId));
+  // 🚨 v176: ITEMS ARE NO LONGER DELETED FOR LOSING THEIR LAST TEMPLATE.
+  //
+  // This used to collect "orphans" — any catalogue item referenced by no membership
+  // after the save — and delete them. That was right while an item with no template
+  // was UNREACHABLE: it would have been invisible junk. Since v175 such a thing is
+  // an ordinary, visible thing in "Your things", so collecting it would mean
+  // "take this off my Hiking list" silently DESTROYED the item, its photos, its
+  // care record and its purchase details. Taking something off a list now only
+  // removes the membership; destroying the thing is its own deliberate act
+  // (deleteCatalogItem, behind the editor's Delete button).
   const delItems = [];
-  for (const i of itemsById.values()) if (!referenced.has(i.id)) { delItems.push(i.id); putItems.delete(i.id); }
 
   const template = coerceList({ ...list, items: [] });
   template.updatedAt = new Date().toISOString();
@@ -561,9 +567,10 @@ export async function getItemsWithTemplates() {
 export async function deleteList(id) {
   const { items, mems } = await loadCatalog();
   const delMemIds = mems.filter((m) => m.templateId === id).map((m) => m.id);
-  const finalMems = mems.filter((m) => m.templateId !== id);
-  const referenced = new Set(finalMems.map((m) => m.itemId));
-  const delItemIds = items.filter((i) => !referenced.has(i.id)).map((i) => i.id);
+  // Same rule as saveList (v176): deleting a TEMPLATE deletes the template and its
+  // memberships, never the things themselves. Anything that was only on this list
+  // goes back to living in "Your things", where it can be re-filed or deleted.
+  const delItemIds = [];
   const dels = [
     { store: TEMPLATES, key: id },
     ...delMemIds.map((k) => ({ store: MEMBERSHIPS, key: k })),
