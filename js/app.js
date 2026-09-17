@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v179';
+const APP_VERSION = 'v180';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2398,8 +2398,8 @@ async function renderImportList(data) {
   </div>`));
   wrap.appendChild(h(`<p class="muted pad">Someone sent you this template. Adding it makes a <b>new template</b> here with all of its items — your own templates are untouched.${same ? ` You already have one called “${esc(same.name)}”; you can replace that one instead.` : ''}</p>`));
   const actions = h(`<div class="btnrow pad">
-    <button class="btn primary lg" data-a="add">${IC.plus}<span>Add as a new template</span></button>
-    ${same ? `<button class="btn ghost lg" data-a="replace">${IC.share}<span>Replace “${esc(same.name)}”</span></button>` : ''}
+    <button class="btn primary lg" data-a="add" data-testid="share-add">${IC.plus}<span>Add as a new template</span></button>
+    ${same ? `<button class="btn ghost lg" data-a="replace" data-testid="share-replace">${IC.share}<span>Replace “${esc(same.name)}”</span></button>` : ''}
   </div>`);
   actions.addEventListener('click', async (e) => {
     const a = e.target.closest('[data-a]')?.dataset.a;
@@ -2487,8 +2487,8 @@ function pasteSharedLink() {
   const body = h(`<div class="modal">
     <h2>Paste a shared link or code</h2>
     <p class="modal-sub">Paste the link (or just the code) someone shared with you — a grab list, a packing template or a whole trip. The app works out which it is and shows you what arrived before anything is saved.</p>
-    <textarea class="modal-link modal-paste" rows="4" placeholder="Paste here…" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
-    <div class="modal-actions"><button class="btn primary lg" data-s="import">${IC.share}<span>Import</span></button></div>
+    <textarea class="modal-link modal-paste" data-testid="paste-input" rows="4" placeholder="Paste here…" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+    <div class="modal-actions"><button class="btn primary lg" data-s="import" data-testid="paste-import">${IC.share}<span>Import</span></button></div>
     <p class="modal-status" role="status"></p>
     <button class="btn ghost" data-s="close">Cancel</button>
   </div>`);
@@ -4422,12 +4422,12 @@ function appendEntriesWithKits(gb, ev, entries, body) {
     const emoji = kitDef ? kitEmoji(kitDef) : KIT_DEFAULT_EMOJI;
     const done = cl.entries.filter((e) => e.checked).length;
     const allPacked = cl.entries.length > 0 && done >= cl.entries.length;
-    const box = h(`<div class="kit-cluster${allPacked ? ' done' : ''}">
+    const box = h(`<div class="kit-cluster${allPacked ? ' done' : ''}" data-testid="kit-cluster">
       <div class="kit-cluster-h">
         <span class="kit-cluster-ic" aria-hidden="true">${esc(emoji)}</span>
         <span class="kit-cluster-name">${esc(cl.kit)}</span>
         <span class="kit-cluster-count">${done}/${cl.entries.length}</span>
-        <button type="button" class="kit-packall">${allPacked ? 'Unpack' : 'Pack all'}</button>
+        <button type="button" class="kit-packall" data-testid="kit-packall">${allPacked ? 'Unpack' : 'Pack all'}</button>
       </div>
       <div class="kit-cluster-body"></div>
     </div>`);
@@ -5635,7 +5635,7 @@ async function renderList(listId, openItemId) {
   wrap.appendChild(h(`<div class="topbar">
     <a class="iconbtn" href="${isContainer ? '#/maintenance' : '#/lists'}" aria-label="Back">${IC.back}</a>
     <h1 class="grow">${esc(list.name)}</h1>
-    ${noTemplateChrome ? '' : `<button class="iconbtn" data-share aria-label="Share template">${IC.share}</button>
+    ${noTemplateChrome ? '' : `<button class="iconbtn" data-share data-testid="template-share" aria-label="Share template">${IC.share}</button>
     <button class="iconbtn" data-rename aria-label="Rename">${IC.edit}</button>
     <button class="iconbtn" data-del aria-label="Delete template">${IC.trash}</button>`}
   </div>`));
@@ -7657,6 +7657,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v180', '2026-09-17 · 19:00 UTC', false, 'The last four corners get tests too — kits, sharing, search and your two to-do lists',
+      '<b>The third and last round of hardening. Everything that was still unguarded now has a test, and every one of them was proved by breaking the thing it watches.</b><br><br><b>Kits.</b> A kit is set up once and relied on for years, so a quiet break would show up on the worst possible day. The test builds one, puts it on a trip, and checks it arrives as <em>one</em> cluster with its own count — then that <b>Pack all</b> really packs every piece of it, that the ticks are saved and not merely drawn, and that it unpacks as one too.<br><br><b>Sharing.</b> A template is turned into a link, then deliberately deleted, then brought back by pasting the link into <b>Settings → Shared trips &amp; grab lists</b> — including the choice the app offers you when something arrives. If a share code ever stopped carrying what it claims to, this goes red.<br><br><b>Search.</b> One distinctive word must find a thing, a template and a trip — one hit each, not none and not everything — the hit must lead somewhere, and nonsense must find nothing.<br><br><b>Your two to-do lists.</b> A to-do is written, saved and ticked, and the tick is checked to be <em>stored</em> rather than just shown. And on the shopping list, something you own that needs restocking is suggested, and <b>Add</b> moves it onto the buy-list and off the suggestions.<br><br>That makes <b>twenty-two</b> checks running before any version can reach your phone, plus the three hundred and ten on the rules underneath.',
+      'Every part of the app now has something watching it, and a broken one cannot be published.'),
     v('v179', '2026-09-17 · 17:00 UTC', false, 'Four more tests — the grab lists, your photos and the spreadsheet',
       '<b>More hardening, aimed at what you use most and at the things that break <em>quietly</em>.</b><br><br><b>The workout grab lists had no tests at all</b> — the part of this app you touch most often, and the one where a silent break costs a workout rather than a tidy-up. Two now run on every publish. The first uses a list the way you do: it checks the count, that <b>Ready to go</b> refuses to leave while something is still missing, that <b>⊘</b> takes a thing out of the reckoning, that your ticks are still there when you come back, that <b>Start over</b> clears them, and that the <b>“All there — go!”</b> banner appears when the last thing is in hand. The second edits a list — adds something, corrects a name — and checks it is still right after a restart <em>and</em> that it reached your account, which is what carries it to your other device.<br><br><b>Two things that fail without saying so.</b> The <b>Excel export</b> is now checked to produce a real workbook with real content — an export that quietly writes nothing looks exactly like one that works. And a <b>photo</b> added to a thing is checked to be genuinely kept: stored once, referenced properly, still there after a restart. Both tests were confirmed by breaking the thing they guard and watching them go red.',
       'The lists you use every week, your photos and your spreadsheet are now checked before any version reaches your phone.'),
@@ -8225,7 +8228,7 @@ let actionShowDone = false;    // whether the collapsed "Done" group is expanded
 
 async function renderActions() {
   const wrap = h('<section class="screen"></section>');
-  wrap.appendChild(h(`<div class="topbar"><h1 class="grow">Actions</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a><button class="btn primary" data-new>${IC.plus}<span>New</span></button></div>`));
+  wrap.appendChild(h(`<div class="topbar"><h1 class="grow">Actions</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a><button class="btn primary" data-new data-testid="action-new">${IC.plus}<span>New</span></button></div>`));
   wrap.appendChild(h('<p class="screen-intro">Your to-do list. An action tied to an item also shows on that item; “General” ones live only here.</p>'));
 
   const [actionsAll, catalog] = await Promise.all([db.getActions(), db.getCatalogItems()]);
@@ -8242,8 +8245,8 @@ async function renderActions() {
   // A read-only row; tap the body to open its editor, tick the box to complete.
   function actionRow(a) {
     const itemName = itemLabelFor(a);
-    const row = h(`<div class="act-brow${a.done ? ' done' : ''}">
-      <label class="act-check"><input type="checkbox" ${a.done ? 'checked' : ''}><span class="act-box">${IC.check}</span></label>
+    const row = h(`<div class="act-brow${a.done ? ' done' : ''}" data-testid="action-row">
+      <label class="act-check" data-testid="action-tick"><input type="checkbox" ${a.done ? 'checked' : ''}><span class="act-box">${IC.check}</span></label>
       <button class="act-body" type="button">
         <span class="act-btext">${esc(a.text || '(empty)')}</span>
         <span class="act-bsub">${itemName ? `<span class="act-item">${esc(itemName)}</span>` : '<span class="act-item general">General</span>'}${actionChipsHtml(a)}</span>
@@ -8260,8 +8263,8 @@ async function renderActions() {
   // The inline editor for one action (existing or brand-new).
   function actionEditor(a, isNew) {
     const withData = (html, attr) => html.replace('<select', `<select ${attr}`);
-    const ed = h(`<div class="act-editor">
-      <label class="field"><span>To-do</span><input data-f="text" value="${esc(a.text)}" placeholder="e.g. Replace foam tips" autocomplete="off"></label>
+    const ed = h(`<div class="act-editor" data-testid="action-editor">
+      <label class="field"><span>To-do</span><input data-f="text" data-testid="action-text" value="${esc(a.text)}" placeholder="e.g. Replace foam tips" autocomplete="off"></label>
       <label class="field"><span>Tied to</span>${withData(selectHtml('actitem', itemOpts, a.itemId), 'data-f="item"')}</label>
       <div class="row2">
         <label class="field"><span>Priority</span>${withData(selectHtml('actprio', ACTION_PRIORITIES.map((p) => ({ value: p.id, label: p.label })), a.priority), 'data-f="prio"')}</label>
@@ -8272,7 +8275,7 @@ async function renderActions() {
         ${isNew ? '' : `<button type="button" class="btn danger ghost" data-a="del">${IC.trash}<span>Delete</span></button>`}
         <div class="spacer"></div>
         <button type="button" class="btn" data-a="cancel">Cancel</button>
-        <button type="button" class="btn primary" data-a="save">Save</button>
+        <button type="button" class="btn primary" data-a="save" data-testid="action-save">Save</button>
       </div>
     </div>`);
     ed.addEventListener('click', async (e) => {
@@ -8362,8 +8365,8 @@ async function renderShopping() {
     const tiedItem = a.itemId ? catById.get(a.itemId) : null;
     const itemName = a.itemId ? (nameById.get(a.itemId) || a.itemName || '(item)') : '';
     const reason = tiedItem ? shoppingReason(tiedItem, todayISO()) : '';
-    const row = h(`<div class="act-brow${a.done ? ' done' : ''}">
-      <label class="act-check"><input type="checkbox" ${a.done ? 'checked' : ''}><span class="act-box">${IC.check}</span></label>
+    const row = h(`<div class="act-brow${a.done ? ' done' : ''}" data-testid="shop-row">
+      <label class="act-check" data-testid="shop-tick"><input type="checkbox" ${a.done ? 'checked' : ''}><span class="act-box">${IC.check}</span></label>
       <button class="act-body" type="button">
         <span class="act-btext">${esc(a.text || '(empty)')}</span>
         <span class="act-bsub">${itemName ? `<span class="act-item">${esc(itemName)}</span>` : ''}${reasonChip(reason)}${a.whenDate ? `<span class="act-chip">${ic('cal','xs')}${esc(a.whenDate)}</span>` : ''}</span>
@@ -8380,15 +8383,15 @@ async function renderShopping() {
   // Inline editor for a buy item (existing or new).
   function buyEditor(a, isNew) {
     const withData = (html, attr) => html.replace('<select', `<select ${attr}`);
-    const ed = h(`<div class="act-editor">
-      <label class="field"><span>Buy</span><input data-f="text" value="${esc(a.text)}" placeholder="e.g. Sunscreen SPF50" autocomplete="off"></label>
+    const ed = h(`<div class="act-editor" data-testid="shop-editor">
+      <label class="field"><span>Buy</span><input data-f="text" data-testid="shop-text" value="${esc(a.text)}" placeholder="e.g. Sunscreen SPF50" autocomplete="off"></label>
       <label class="field"><span>For an item <em>(optional)</em></span>${withData(selectHtml('shopitem', itemOpts, a.itemId), 'data-f="item"')}</label>
       <label class="field"><span>Get it by <em>(optional date)</em></span><input type="date" data-f="date" value="${esc(a.whenDate)}"></label>
       <div class="editor-actions">
         ${isNew ? '' : `<button type="button" class="btn danger ghost" data-a="del">${IC.trash}<span>Remove</span></button>`}
         <div class="spacer"></div>
         <button type="button" class="btn" data-a="cancel">Cancel</button>
-        <button type="button" class="btn primary" data-a="save">Save</button>
+        <button type="button" class="btn primary" data-a="save" data-testid="shop-save">Save</button>
       </div>
     </div>`);
     ed.addEventListener('click', async (e) => {
@@ -8439,9 +8442,9 @@ async function renderShopping() {
       const sec = h(`<div class="shop-suggest"><h2 class="section-h">Suggested — from your items · ${suggestions.length}</h2></div>`);
       const sWrap = h('<div class="act-group"></div>');
       for (const { item, reason } of suggestions) {
-        const r = h(`<div class="shop-sug-row">
+        const r = h(`<div class="shop-sug-row" data-testid="shop-suggestion">
           <span class="shop-sug-body"><span class="shop-sug-name">${esc(item.name || '(unnamed)')}</span>${reasonChip(reason)}</span>
-          <button type="button" class="btn ghost sm" data-add="${esc(item.id)}">${IC.plus}<span>Add</span></button>
+          <button type="button" class="btn ghost sm" data-add="${esc(item.id)}" data-testid="shop-add">${IC.plus}<span>Add</span></button>
         </div>`);
         r.querySelector('[data-add]').addEventListener('click', async () => {
           await db.saveAction(newAction({ kind: 'shopping', text: `Buy ${item.name}`, itemId: item.id, itemName: item.name }));
@@ -8490,14 +8493,14 @@ async function renderSearch() {
 
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a><h1>Search</h1></div>`));
-  const boxEl = h(`<div class="search-box">${IC.search}<input type="search" placeholder="Search items, templates, trips, to-dos…" autocomplete="off" spellcheck="false" value="${esc(searchQuery)}"></div>`);
+  const boxEl = h(`<div class="search-box">${IC.search}<input type="search" data-testid="search-input" placeholder="Search items, templates, trips, to-dos…" autocomplete="off" spellcheck="false" value="${esc(searchQuery)}"></div>`);
   wrap.appendChild(boxEl);
   const results = h('<div class="search-results"></div>');
   wrap.appendChild(results);
   const input = boxEl.querySelector('input');
 
   const sectionHead = (title, n) => `<h2 class="section-h">${esc(title)} · ${n}</h2>`;
-  const row = (href, icon, main, sub) => `<a class="search-row" href="${href}">
+  const row = (href, icon, main, sub) => `<a class="search-row" data-testid="search-hit" href="${href}">
     <span class="sr-ic">${icon}</span>
     <span class="sr-body"><span class="sr-main">${main}</span>${sub ? `<span class="sr-sub">${sub}</span>` : ''}</span>
     <span class="sr-go">${IC.fwd}</span></a>`;
@@ -9019,7 +9022,7 @@ async function renderSettings() {
     <input type="file" accept="application/json,.json" hidden>
     <p class="muted">Got a <b>grab list</b>, a <b>packing template</b> or a <b>trip</b> as a link or a QR code? Opening the link in Safari offers it to Safari’s copy of the app — the <b>installed app keeps its own storage</b>, so in there paste the link (or the code) here instead.</p>
     <div class="btnrow">
-      <button class="btn" data-t="pasteshare">${IC.link}<span>Paste a shared link or code</span></button>
+      <button class="btn" data-t="pasteshare" data-testid="paste-share">${IC.link}<span>Paste a shared link or code</span></button>
     </div>
   </div>`);
 
