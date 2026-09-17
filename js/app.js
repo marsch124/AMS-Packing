@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v178';
+const APP_VERSION = 'v179';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2041,7 +2041,7 @@ async function renderGrab(id) {
     <a class="iconbtn" href="#/" aria-label="Back">${IC.back}</a>
     <h1 class="grow grab-title"><span class="grab-icon">${def.icon}</span><span class="grab-title-text">${esc(def.title)}</span></h1>
     <button class="iconbtn grab-sharebtn" type="button" aria-label="Share this list" title="Share this list as a QR code or link">${IC.share}</button>
-    <button class="iconbtn grab-editbtn" type="button" aria-label="Edit this list" title="Edit this list">${IC.edit}</button>
+    <button class="iconbtn grab-editbtn" type="button" data-testid="grab-edit" aria-label="Edit this list" title="Edit this list">${IC.edit}</button>
   </div>`);
   wrap.appendChild(top);
   // Share what is on the list RIGHT NOW — a half-finished edit included, since
@@ -2066,9 +2066,9 @@ async function renderGrab(id) {
 
     if (!editing) {
       if (complete()) {
-        body.appendChild(h(`<div class="grab-done-banner">🎉 <b>All there — go!</b></div>`));
+        body.appendChild(h(`<div class="grab-done-banner" data-testid="grab-allthere">🎉 <b>All there — go!</b></div>`));
       } else {
-        body.appendChild(h(`<p class="grab-count">${done.length} of ${active().length} in hand${skipped.length ? ` · ${skipped.length} skipped` : ''}</p>`));
+        body.appendChild(h(`<p class="grab-count" data-testid="grab-count">${done.length} of ${active().length} in hand${skipped.length ? ` · ${skipped.length} skipped` : ''}</p>`));
       }
       // Any change below celebrates only on the ACTION that finishes the list
       // — the tick that completes it, or the skip that excuses the last
@@ -2085,12 +2085,12 @@ async function renderGrab(id) {
         const ticked = done.includes(name);
         const isSkipped = skipped.includes(name);
         const row = h(`<div class="grab-item${ticked ? ' ticked' : ''}${isSkipped ? ' skipped' : ''}">
-          <button type="button" class="grab-main">
+          <button type="button" class="grab-main" data-testid="grab-item">
             <span class="grab-check">${ticked ? IC.check : ''}</span>
             <span class="grab-name">${esc(name)}</span>
             ${isSkipped ? '<span class="grab-skip-note">not this time</span>' : ''}
           </button>
-          <button type="button" class="grab-skip" aria-label="${isSkipped ? `Take ${esc(name)} along after all` : `Leave ${esc(name)} behind, just this once`}" title="${isSkipped ? 'Take it along after all' : 'Not this time'}">
+          <button type="button" class="grab-skip" data-testid="grab-skip" aria-label="${isSkipped ? `Take ${esc(name)} along after all` : `Leave ${esc(name)} behind, just this once`}" title="${isSkipped ? 'Take it along after all' : 'Not this time'}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12,3.9 C16.4,3.7 20.2,7.4 20.1,11.9 C20,16.4 16.3,20.1 11.9,20 C7.5,19.9 3.9,16.2 4,11.8 C4.1,7.5 7.7,4 12.3,4.1"/><path d="M6.8,17.4 L17.4,6.7"/></svg>
           </button>
         </div>`);
@@ -2110,7 +2110,7 @@ async function renderGrab(id) {
       // back to Home (the flash overlays the whole window, so it carries
       // across the screen change). Not complete: it names what is missing and
       // stays put.
-      const ready = h(`<button type="button" class="btn primary lg grab-ready">${IC.check}<span>Ready to go</span></button>`);
+      const ready = h(`<button type="button" class="btn primary lg grab-ready" data-testid="grab-ready">${IC.check}<span>Ready to go</span></button>`);
       ready.addEventListener('click', () => {
         if (complete()) {
           grabCompleteFeedback();
@@ -2123,7 +2123,7 @@ async function renderGrab(id) {
       });
       body.appendChild(ready);
       if (done.length || skipped.length) {
-        const reset = h(`<button type="button" class="btn ghost grab-reset">${ic('refresh','sm')}<span>Start over</span></button>`);
+        const reset = h(`<button type="button" class="btn ghost grab-reset" data-testid="grab-reset">${ic('refresh','sm')}<span>Start over</span></button>`);
         reset.addEventListener('click', () => { done = []; skipped = []; saveGrabState(id, done, skipped); draw(); });
         body.appendChild(reset);
       }
@@ -2164,7 +2164,7 @@ async function renderGrab(id) {
       items.forEach((name, i) => {
         const first = i === 0, last = i === items.length - 1;
         const row = h(`<div class="grab-item editing">
-          <input type="text" class="grab-rename" value="${esc(name)}" maxlength="60" autocomplete="off" aria-label="Name — tap to fix a typo">
+          <input type="text" class="grab-rename" data-testid="grab-rename" value="${esc(name)}" maxlength="60" autocomplete="off" aria-label="Name — tap to fix a typo">
           <div class="grab-acts">
             <button type="button" class="iconbtn sm grab-top" ${first ? 'disabled' : ''} aria-label="Move ${esc(name)} to the top" title="To the top">${ic('totop','sm')}</button>
             <button type="button" class="iconbtn sm grab-up" ${first ? 'disabled' : ''} aria-label="Move ${esc(name)} up" title="Up — hold to keep moving">${ic('up','sm')}</button>
@@ -2219,8 +2219,8 @@ async function renderGrab(id) {
         body.appendChild(row);
       });
       const addRow = h(`<form class="grab-add">
-        <input type="text" name="name" placeholder="Add something…" autocomplete="off" maxlength="60">
-        <button type="submit" class="btn primary">${IC.plus}<span>Add</span></button>
+        <input type="text" name="name" data-testid="grab-add-name" placeholder="Add something…" autocomplete="off" maxlength="60">
+        <button type="submit" class="btn primary" data-testid="grab-add">${IC.plus}<span>Add</span></button>
       </form>`);
       addRow.addEventListener('submit', (e) => {
         e.preventDefault();
@@ -2234,7 +2234,7 @@ async function renderGrab(id) {
       });
       body.appendChild(addRow);
       const acts = h('<div class="grab-edit-acts"></div>');
-      const doneBtn = h(`<button type="button" class="btn primary lg grab-done">${IC.check}<span>Done</span></button>`);
+      const doneBtn = h(`<button type="button" class="btn primary lg grab-done" data-testid="grab-done">${IC.check}<span>Done</span></button>`);
       doneBtn.addEventListener('click', () => { editing = false; asOpened = null; draw(); });
       const cancelBtn = h(`<button type="button" class="btn ghost lg">${IC.close}<span>Cancel</span></button>`);
       // No flushRename() here on purpose — Cancel is for throwing work away, not
@@ -6038,7 +6038,7 @@ function itemEditor(list, it, setOpen, draw) {
       <div class="item-head">
         <div class="item-photos" data-photos></div>
       </div>
-      <input type="file" accept="image/*" hidden data-care-file multiple>
+      <input type="file" accept="image/*" hidden data-care-file data-testid="item-photo-input" multiple>
       ${isContainer ? `
       <div class="row2">
         <label class="field"><span>Capacity <em>litres</em></span><input type="number" name="capacityL" min="0" step="0.1" inputmode="decimal" value="${it.capacityL || ''}" placeholder="e.g. 40"></label>
@@ -7657,6 +7657,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v179', '2026-09-17 · 17:00 UTC', false, 'Four more tests — the grab lists, your photos and the spreadsheet',
+      '<b>More hardening, aimed at what you use most and at the things that break <em>quietly</em>.</b><br><br><b>The workout grab lists had no tests at all</b> — the part of this app you touch most often, and the one where a silent break costs a workout rather than a tidy-up. Two now run on every publish. The first uses a list the way you do: it checks the count, that <b>Ready to go</b> refuses to leave while something is still missing, that <b>⊘</b> takes a thing out of the reckoning, that your ticks are still there when you come back, that <b>Start over</b> clears them, and that the <b>“All there — go!”</b> banner appears when the last thing is in hand. The second edits a list — adds something, corrects a name — and checks it is still right after a restart <em>and</em> that it reached your account, which is what carries it to your other device.<br><br><b>Two things that fail without saying so.</b> The <b>Excel export</b> is now checked to produce a real workbook with real content — an export that quietly writes nothing looks exactly like one that works. And a <b>photo</b> added to a thing is checked to be genuinely kept: stored once, referenced properly, still there after a restart. Both tests were confirmed by breaking the thing they guard and watching them go red.',
+      'The lists you use every week, your photos and your spreadsheet are now checked before any version reaches your phone.'),
     v('v178', '2026-09-17 · 15:00 UTC', false, 'Four more tests — and the first one found a hole in your backups',
       '<b>You asked for tests that harden the app. The first one written found something real, which is rather the point of writing them.</b><br><br><b>A backup is built from your lists.</b> That was complete for as long as every thing had to belong to a template — and it quietly stopped being complete in <b>v175</b>, the moment a thing could exist without one. Something on <b>no list</b> appeared in no list, so it was in <b>no backup file and no automatic copy</b>, and a restore would have dropped it without a word. Fixed: every backup now carries your things-on-no-list as well, and a restore puts them back. Older backups simply have none to restore, which is correct.<br><br><b>The four new tests</b>, all running on every publish:<br><br><b>Every screen opens.</b> All twenty-two screens are visited in turn and each must draw something, raise no error, and not scroll sideways. A crash anywhere now turns the publish red instead of reaching your phone. (One robustness fix came out of building it: asking for a screen while a slow one was still drawing used to be ignored outright — tap two tabs quickly and you could sit on the wrong one. The second request is now remembered and drawn.)<br><br><b>A backup really restores.</b> Through the real buttons: save a copy, lose the data, restore — and check it is all back, including the settings that live outside the database, like your grab lists.<br><br><b>One thing, many lists.</b> The promise the whole app rests on: a thing on three templates, renamed once, is renamed on all three; taken off one, it stays on the other two; taken off the last, <em>the thing still exists</em>.<br><br><b>The undo copy carries your settings.</b> Every restore takes a copy of what was there first, so the restore itself can be undone. That copy used to be taken without your settings — fixed in v161, and now guarded so it cannot come back.',
       'The backup you rely on now includes everything you own — and four more things are checked before any version reaches you.'),
@@ -9722,7 +9725,7 @@ async function renderOverview() {
     ${stat(rows.length, rows.length === 1 ? 'item' : 'items')}
     ${stat(realTemplates, realTemplates === 1 ? 'template' : 'templates')}
     ${dupeGroups.length ? `<span class="ov-stat warn"><b>${dupeGroups.length}</b> possible duplicate${dupeGroups.length === 1 ? '' : 's'}</span>` : stat(0, 'duplicates found')}
-    <button class="btn ghost sm" type="button" data-ov="xlsx">${IC.sheet}<span>Export (Excel)</span></button>
+    <button class="btn ghost sm" type="button" data-ov="xlsx" data-testid="overview-export">${IC.sheet}<span>Export (Excel)</span></button>
   </div>`));
 
   // Duplicate finder — the bonus: surface look-alikes for a human to merge/rename.
