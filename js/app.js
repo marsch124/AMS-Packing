@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v177';
+const APP_VERSION = 'v178';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -7636,6 +7636,7 @@ function howtoCard() {
         <p><b>The backup reminder, and why it nags.</b> Other browsers let an app write a backup file into a folder on your Mac by itself, silently, for ever. <b>Safari does not</b> — and Safari is where your packing list lives. So the app does the next best thing: instead of saving quietly behind your back, it <b>asks, and gets more insistent until you do it</b>. On the Home screen you’ll see an amber <b>Back up your data</b> card once you have unsaved changes and your last file is more than <b>${BACKUP_DUE_DAYS} days</b> old; past <b>${BACKUP_URGENT_DAYS} days</b> it turns <b>red</b> and says so plainly. Its <b>Save backup now</b> button does the whole job on the spot — no trip to Settings — and drops a dated file straight into your <b>Downloads</b> folder. The <b>×</b> hides it for a week while it’s amber, but only until <b>tomorrow</b> once it’s red, so a badly out-of-date backup can’t be waved away indefinitely.</p>
         <p>Two things make the reminder honest rather than annoying. It counts <b>changes, not days</b>: if you haven’t touched anything since your last file, it stays silent however long that was — and it speaks up after a busy fortnight even though that feels recent. And <b>Settings → Your data</b> now tells you which of the two you are, saying either “nothing has changed since, so it’s still current” or “you’ve made changes since”. A date on its own was misleading: “3 days ago” looks perfectly safe even when you’ve built a whole trip since.</p>
         <p><b>Automatic backups.</b> On top of the file backups, the app quietly keeps recent <b>copies of your data on this device</b> — about one a day, and always one <b>just before any restore</b> — so a mistaken edit, an accidental delete or a wrong import is easy to undo. They’re in <b>Settings → Your data → Automatic backups</b>, each labelled with when it was taken and what it holds; tap <b>Restore</b> on any copy, or <b>Save a copy now</b> whenever you like. This safety net is careful never to record an empty database over real data and never to clear your richest copy. And when you tap <b>Import backup</b>, the app now <b>shows exactly what’s in the file</b> — items, templates, trips, photos and the date — before changing anything, warning you first if a Replace would wipe most of your data. These on-device copies protect against mistakes; a saved backup <b>file</b> is still your insurance against losing the device itself.</p>
+        <p><b>What a backup contains (v178).</b> Your templates and what is on them, your trips, to-dos, kits and the timeline — <em>and</em> anything of yours that is on <b>no list</b>, which is carried separately because no list can carry it. Plus the settings that live outside the database: your theme, the five Settings lists and your grab lists. A restore puts all of it back.</p>
 
         <h3>Maintenance mode — the whole-database overview</h3>
  <p>At the top of <b>Settings</b>, <b>Maintenance mode — database overview</b> opens a single <b>one-line-per-item</b> table of your <b>entire catalogue</b> — the quickest way to keep everything current without hopping between templates. Each row shows the <b>item</b> and its category, <b>which templates it belongs to</b> (tap a template name to jump there), its <b>flags</b> — <b></b> charging (and the plug type), <b></b> liquid, <b></b> restricted, <b></b> per-night, <b></b> short list, <b></b> care, <b></b> photo, <b></b> not in use — plus its <b>weight</b> and <b>where it’s stored</b>. <b>Tap any row</b> to open that item’s editor. <b>Search</b> by item, template or storage; use the same <b>category chips</b> from the Care tab to narrow; and <b>sort</b> by <b>A–Z</b>, <b>Heaviest</b>, <b>Most used</b> (in the most templates) or <b>Category</b>. The page also <b>finds probable duplicates</b> — same or very similar names (e.g. “Sunglasses” and “Sun glasses”) — listing them in a <b>Possible duplicates</b> panel and highlighting them in the table; it never merges anything for you, so you can open each and rename or remove as you see fit. <b>Export (Excel)</b> saves the whole overview as a spreadsheet for review on a computer.</p>
@@ -7656,6 +7657,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v178', '2026-09-17 · 15:00 UTC', false, 'Four more tests — and the first one found a hole in your backups',
+      '<b>You asked for tests that harden the app. The first one written found something real, which is rather the point of writing them.</b><br><br><b>A backup is built from your lists.</b> That was complete for as long as every thing had to belong to a template — and it quietly stopped being complete in <b>v175</b>, the moment a thing could exist without one. Something on <b>no list</b> appeared in no list, so it was in <b>no backup file and no automatic copy</b>, and a restore would have dropped it without a word. Fixed: every backup now carries your things-on-no-list as well, and a restore puts them back. Older backups simply have none to restore, which is correct.<br><br><b>The four new tests</b>, all running on every publish:<br><br><b>Every screen opens.</b> All twenty-two screens are visited in turn and each must draw something, raise no error, and not scroll sideways. A crash anywhere now turns the publish red instead of reaching your phone. (One robustness fix came out of building it: asking for a screen while a slow one was still drawing used to be ignored outright — tap two tabs quickly and you could sit on the wrong one. The second request is now remembered and drawn.)<br><br><b>A backup really restores.</b> Through the real buttons: save a copy, lose the data, restore — and check it is all back, including the settings that live outside the database, like your grab lists.<br><br><b>One thing, many lists.</b> The promise the whole app rests on: a thing on three templates, renamed once, is renamed on all three; taken off one, it stays on the other two; taken off the last, <em>the thing still exists</em>.<br><br><b>The undo copy carries your settings.</b> Every restore takes a copy of what was there first, so the restore itself can be undone. That copy used to be taken without your settings — fixed in v161, and now guarded so it cannot come back.',
+      'The backup you rely on now includes everything you own — and four more things are checked before any version reaches you.'),
     v('v177', '2026-09-17 · 11:30 UTC', false, '“Loose items” is gone — and nothing was lost with it',
       '<b>Step three of three, and the end of the strange thing you spotted.</b><br><br>“Loose items” was never really a list. It was a <em>fake template</em> that existed for one reason: a thing belonging to no template could not be seen anywhere, so it had to be parked somewhere. Since <b>v175</b> such a thing can be seen — it lives in <b>Your things</b> — and since <b>v176</b> it survives losing its last template. So the bin has no job left, and it has been dissolved.<br><br><b>Everything that was in it is now simply one of your things</b>, on no list, sitting in Your things with everything else. Nothing was deleted; the bin was removed, not its contents. The card at the top of the <b>Templates</b> tab is gone, and Templates now shows only real templates.<br><br>What moved, so nothing is lost: <b>Add several</b> — the paste-a-whole-list-in-one-go box — now lives in <b>Your things</b> as the <b>Several</b> button. Where the app used to offer “No template · keep as a loose item”, it now offers <b>“Just in Your things (no list)”</b> and means it literally: the thing is written down, on no list at all. That is true in <b>Care → New item</b>, in the trip review’s <b>“Anything you wished you’d had?”</b>, and when saving a trip-only item so you can edit it properly.<br><br>Two smaller corrections that follow from it: <b>Maintenance mode</b> now really does show <em>every</em> item — it was built by walking the templates, so things on no list were missing from it — and everywhere the app used to say <b>“No template”</b> it now says <b>“On no list”</b>, which is a description rather than a complaint.',
       'Your things are things. A packing list is somewhere a thing can be — not where it has to live.'),
@@ -8958,18 +8962,18 @@ async function renderSettings() {
     <h2>Automatic backups</h2>
     <p class="muted">The app quietly keeps recent copies of your data <b>on this device</b>, so a mistaken edit, delete or import is easy to undo. A copy is also taken automatically <b>before</b> any restore. These live on this device — a saved backup <b>file</b> is still your insurance against losing the device itself.</p>
     <div class="snap-list" data-snaps></div>
-    <div class="btnrow"><button class="btn" data-snap="save">${IC.plus}<span>Save a copy now</span></button></div>
+    <div class="btnrow"><button class="btn" data-snap="save" data-testid="snapshot-save">${IC.plus}<span>Save a copy now</span></button></div>
   </div>`);
   const drawSnaps = (list) => {
     const box = snapCard.querySelector('[data-snaps]');
     if (!list.length) { box.innerHTML = '<p class="muted">No automatic backups yet — one is saved as you use the app (about once a day).</p>'; return; }
-    box.innerHTML = list.map((s) => `<div class="snap-row">
+    box.innerHTML = list.map((s) => `<div class="snap-row" data-testid="snapshot-row">
       <span class="snap-info">
         <b class="snap-when">${esc(snapshotWhen(s.createdAt))}</b>
         <span class="snap-sub">${esc(SNAPSHOT_REASONS[s.reason] || 'Backup')} · ${esc(countsSummary(s.counts))}</span>
       </span>
       <span class="snap-acts">
-        <button type="button" class="btn sm" data-snap-restore="${esc(s.id)}">Restore</button>
+        <button type="button" class="btn sm" data-snap-restore="${esc(s.id)}" data-testid="snapshot-restore">Restore</button>
         <button type="button" class="iconbtn sm" data-snap-del="${esc(s.id)}" aria-label="Delete this backup" title="Delete">${IC.trash}</button>
       </span></div>`).join('');
   };
@@ -10800,8 +10804,20 @@ async function renderRoute() {
 }
 
 let rendering = false;
+let renderAgain = false;   // a screen was asked for while one was still being drawn
 async function render({ background = false } = {}) {
-  if (rendering) return; rendering = true;
+  // A render asked for while one is still running used to be DROPPED ON THE FLOOR.
+  // Drawing takes real time (the All-items table is 400+ rows), so tapping one tab
+  // and then another during a slow screen could leave you looking at the wrong one,
+  // with nothing happening and no error. Noticed while investigating a flaky route
+  // test in v178 — the test's own budget turned out to be the cause of THAT, but
+  // this was a real hole next to it, so it is closed.
+  //
+  // A dropped FOREGROUND render is remembered and run as soon as this one ends. A
+  // dropped background refresh is simply skipped: it wanted fresher data, and the
+  // render now finishing has already read it.
+  if (rendering) { if (!background) renderAgain = true; return; }
+  rendering = true;
   try {
     await refreshActions();     // fresh action data for badges, the editor buffer & the Actions screen
     await refreshKits();        // fresh kits for the add-a-kit pickers & packing-list clusters
@@ -10816,6 +10832,10 @@ async function render({ background = false } = {}) {
     if (background && busyEditing()) return;
     app.innerHTML = '';
     app.appendChild(node);
+    // Which screen is actually on show. Written AFTER the swap, so anything waiting
+    // on it (the UI tests) can tell the new screen from the one still being replaced
+    // — without that, a check can pass against the previous screen and prove nothing.
+    app.dataset.route = location.hash || '#/';
     setActiveTab();
     applyMode();
     window.scrollTo(0, 0);
@@ -10824,7 +10844,10 @@ async function render({ background = false } = {}) {
     logDiag(`render ${location.hash || '#/'}`, err);
     app.innerHTML = '';
     app.appendChild(h(`<section class="screen"><div class="empty"><p class="empty-t">Something went wrong</p><p class="empty-s">${esc(err.message || err)}</p><p class="empty-s muted">The details were saved to Settings → Diagnostics.</p></div></section>`));
-  } finally { rendering = false; }
+  } finally {
+    rendering = false;
+    if (renderAgain) { renderAgain = false; await render(); }
+  }
 }
 
 function setActiveTab() {

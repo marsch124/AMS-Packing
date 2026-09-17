@@ -544,6 +544,19 @@ export async function deleteCatalogItem(itemId) {
   return { memberships: gone.length };
 }
 
+// Things on NO template (v178).
+//
+// 🚨 A BACKUP IS BUILT FROM YOUR LISTS. That was complete while every thing had to
+// belong to a template — and stopped being complete the moment v175 let a thing
+// exist without one: such a thing appears in no list, so it was in no backup and
+// no on-device copy, and a restore would have silently dropped it. Found by the
+// storage test written for exactly this kind of hole.
+export async function getUnlistedItems() {
+  const { items, mems } = await loadCatalog();
+  const referenced = new Set(mems.map((m) => m.itemId));
+  return items.filter((i) => !referenced.has(i.id));
+}
+
 // Retire the "Loose items" bin for good (v177).
 //
 // 🚨 The bin was a TEMPLATE with role 'loose' that existed for one reason: an item
@@ -1240,8 +1253,8 @@ export async function migrateTemplateNames() {
 // is a complete restore point. Photos/care/all item detail are already inside
 // `lists` because getLists() resolves the full item shape.
 export async function exportJSON(extra = {}) {
-  const [lists, events, actions, kits, photos, phases] = await Promise.all([
-    getLists(), getEvents(), getActions(), getKits(), getAllRaw(PHOTOS), getPhases(),
+  const [lists, events, actions, kits, photos, phases, things] = await Promise.all([
+    getLists(), getEvents(), getActions(), getKits(), getAllRaw(PHOTOS), getPhases(), getUnlistedItems(),
   ]);
   // Items now reference their images by id, so the images must travel in their
   // own array or a restore would come back picture-less. A backup stays a
@@ -1250,7 +1263,7 @@ export async function exportJSON(extra = {}) {
     // `phases` travels with the data, not with the device prefs, because every
     // item in `lists` points into it — a backup without it could restore items
     // onto a "When" that doesn't exist.
-    { app: 'ams-packing-list', version: 2, exportedAt: new Date().toISOString(), lists, events, actions, kits, phases, photos: photos || [], ...extra },
+    { app: 'ams-packing-list', version: 2, exportedAt: new Date().toISOString(), lists, events, actions, kits, phases, things, photos: photos || [], ...extra },
     null, 2,
   );
 }
@@ -1300,7 +1313,7 @@ export async function currentCounts() {
 // Write an already-parsed backup payload into the stores. Shared by file import
 // and snapshot restore. Never called without the caller having taken (or chosen
 // to skip) a safety snapshot first.
-async function applyBackup({ lists = [], events = [], actions = [], kits = [], photos = [], phases = [] }, { merge = false } = {}) {
+async function applyBackup({ lists = [], events = [], actions = [], kits = [], photos = [], phases = [], things = [] }, { merge = false } = {}) {
   // Phases FIRST, so the items restored below always have a "When" to point at.
   // A backup from before v118 carries none, in which case whatever this device
   // already uses is left alone. A merge UNIONs (never drops a phase this device
@@ -1346,6 +1359,15 @@ async function applyBackup({ lists = [], events = [], actions = [], kits = [], p
       });
     }
   }
+  // Things on no template (v178). AFTER the lists, because a replace rebuilds the
+  // catalogue from them and would otherwise wipe these straight back out. Written
+  // one by one through the same path a normal save uses, so an older backup that
+  // carries none simply restores nothing here.
+  for (const t of (Array.isArray(things) ? things : [])) {
+    const it = coerceItem({ ...t });
+    if (!it || !String(it.name || '').trim()) continue;
+    await putOne(ITEMS, it);
+  }
   // A backup can carry data from BEFORE the container model was repaired, while
   // this device's "already migrated" marker (localStorage) says it is done — the
   // marker and the data live in different places and a restore replaces only one
@@ -1353,7 +1375,7 @@ async function applyBackup({ lists = [], events = [], actions = [], kits = [], p
   // of already-repaired data changes nothing.
   try { localStorage.removeItem(CONTAINER_MODEL_KEY); } catch { /* ignore */ }
   await migrateContainerModel().catch(() => {});
-  return { lists: L.length, events: E.length, actions: A.length, kits: K.length, photos: P.length };
+  return { lists: L.length, events: E.length, actions: A.length, kits: K.length, photos: P.length, things: (things || []).length };
 }
 
 export async function importJSON(text, { merge = false, prefs = null } = {}) {
@@ -1382,13 +1404,14 @@ export async function importJSON(text, { merge = false, prefs = null } = {}) {
 //     if it still can't save it skips silently rather than breaking anything.
 
 async function snapshotData(prefs) {
-  const [lists, events, actions, kits, phases] = await Promise.all([getLists(), getEvents(), getActions(), getKits(), getPhases()]);
+  const [lists, events, actions, kits, phases, things] = await Promise.all([getLists(), getEvents(), getActions(), getKits(), getPhases(), getUnlistedItems()]);
   // NOTE: no `photos` array here on purpose. Items reference images by id and the
   // photos store is shared, so a snapshot only needs the ids — which is what
   // `referencedPhotoIds()` reads, keeping any image an old snapshot still needs
   // safe from the pruner. Before the split, every snapshot carried a full copy of
   // every image; eight of those was the bulk of the app's storage use.
-  return { lists, events, actions, kits, phases, prefs: prefs || null };
+  // `things` = the ones on no template, which no list can carry (v178).
+  return { lists, events, actions, kits, phases, things, prefs: prefs || null };
 }
 
 export async function listSnapshots() {
