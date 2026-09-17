@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v180';
+const APP_VERSION = 'v181';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4115,10 +4115,10 @@ function weatherSection(ev, lists = []) {
   if (!dw && ev.destination) {
     sec.appendChild(h(`<div class="wx-fetch">
       <span class="wx-place">${IC.pin}<span>Weather for <b>${esc(ev.destination)}</b></span></span>
-      <button class="btn ghost sm" data-wx="fetch">${IC.refresh}<span>Get forecast</span></button>
+      <button class="btn ghost sm" data-wx="fetch" data-testid="wx-fetch">${IC.refresh}<span>Get forecast</span></button>
     </div>`));
   } else if (dw) {
-    const days = dw.days.map((d) => `<div class="wx-day${d.rainy ? ' wet' : ''}">
+    const days = dw.days.map((d) => `<div class="wx-day${d.rainy ? ' wet' : ''}" data-testid="wx-day">
       <span class="wx-dow">${esc(d.dow)}</span>
       <span class="wx-ic ${d.icon}">${wIcon(d.icon)}</span>
       <span class="wx-hi">${d.tmax}°</span>
@@ -4127,21 +4127,21 @@ function weatherSection(ev, lists = []) {
     sec.appendChild(h(`<div class="wx-panel">
       <div class="wx-head">
         <span class="wx-place">${IC.pin}<span>${esc(dw.place || ev.destination)}</span></span>
-        <button class="iconbtn sm" data-wx="fetch" aria-label="Refresh forecast">${IC.refresh}</button>
+        <button class="iconbtn sm" data-wx="fetch" data-testid="wx-refresh" aria-label="Refresh forecast">${IC.refresh}</button>
       </div>
-      <div class="wx-strip">${days}</div>
+      <div class="wx-strip" data-testid="wx-strip">${days}</div>
     </div>`));
 
     const sug = weatherSuggestions(ev, lists);
     for (const i of sug.items) suggested.add(i.name);
     if (sug.items.length) {
       const names = sug.items.map((i) => i.name).join(', ');
-      sec.appendChild(h(`<div class="wx-sugg">
+      sec.appendChild(h(`<div class="wx-sugg" data-testid="wx-suggestions">
         <span class="wx-sugg-ic">${wIcon('rain')}</span>
         <div class="wx-sugg-body">
           <div class="wx-sugg-t">${esc(sug.summary || 'Weather-driven add-ons')}</div>
           <div class="wx-sugg-s">Suggests ${sug.items.length}: ${esc(names)}</div>
-          <div class="wx-sugg-actions"><button class="btn primary sm" data-wx="addall">${IC.plus}<span>Add all</span></button></div>
+          <div class="wx-sugg-actions"><button class="btn primary sm" data-wx="addall" data-testid="wx-addall">${IC.plus}<span>Add all</span></button></div>
         </div>
       </div>`));
     }
@@ -7657,6 +7657,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v181', '2026-09-17 · 21:00 UTC', false, 'The last two: the forecast, and the rules that decide what a trip packs',
+      '<b>The two I had left out now have tests as well, so nothing at all is unwatched.</b><br><br><b>The weather.</b> I had left this alone because a test that calls a weather service over the internet goes red whenever that service has a bad day — which tells you nothing about your app. So this one <b>never touches the internet</b>: the test hands the app a made-up forecast of a cold, wet week and checks what it does with it. The forecast is asked for, four days come back, the rainy ones are shown as rainy, and it is <b>kept on the trip</b> rather than only drawn on screen. Proved by breaking each of those in turn — a forecast that cannot be read, and one that is fetched and then quietly dropped.<br><br><b>What a trip packs.</b> The rules that decide whether a thing comes along — summer or winter, car or plane, indoors or out — now have a test end to end, on top of the ones already covering the rules themselves. One template with five things on it, each tagged differently: a summer trip by car brings the summer things and leaves the winter, the plane-only and the outdoor ones behind; the same template on a winter flight outdoors brings exactly the other half. Then the same check again on a real trip screen, so a break anywhere between the rule and what you see is caught.<br><br>That is <b>twenty-four</b> checks on every publish, alongside the three hundred and ten on the rules underneath.',
+      'Nothing in the app is unwatched now — including the forecast, tested without ever depending on the weather service being up.'),
     v('v180', '2026-09-17 · 19:00 UTC', false, 'The last four corners get tests too — kits, sharing, search and your two to-do lists',
       '<b>The third and last round of hardening. Everything that was still unguarded now has a test, and every one of them was proved by breaking the thing it watches.</b><br><br><b>Kits.</b> A kit is set up once and relied on for years, so a quiet break would show up on the worst possible day. The test builds one, puts it on a trip, and checks it arrives as <em>one</em> cluster with its own count — then that <b>Pack all</b> really packs every piece of it, that the ticks are saved and not merely drawn, and that it unpacks as one too.<br><br><b>Sharing.</b> A template is turned into a link, then deliberately deleted, then brought back by pasting the link into <b>Settings → Shared trips &amp; grab lists</b> — including the choice the app offers you when something arrives. If a share code ever stopped carrying what it claims to, this goes red.<br><br><b>Search.</b> One distinctive word must find a thing, a template and a trip — one hit each, not none and not everything — the hit must lead somewhere, and nonsense must find nothing.<br><br><b>Your two to-do lists.</b> A to-do is written, saved and ticked, and the tick is checked to be <em>stored</em> rather than just shown. And on the shopping list, something you own that needs restocking is suggested, and <b>Add</b> moves it onto the buy-list and off the suggestions.<br><br>That makes <b>twenty-two</b> checks running before any version can reach your phone, plus the three hundred and ten on the rules underneath.',
       'Every part of the app now has something watching it, and a broken one cannot be published.'),
