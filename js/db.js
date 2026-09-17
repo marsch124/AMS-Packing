@@ -544,6 +544,26 @@ export async function deleteCatalogItem(itemId) {
   return { memberships: gone.length };
 }
 
+// Retire the "Loose items" bin for good (v177).
+//
+// 🚨 The bin was a TEMPLATE with role 'loose' that existed for one reason: an item
+// with no template could not be seen, so it had to be parked somewhere. Since v175
+// it can be seen, and since v176 losing a template no longer destroys a thing — so
+// deleting the bin simply turns everything in it into an ordinary thing on no list.
+// Nothing is lost: deleteList() removes the template and its memberships only.
+//
+// Runs on every start rather than behind a "done" flag, because a Loose bin can
+// still arrive later from a device that has not updated yet.
+export async function retireLooseBin() {
+  const { tmpls, mems } = await loadCatalog();
+  const bins = tmpls.filter((t) => t.role === 'loose');
+  if (!bins.length) return { retired: 0, freed: 0 };
+  const binIds = new Set(bins.map((t) => t.id));
+  const freed = new Set(mems.filter((m) => binIds.has(m.templateId)).map((m) => m.itemId)).size;
+  for (const t of bins) await deleteList(t.id);
+  return { retired: bins.length, freed };
+}
+
 // Every item you own, each with the templates it is on. Read from the CATALOGUE,
 // not by walking the templates — so a thing on no list is simply a thing on no
 // list, and appears here like everything else. Containers keep their own screen.

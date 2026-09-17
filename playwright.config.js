@@ -12,7 +12,16 @@ export default defineConfig({
   fullyParallel: false,
   retries: 0,   // a test that passes on a retry is a flaky test, not a green one — v169 caught a real bug that way
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
-  use: { baseURL: 'http://127.0.0.1:4173', trace: 'on-first-retry' },
+  use: {
+    baseURL: 'http://127.0.0.1:4173',
+    trace: 'on-first-retry',
+    // 🚨 Service workers OFF. This app installs one, and it serves its cached copy
+    // on every load after the first — so a test that reloads was testing the CACHE,
+    // not the code just changed. (Found in v177: a second page.goto ran the previous
+    // build and the start-up migration appeared never to happen.) The service worker
+    // is verified by its own release checklist, not by these tests.
+    serviceWorkers: 'block',
+  },
   // The phone is where he lives; test at its size.
   projects: [{ name: 'iphone-chromium', use: { ...devices['iPhone 13'], browserName: 'chromium' } }],
   webServer: {

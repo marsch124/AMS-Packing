@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v176';
+const APP_VERSION = 'v177';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -685,17 +685,10 @@ function kitsSummary(list = ALL_KITS || []) {
     : 'None yet — bundles you pack as one';
 }
 
-// The "Loose items" bin — where items live before they belong to any template.
-// It's a real list under the hood (so the editor, care, matrix all work) but
-// carries role 'loose', which keeps it out of every trip and the activity picker.
-const LOOSE_NAME = 'Loose items';
-const LOOSE_OPT = '__loose__'; // sentinel value for the "No template" choice in the Care "New item" picker
-async function getLooseList() {
-  const lists = await db.getLists();
-  let loose = lists.find((l) => l.role === 'loose');
-  if (!loose) { loose = newList({ name: LOOSE_NAME, role: 'loose', builtin: true }); await db.saveList(loose); }
-  return loose;
-}
+// A thing on NO list is an ordinary thing (v175–v177): it lives in the catalogue
+// and shows up in "Your things". The old "Loose items" bin that used to hold such
+// things is retired — db.retireLooseBin() dissolves any that is still around.
+const NO_LIST_OPT = '__nolist__';  // the "no template" choice in the Care "New item" picker
 // The "Containers" catalogue — the bags/duffels/backpacks themselves, each a
 // maintainable item (photos, colour, brand, capacity, storage, care). A real list
 // under the hood with role 'container', so the item editor / care / backup all
@@ -849,6 +842,7 @@ async function renderThings() {
   const rows = await db.getItemsWithTemplates();
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">Your things</h1>
+    <button class="btn ghost" data-batch data-testid="thing-batch">${IC.list}<span>Several</span></button>
     <button class="btn primary" data-new data-testid="thing-new">${IC.plus}<span>New</span></button></div>`));
   wrap.appendChild(h('<p class="muted pad">Everything you own, whether or not it is on a list yet. Tap one to change it — a change here reaches every list it is on.</p>'));
 
@@ -893,6 +887,10 @@ async function renderThings() {
     try { localStorage.setItem(THINGS_NOLIST_KEY, on ? '1' : '0'); } catch { /* ignore */ }
     e.currentTarget.classList.toggle('on', on);
     draw();
+  });
+  $('[data-batch]', wrap).addEventListener('click', async () => {
+    const n = await batchAddThings();
+    if (n) { showToast(`Added ${n} thing${n === 1 ? '' : 's'}`); render(); }
   });
   $('[data-new]', wrap).addEventListener('click', async () => {
     const name = (prompt('What is it?') || '').trim();
@@ -1009,7 +1007,7 @@ async function renderItemsGrid() {
   const build = () => {
     ALL_LISTS = lists;
     STORAGES = collectStorages(lists);
-    const templates = lists.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    const templates = lists.filter((l) => l.role !== CONTAINER_ROLE).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     rowsById = new Map();
     for (const l of lists) {
       if (l.role === CONTAINER_ROLE) continue; // containers have their own screen
@@ -1044,11 +1042,6 @@ async function renderItemsGrid() {
   };
 
   const findItem = (lid, id) => { const l = lists.find((x) => x.id === lid); return { l, it: l && l.items.find((z) => z._itemId === id) }; };
-  const ensureLoose = async () => {
-    let loose = lists.find((x) => x.role === 'loose');
-    if (!loose) { loose = newList({ name: 'Loose items', role: 'loose', builtin: true }); await db.saveList(loose); lists = await db.getLists(); loose = lists.find((x) => x.role === 'loose'); }
-    return loose;
-  };
 
   scroll.addEventListener('change', async (e) => {
     const el = e.target;
@@ -1061,17 +1054,12 @@ async function renderItemsGrid() {
       if (el.checked) {
         if (!l.items.some((z) => z._itemId === id)) l.items.unshift(linkFromResolved(row.item, id));
       } else {
-        // Never orphan the item: if this was its only home, park it in Loose first.
-        const others = row.mems.filter((m) => m.listId !== lid);
-        if (!others.length) { const loose = await ensureLoose(); if (loose && !loose.items.some((z) => z._itemId === id)) { loose.items.unshift(linkFromResolved(row.item, id)); await db.saveList(loose); } }
+        // (v177) Unticking the last template needs nowhere to "park" the item any
+        // more: a thing on no list is ordinary, and lives in Your things.
         l.items = l.items.filter((z) => z._itemId !== id);
       }
       if (await saveGuard(db.saveList(l))) {
         lists = await db.getLists();
-        // Auto-file: once in a real template, don't linger in Loose.
-        const loose = lists.find((x) => x.role === 'loose');
-        const inReal = lists.some((x) => x.role !== 'loose' && x.role !== CONTAINER_ROLE && x.items.some((z) => z._itemId === id));
-        if (loose && inReal && loose.items.some((z) => z._itemId === id)) { loose.items = loose.items.filter((z) => z._itemId !== id); await db.saveList(loose); lists = await db.getLists(); }
         const sx = scroll.scrollLeft, sy = scroll.scrollTop; build(); scroll.scrollLeft = sx; scroll.scrollTop = sy;
         ALL_LISTS = lists;
       }
@@ -1128,18 +1116,19 @@ function containerOpts(cur) {
   return names;
 }
 
-// An item's name is "unfiled" when it appears in no real (non-loose) template.
+// An item's name is "unfiled" when it appears in no template at all — which since
+// v177 is an ordinary state, not a problem: it lives in Your things.
 function isUnfiled(name, lists = ALL_LISTS) {
   const key = (name || '').trim().toLowerCase();
   if (!key) return false;
-  return !lists.some((l) => l.role !== 'loose' && (l.items || []).some((z) => (z.name || '').trim().toLowerCase() === key));
+  return !lists.some((l) => (l.items || []).some((z) => (z.name || '').trim().toLowerCase() === key));
 }
 
 // Category quick-filters shared by the Care tab's "All items" index and each
 // template's own item list: tap a chip to isolate a kind of thing (liquids to
 // pack, chargeables, items with care info…). Chips are OR'd together.
 const ITEM_FILTER_CATS = [
-  { key: 'loose',      label: 'No template', icon: 'warn',     test: (it) => isUnfiled(it.name) },
+  { key: 'loose',      label: 'On no list',  icon: 'warn',     test: (it) => isUnfiled(it.name) },
   { key: 'liquid',     label: 'Liquids',     icon: 'drop',     test: (it) => !!it.liquid },
   { key: 'charge',     label: 'Charging',    icon: 'bolt',     test: (it) => !!it.charging },
   { key: 'restricted', label: 'Restricted',  icon: 'warn',     test: (it) => !!it.restricted },
@@ -1533,7 +1522,7 @@ function activitiesPicker(lists, selected, contexts) {
   // Base and transport lists are auto-included (common core + the transport radio),
   // so they're not shown here as tickable activities.
   for (const l of lists) {
-    if (l.role === 'base' || l.role === 'transport' || l.role === 'loose' || l.role === CONTAINER_ROLE) continue;
+    if (l.role === 'base' || l.role === 'transport' || l.role === CONTAINER_ROLE) continue;
     (byGroup.has(l.group) ? byGroup.get(l.group) : ungrouped).push(l);
   }
   const box = (l) => `<label class="check${set.has(l.id) ? ' on' : ''}"><input type="checkbox" name="activities" value="${esc(l.id)}"${set.has(l.id) ? ' checked' : ''}>${esc(l.name)}${l.items.length ? '' : ' <em>(empty)</em>'}</label>`;
@@ -4481,10 +4470,10 @@ function sourceItemForEntry(entry, lists = ALL_LISTS) {
 // and resolve with { listId, itemId } — or null if they cancel.
 function promoteEntryToTemplate(entry, lists) {
   return new Promise((resolve) => {
-    // Loose items first (for "I don't know its template yet"), then real templates.
-    const loose = lists.filter((l) => l.role === 'loose');
-    const templates = lists.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE);
-    const opts = [...loose.map((l) => `<option value="${esc(l.id)}">${esc(l.name)} — no template yet</option>`),
+    // (v177) A template, or no list at all — the honest answer when you want to
+    // keep the thing but do not yet know which trips should bring it.
+    const templates = lists.filter((l) => l.role !== CONTAINER_ROLE);
+    const opts = [`<option value="${NO_LIST_OPT}">— Just in Your things (no list) —</option>`,
       ...templates.map((l) => `<option value="${esc(l.id)}">${esc(l.name)}</option>`)].join('');
     const body = h(`<div class="modal">
       <h2>Save “${esc(entry.name || 'this item')}” to edit it fully</h2>
@@ -5347,8 +5336,8 @@ async function renderReview(eventId) {
   // home for something that fits no template yet.
   const usedListIds = [...new Set(items.map((e) => e.sourceListId).filter(Boolean))];
   const tripLists = usedListIds.map((id) => lists.find((l) => l.id === id)).filter(Boolean);
-  const loose = await getLooseList();
-  const fileOpts = [...tripLists.filter((l) => l.id !== loose.id), loose];
+  // (v177) …and "no list at all" is an honest destination now, not a bin.
+  const fileOpts = [...tripLists, { id: NO_LIST_OPT, name: '— Just in Your things (no list) —' }];
 
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(backBar('Trip review', `#/event/${ev.id}`)));
@@ -5487,6 +5476,14 @@ async function renderReview(eventId) {
     // item is in the template from this moment, ready for the next trip.
     let added = 0;
     for (const m of missing) {
+      // (v177) "Just in Your things" writes it straight to the catalogue, with no
+      // template — the honest answer when you know you want the thing but not yet
+      // which trips should bring it.
+      if (m.listId === NO_LIST_OPT) {
+        try { await db.saveCatalogItem(newItem({ name: m.name })); added += 1; }
+        catch (err) { logDiag('save', err); }
+        continue;
+      }
       const list = fresh.find((l) => l.id === m.listId);
       if (!list) continue;
       if (list.items.some((x) => (x.name || '').trim().toLowerCase() === m.name.toLowerCase())) continue;
@@ -5589,20 +5586,13 @@ async function renderLists() {
       </span>
     </a>`);
 
-  // "Loose items" — the home for things not in any template yet. Always shown,
-  // as its own card, kept out of the normal template groups.
-  const loose = await getLooseList();
-  const looseCount = loose.items.length;
-  const looseCard = h(`<a class="card lst loose-card" href="#/list/${loose.id}">
-      <span class="lst-name">${IC.wrench}<span>${esc(LOOSE_NAME)}</span></span>
-      <span class="lst-count">${looseCount === 0 ? 'empty — add anything, file it later' : `${looseCount} item${looseCount === 1 ? '' : 's'} with no template yet`}</span>
-    </a>`);
-  wrap.appendChild(looseCard);
+  // (v177) The "Loose items" card is gone. Things without a template are not a
+  // special kind of list any more — they are simply things, and they live in
+  // Care → Your things with everything else.
 
   const byGroup = new Map(GROUP_IDS.map((g) => [g, []]));
   const ungrouped = [];
   for (const l of lists) {
-    if (l.role === 'loose') continue; // shown above as its own card
     if (l.role === CONTAINER_ROLE) continue; // the Containers catalogue has its own tab
     (byGroup.has(l.group) ? byGroup.get(l.group) : ungrouped).push(l);
   }
@@ -5637,11 +5627,10 @@ async function renderList(listId, openItemId) {
   if (!list) { location.assign('#/lists'); return h('<section></section>'); }
   ALL_LISTS = await db.getLists();
   STORAGES = collectStorages(ALL_LISTS); // for the storage-location dropdown
-  const isLoose = list.role === 'loose';
   const isContainer = list.role === CONTAINER_ROLE;
   // The Containers catalogue has its own tab, so it drops the template chrome
   // (group / sections / rename / delete-template) and points Back at that tab.
-  const noTemplateChrome = isLoose || isContainer;
+  const noTemplateChrome = isContainer;
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(`<div class="topbar">
     <a class="iconbtn" href="${isContainer ? '#/maintenance' : '#/lists'}" aria-label="Back">${IC.back}</a>
@@ -5650,16 +5639,13 @@ async function renderList(listId, openItemId) {
     <button class="iconbtn" data-rename aria-label="Rename">${IC.edit}</button>
     <button class="iconbtn" data-del aria-label="Delete template">${IC.trash}</button>`}
   </div>`));
-  if (isLoose) {
-    wrap.appendChild(h(`<p class="muted pad">A holding place for things not in any template yet — add anything here, even if you don’t know where or when you’ll pack it. Open an item and tick a template under <b>In these templates</b> to file it; once it’s in a template it leaves this list.</p>`));
-  } else if (isContainer) {
+  if (isContainer) {
     wrap.appendChild(h(`<p class="muted pad">Your bags, duffels and backpacks as things in their own right — photos, capacity, where each one lives, how to look after it. Every one of them is offered when you choose where an item is packed.</p>`));
   }
   wrap.appendChild(h(`<div class="toolbar">
     <div class="spacer"></div>
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-cover><span class="cover-dot" style="background:${esc(listColor(list))}">${esc(listEmoji(list))}</span><span>Cover &amp; settings</span></button>`}
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-sections>${IC.list}<span>Sections${list.sections.length ? ` (${list.sections.length})` : ''}</span></button>`}
-    ${isLoose ? `<button class="btn ghost" data-batch>${IC.list}<span>Add several</span></button>` : ''}
     ${noTemplateChrome ? '' : `<button class="btn ghost" data-kit>${ic('toolbox')}<span>Add a kit</span></button>`}
     <button class="btn ghost" data-add>${IC.plus}<span>${isContainer ? 'Add container' : 'Add item'}</span></button>
   </div>`));
@@ -5682,19 +5668,16 @@ async function renderList(listId, openItemId) {
   // editor straight away (and expand its care panel).
   let openItem = (openItemId && list.items.some((x) => x.id === openItemId)) ? openItemId : null;
   if (openItem) careForceOpenItemId = openItem;
-  const emptyMsg = isLoose
-    ? 'Nothing loose right now. Use <b>Add several</b> to dump in a batch of new things, or <b>Add item</b> for one — you can sort out where they belong later.'
-    : 'No items yet — add the things this template should contribute.';
+  const emptyMsg = 'No items yet — add the things this template should contribute.';
   const draw = () => {
-    // Chips reflect the current items (add/batch/delete keep the counts live);
-    // the "No template" chip is dropped in the Loose bin where every item is loose.
-    filterBar.innerHTML = itemFilterChipsHTML(list.items, itemFilter, isLoose);
+    // Chips reflect the current items (add/delete keep the counts live).
+    filterBar.innerHTML = itemFilterChipsHTML(list.items, itemFilter, false);
     body.innerHTML = '';
     if (!list.items.length) { body.appendChild(h(`<div class="empty"><p class="empty-s">${emptyMsg}</p></div>`)); return; }
     const shown = list.items.filter((it) => itemMatchesFilter(it, itemFilter));
     if (!shown.length) { body.appendChild(h('<div class="empty"><p class="empty-s">No items match these filters.</p></div>')); return; }
     const rowFor = (it) => listItemRow(list, it, () => openItem, (v) => { openItem = v; }, draw);
-    if (isLoose || !list.sections.length) {
+    if (!list.sections.length) {
       for (const it of shown) body.appendChild(rowFor(it));
     } else {
       // Grouped view: the template's sections in their chosen order, unsectioned last.
@@ -5721,10 +5704,6 @@ async function renderList(listId, openItemId) {
     const { added, total } = await addKitToTemplate(list, kit);
     showToast(added ? `Added ${kitEmoji(kit)} ${kit.name} — ${added} item${added === 1 ? '' : 's'}${added < total ? ` (${total - added} already here)` : ''}` : `All of ${kit.name} was already in this template — grouped it into the kit`);
     render();
-  });
-  wrap.querySelector('[data-batch]')?.addEventListener('click', () => {
-    const added = batchAddItems(list);
-    added.then((n) => { if (n > 0) { openItem = null; draw(); } });
   });
   wrap.querySelector('[data-share]')?.addEventListener('click', () => shareList(list));
   wrap.querySelector('[data-cover]')?.addEventListener('click', async () => {
@@ -5755,13 +5734,14 @@ async function renderList(listId, openItemId) {
   return wrap;
 }
 
-// One-per-line batch add for the Loose items bin: paste or type a list, each
-// non-blank line becomes a new item. Resolves with how many were added.
-function batchAddItems(list) {
+// One-per-line batch add for "Your things" (v177; it used to belong to the Loose
+// items bin). Paste or type a list — each non-blank line becomes a new thing, on
+// no list, written straight to the catalogue. Resolves with how many were added.
+function batchAddThings() {
   return new Promise((resolve) => {
     const body = h(`<div class="modal">
       <h2>Add several items</h2>
-      <p class="modal-sub">One item per line. Each becomes a new loose item — you can set where and when to pack it later, or file it into a template.</p>
+      <p class="modal-sub">One per line. Each becomes one of your things, on no list — open it later to say where and when it gets packed.</p>
       <textarea class="batch-ta" rows="8" placeholder="Sun hat&#10;Travel adapter&#10;Spare charging cable&#10;Ear plugs" autofocus></textarea>
       <div class="modal-actions">
         <button class="btn primary lg" data-b="add">${IC.plus}<span>Add items</span></button>
@@ -5782,11 +5762,12 @@ function batchAddItems(list) {
       if (!b) return;
       if (b === 'cancel') { finish(0); return; }
       if (b === 'add') {
-        const names = ($('.batch-ta', body).value || '').split('\n').map((s) => s.trim()).filter(Boolean);
+        const names = ($('.batch-ta', body).value || '').split('\n').map((x) => x.trim()).filter(Boolean);
         if (!names.length) { finish(0); return; }
-        for (const name of names.reverse()) list.items.unshift(newItem({ name }));
-        if (!await saveGuard(db.saveList(list))) { finish(0); return; }
-        finish(names.length);
+        let n = 0;
+        try { for (const name of names) { await db.saveCatalogItem(newItem({ name })); n += 1; } }
+        catch (err) { logDiag('save', err); alert('Sorry — those could not all be saved.'); }
+        finish(n);
       }
     });
   });
@@ -5898,7 +5879,7 @@ function listItemRow(list, it, getOpen, setOpen, draw) {
   const tags = [it.ownedBy ? `${it.ownedBy}` : '', it.storage ? `${it.storage}` : '', it.container, ...(it.seasons || []), ...(it.contexts || []), ...(it.transports || [])].filter(Boolean);
   const chShort = it.charging ? chargeTypeShort(it.chargeType) : '';
   const care = maintenanceStatus(it);
-  const badges = `${isUnfiled(it.name) ? `<span class="badge unfiled" title="Not in any template yet — still a loose item">${ic('warn','xs')}No template</span>` : ''}`
+  const badges = `${isUnfiled(it.name) ? `<span class="badge unfiled" title="On no list — it lives in Your things">${ic('warn','xs')}No template</span>` : ''}`
     + `${it.charging ? `<span class="badge charge" title="${esc('Needs charging' + (chShort ? ` — ${chargeTypeLabel(it.chargeType)}` : ''))}">${ic('bolt','xs')}${chShort ? esc(chShort) : ''}</span>` : ''}`
     + `${it.liquid ? `<span class="badge liquid" title="Liquid / 100 ml rule">${ic('drop','xs')}</span>` : ''}`
     + `${it.restricted ? `<span class="badge restricted" title="Restricted — think before packing (battery / carry-on rules)">${ic('warn','xs')}</span>` : ''}`
@@ -6003,9 +5984,7 @@ function itemEditor(list, it, setOpen, draw) {
     curItemId ? ALL_LISTS.filter((l) => (l.items || []).some((z) => z._itemId === curItemId)).map((l) => l.id) : [],
   );
   const inListsHTML = (() => {
-    // Real templates only — the Loose items bin is where things start, not a
-    // place you "file into", so it never appears as a tickable row.
-    const rows = ALL_LISTS.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE).map((l) => {
+    const rows = ALL_LISTS.filter((l) => l.role !== CONTAINER_ROLE).map((l) => {
       // (v176) The list you arrived through is marked "here", but it is NOT locked
       // any more. Membership belongs to the ITEM: if a thing does not belong on this
       // list, you say so here, and it keeps living in Your things either way.
@@ -6168,11 +6147,11 @@ function itemEditor(list, it, setOpen, draw) {
     ${(isContainer || noList) ? '' : `<section class="layer layer-membership">
       <div class="layer-h"><span class="layer-num">2</span><span class="layer-t">In this list · ${esc(list.name)}</span><span class="layer-sub">Just for this template — changing these here doesn't touch the item in other lists.</span></div>
       <label class="field"><span>Qty</span><input name="qty" value="${esc(it.qty)}" placeholder="optional"></label>
-      ${list.role === 'loose' ? '' : `<label class="field"><span>Container <em>in this list only</em></span>
+      ${`<label class="field"><span>Container <em>in this list only</em></span>
         ${selectHtml('ovContainer', [{ value: '', label: `— use the default (${fallbackWhy}) —` }]
           .concat(containerOpts(ovContainer).map((c) => ({ value: c, label: c }))), ovContainer)}
         ${ovContainer ? `<em class="field-note">This list differs on purpose. Choose “use the default” to bring it back in line.</em>` : ''}</label>`}
-      ${list.role === 'loose' ? '' : sectionFieldHTML(list, it)}
+      ${sectionFieldHTML(list, it)}
       <div class="checks">
         <label class="check${it.perNight ? ' on' : ''}"><input type="checkbox" name="perNight" ${it.perNight ? 'checked' : ''}>Per night (scales qty)</label>
       </div>
@@ -6548,18 +6527,6 @@ function itemEditor(list, it, setOpen, draw) {
             await db.saveList(l);
           }
         }
-        // Auto-file: once an item is in at least one real template, it shouldn't
-        // linger in the Loose items bin — pull it out.
-        const fresh = await db.getLists();
-        const filed = fresh.some((l) => l.role !== 'loose' && l.items.some((z) => z._itemId === itemId));
-        if (filed) {
-          const loose = fresh.find((l) => l.role === 'loose');
-          if (loose && loose.items.some((z) => z._itemId === itemId)) {
-            loose.items = loose.items.filter((z) => z._itemId !== itemId);
-            await db.saveList(loose);
-            if (!noList && list.role === 'loose') list.items = list.items.filter((z) => z._itemId !== itemId);
-          }
-        }
       })());
       if (ok) {
         ALL_LISTS = await db.getLists(); await refreshActions();
@@ -6775,9 +6742,9 @@ function allItemsSection(lists) {
     <form class="ai-addform hidden" data-ai-form>
       <div class="row2">
         <label class="field"><span>Add to</span>${selectHtml('ai-list', [
-          ...lists.filter((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE).map((l) => ({ value: l.id, label: l.name })),
-          { value: LOOSE_OPT, label: '— No template · keep as a loose item —' },
-        ], (lists.find((l) => l.role !== 'loose' && l.role !== CONTAINER_ROLE) || {}).id || LOOSE_OPT)}</label>
+          ...lists.filter((l) => l.role !== CONTAINER_ROLE).map((l) => ({ value: l.id, label: l.name })),
+          { value: NO_LIST_OPT, label: '— No list · just one of your things —' },
+        ], (lists.find((l) => l.role !== CONTAINER_ROLE) || {}).id || NO_LIST_OPT)}</label>
         <label class="field"><span>Item name</span><input name="ai-name" placeholder="e.g. Wetsuit" autocomplete="off"></label>
       </div>
       <div class="ai-addactions">
@@ -7056,10 +7023,19 @@ function allItemsSection(lists) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const listId = $('select[name=ai-list]', form).value;
-    // "No template" → the item goes into the Loose items bin (created on demand).
-    const list = listId === LOOSE_OPT ? await getLooseList() : lists.find((l) => l.id === listId);
-    if (!list) return;
     const name = ($('input[name=ai-name]', form).value || '').trim();
+    if (!name) return;
+    // (v177) "No list" writes the thing straight to the catalogue and opens it on
+    // its own — no bin in between.
+    if (listId === NO_LIST_OPT) {
+      let cat;
+      try { cat = await db.saveCatalogItem(newItem({ name })); }
+      catch (err) { logDiag('save', err); alert('Sorry — that could not be saved. Please try again.'); return; }
+      location.assign(`#/thing/${encodeURIComponent(cat.id)}`);
+      return;
+    }
+    const list = lists.find((l) => l.id === listId);
+    if (!list) return;
     const it = newItem({ name });
     list.items.unshift(it);
     careForceOpenItemId = it.id;
@@ -7090,7 +7066,7 @@ function aiRow(it, list, tpls = null) {
   if (it.ownedBy) bits.push(`<span title="Owner — whose it is">${ic('tag','xs')}${esc(it.ownedBy)}</span>`);
   if (it.packer) bits.push(`<span title="Packed by — whose job it is to pack it">${ic('person','xs')}${esc(it.packer)}</span>`);
   if (it.storage) bits.push(`<span title="Where it’s stored">${ic('pin','xs')}${esc(it.storage)}</span>`);
-  const unfiledBadge = isUnfiled(it.name) ? `<span class="ai-badge unfiled" title="Not in any template yet — still a loose item">${ic('warn','xs')}</span>` : '';
+  const unfiledBadge = isUnfiled(it.name) ? `<span class="ai-badge unfiled" title="On no list — it lives in Your things">${ic('warn','xs')}</span>` : '';
   const badge = care
     ? `<span class="ai-badge ${care.state}" title="${esc('Maintenance: ' + dueLabel(care))}">${careIcon(care.state)}</span>`
     : (nPhotos ? `<span class="ai-badge" title="${esc(nPhotos === 1 ? 'Has a photo' : `${nPhotos} photos`)}">${ic('camera','xs')}${nPhotos > 1 ? `${nPhotos}` : ''}</span>` : '');
@@ -7320,11 +7296,10 @@ function howtoCard() {
  <li><b>In these templates</b> — a tick-box list of <b>every template</b>. Ticking one <b>adds this item to it</b> and unticking <b>removes it</b> (applied when you Save), so a new hat can join Travel, Golf and Hiking in a few taps. The template you’re editing in stays ticked and locked. Each item lives <b>once</b> and every template simply points to it — so <b>everything under “① The item itself” updates in every template it belongs to</b>: its name, category, weight, flags, photos, care record, purchase details, <b>and its default bag and when</b>. It still appears just once in <b>Care</b>. What stays separate per template is only what you deliberately make separate: its <b>quantity</b>, <b>section</b>, <b>note</b>, <b>conditions</b>, and a <b>per-list bag exception</b> if you set one. Items that are in <b>no</b> template show a <b>No template</b> flag.</li>
         </ul>
 
-        <h3>Loose items — things not in a template yet</h3>
- <p>You don’t have to file an item into a template just to keep it. At the top of the <b>Templates</b> tab there’s a <b>Loose items</b> card — a holding place for anything you want to jot down before you’ve decided where or when to pack it. Open it and use <b>Add several</b> to type or paste a whole batch (<b>one item per line</b>), or <b>Add item</b> for a single one. Loose items are <b>never</b> added to a trip and never appear in the activity picker; they simply wait. When you’re ready, open a loose item and tick a template under <b>In these templates</b> — it’s filed there and <b>automatically drops out</b> of the Loose items list. Anything still loose (here or in the Care tab’s <b>All items</b>) carries a <b>No template</b> flag so it’s never quietly forgotten.</p>
-        <p><b>Since v175 there is a better home for them: Care → Your things.</b> That screen reads your catalogue <em>directly</em> rather than walking the templates, so it shows <b>everything you own</b> — on a list or not — with anything on no list marked. <b>New</b> there asks only what the thing is; where it goes is a separate decision you can make later, or never. Open a thing with no list and everything belonging to <b>the thing itself</b> works as usual; the per-list half (how many, which bag, its section, the conditions) appears once you tick a list.</p>
-        <p><b>Putting a thing on a list, or taking it off (v176).</b> Open any thing and its <b>In these templates</b> block lists every template with a tick. Tick one to add it, untick one to remove it — <em>including the list you opened the thing from</em>. Untick them all and the thing simply lives in <b>Your things</b> until you want it on something. The ticks apply when you press <b>Save</b>.</p>
-        <p><b>Taking something off a list never destroys it (v176).</b> Removing a thing from a template — or deleting the whole template — removes it from <em>that list</em> only. The thing itself keeps living in <b>Your things</b> with its photos, care record and purchase details intact. To be rid of a thing altogether, open it and use <b>Delete</b>, which says exactly what it will do.</p>
+        <h3>Things not on a list</h3>
+        <p>You never have to file a thing into a template just to keep it. <b>Care → Your things</b> holds everything you own, on a list or not, and <b>New</b> there asks only what the thing is. <b>Several</b> takes a whole batch, one per line. Anything on no list is marked, and one tap shows you just those — a tidy-up queue whenever you feel like filing them.</p>
+        <p>A thing on no list is never added to a trip, and it costs nothing to leave there. Put it on a list whenever you like by opening it and ticking one under <b>In these templates</b> — and take it off the same way. <b>Taking a thing off its last list does not delete it</b>; it simply goes back to living in Your things.</p>
+        <p class="hint">Until v177 these lived in a fake template called <b>Loose items</b>, because a thing with no template could not be seen anywhere. That bin is gone, and anything that was in it is now simply one of your things.</p>
 
         <h3>Containers — your bags as objects</h3>
  <p>Your <b>bags, duffels and backpacks</b> live in their own catalogue, reached from the <b>Care</b> tab → <b>Containers</b>. Each one is edited like any item — photos, colour, brand, where it’s stored and its care record — plus <b>Capacity</b> (litres) and <b>Max weight</b> (kg). Containers never appear as packing items or activities; instead they power two things: every container is offered when you choose <b>where an item is packed</b>, and a trip’s <b>Bags &amp; weight</b> panel warns you against <b>each bag’s own max weight</b>. Their upkeep shows on the Care tab like anything else. The list comes pre-seeded with your usual bags — all editable.</p>
@@ -7681,11 +7656,14 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v177', '2026-09-17 · 11:30 UTC', false, '“Loose items” is gone — and nothing was lost with it',
+      '<b>Step three of three, and the end of the strange thing you spotted.</b><br><br>“Loose items” was never really a list. It was a <em>fake template</em> that existed for one reason: a thing belonging to no template could not be seen anywhere, so it had to be parked somewhere. Since <b>v175</b> such a thing can be seen — it lives in <b>Your things</b> — and since <b>v176</b> it survives losing its last template. So the bin has no job left, and it has been dissolved.<br><br><b>Everything that was in it is now simply one of your things</b>, on no list, sitting in Your things with everything else. Nothing was deleted; the bin was removed, not its contents. The card at the top of the <b>Templates</b> tab is gone, and Templates now shows only real templates.<br><br>What moved, so nothing is lost: <b>Add several</b> — the paste-a-whole-list-in-one-go box — now lives in <b>Your things</b> as the <b>Several</b> button. Where the app used to offer “No template · keep as a loose item”, it now offers <b>“Just in Your things (no list)”</b> and means it literally: the thing is written down, on no list at all. That is true in <b>Care → New item</b>, in the trip review’s <b>“Anything you wished you’d had?”</b>, and when saving a trip-only item so you can edit it properly.<br><br>Two smaller corrections that follow from it: <b>Maintenance mode</b> now really does show <em>every</em> item — it was built by walking the templates, so things on no list were missing from it — and everywhere the app used to say <b>“No template”</b> it now says <b>“On no list”</b>, which is a description rather than a complaint.',
+      'Your things are things. A packing list is somewhere a thing can be — not where it has to live.'),
     v('v176', '2026-09-17 · 09:00 UTC', false, 'Which lists a thing is on is now the thing’s own business',
       '<b>Step two of three.</b> A thing’s editor has always had a list of your templates with ticks — but the one you had <em>arrived through</em> was ticked and <b>locked</b>, because that list was treated as the thing’s owner. So the only way to take something off a template was to open that template and remove it from there.<br><br><b>Now every tick is yours to set, including the one you came in through.</b> Untick it and the thing leaves that list while keeping every change you just made. Untick them all and it simply goes back to living in <b>Your things</b> — and the editor says so as you do it, rather than leaving you wondering where it went.<br><br><b>And a correction to v175.</b> The tick list was sitting inside the same block as the per-list panel, so a thing on <em>no</em> list showed no tick list at all — exactly the thing v175’s own note told you to use. It is its own block now and always appears. My mistake, and it was not caught by a test, which is why v176 brings one.<br><br><b>The change underneath, and it matters.</b> Taking a thing off its <em>last</em> list used to <b>delete the thing</b> — quietly, with its photos, its care record and what you paid for it. That was reasonable when a thing with no list could not be seen; it is plainly wrong now that it can. <b>Taking something off a list now only takes it off that list.</b> The thing goes back to <b>Your things</b>, and destroying it is a separate, deliberate act with its own confirmation. The same is true of deleting a whole template: the template goes, the things it held stay.',
       'Where a thing belongs is decided on the thing, in one place — not by hunting through the templates that hold it.'),
     v('v175', '2026-09-16 · 22:30 UTC', false, 'Your things — an item no longer needs a list in order to exist',
-      '<b>Your words: “I want the item to live, even if it is not connected to any packing list yet.” You were putting your finger on something real.</b><br><br>Since <b>v108</b> each of your things has lived <em>once</em>, in one catalogue — which is why renaming a jacket renames it everywhere. But every <em>view</em> of your things was built by <b>walking the templates</b>. So a thing that belonged to no template could not be seen anywhere at all, and the app had to park it in a made-up list called <b>“Loose items”</b> — a template that is not a template. That is the strange function you were feeling: the storage was honest, the app still pretended your things were children of lists.<br><br><b>Care → Your things</b> is the catalogue’s own home. It reads your things <em>directly</em>, so a thing on no list is simply a thing on no list, and sits there with everything else. Search it, tap anything to change it — a change reaches every list that thing is on, as always. <b>New</b> asks only what the thing is: no “which list?” first. Anything on no list is marked, and one tap shows you just those.<br><br>Open a thing that is on no list and the editor says so plainly. Everything belonging to <b>the thing itself</b> — its name, weight, where it is kept, its photos, its care record, who owns it, what it cost — works exactly as it always has. The half that belongs to <em>a list</em> — how many, which bag, its section, the conditions — has nowhere to live until it joins one, so it appears the moment you tick a list.<br><br>Nothing moved and nothing was taken away: templates work exactly as before, and “Loose items” is still there for now. This is the first of three steps.',
+      '<b>Your words: “I want the item to live, even if it is not connected to any packing list yet.” You were putting your finger on something real.</b><br><br>Since <b>v108</b> each of your things has lived <em>once</em>, in one catalogue — which is why renaming a jacket renames it everywhere. But every <em>view</em> of your things was built by <b>walking the templates</b>. So a thing that belonged to no template could not be seen anywhere at all, and the app had to park it in a made-up list called <b>“Loose items”</b> — a template that is not a template. That is the strange function you were feeling: the storage was honest, the app still pretended your things were children of lists.<br><br><b>Care → Your things</b> is the catalogue’s own home. It reads your things <em>directly</em>, so a thing on no list is simply a thing on no list, and sits there with everything else. Search it, tap anything to change it — a change reaches every list that thing is on, as always. <b>New</b> asks only what the thing is: no “which list?” first. Anything on no list is marked, and one tap shows you just those.<br><br>Open a thing that is on no list and the editor says so plainly. Everything belonging to <b>the thing itself</b> — its name, weight, where it is kept, its photos, its care record, who owns it, what it cost — works exactly as it always has. The half that belongs to <em>a list</em> — how many, which bag, its section, the conditions — has nowhere to live until it joins one, so it appears the moment you tick a list.<br><br>Nothing moved and nothing was taken away: templates work exactly as before, and “Loose items” is still there for now — it goes in v177. This is the first of three steps.',
       'A thing you own can now exist on its own — bought today, filed onto a list whenever you feel like it, or never.'),
     v('v174', '2026-09-16 · 23:00 UTC', false, 'Test six — one item, one row on the Care list',
       'Nothing changes on screen. The <b>sixth automatic test</b> guards the bug v165 fixed: it gives a thing that sits in several templates a care schedule, opens <b>Care</b>, and checks it is listed <b>once</b> — naming every template it belongs to — rather than once per template. Each row on the maintenance list carries an identifier now. One test per version, as agreed.',
@@ -8525,7 +8503,7 @@ async function renderSearch() {
     const has = (s) => String(s || '').toLowerCase().includes(q);
 
     const itemHits = items.filter((it) => has(it.name) || has(it.swedish)).slice(0, 30);
-    const tmplHits = lists.filter((l) => l.role !== CONTAINER_ROLE && l.role !== 'loose' && has(l.name));
+    const tmplHits = lists.filter((l) => l.role !== CONTAINER_ROLE && has(l.name));
     const eventHits = events.filter((e) => has(e.name) || has(e.destination));
     const allActionHits = actions.filter((a) => has(a.text) || has(a.itemName));
     const actionHits = allActionHits.filter((a) => a.kind !== 'shopping');
@@ -9702,7 +9680,7 @@ function ovFlagBadges(it) {
 // Where a row jumps to when tapped: its item editor, opened through the first
 // real template it belongs to (else its loose / container home).
 function ovEditHref(row) {
-  const real = row.templates.find((t) => t.role !== 'loose' && t.role !== CONTAINER_ROLE);
+  const real = row.templates.find((t) => t.role !== CONTAINER_ROLE);
   const t = real || row.templates[0];
   return t ? `#/list/${encodeURIComponent(t.id)}/item/${encodeURIComponent(row.item.id)}` : '#/lists';
 }
@@ -9712,7 +9690,7 @@ function ovEditHref(row) {
 function ovTemplateChips(row) {
   if (!row.templates.length) return `<span class="ov-tpl none">${ic('warn','xs')}No template</span>`;
   return row.templates.map((t) => {
-    if (t.role === 'loose') return `<span class="ov-tpl none">${ic('warn','xs')}No template</span>`;
+    if (!t.id) return `<span class="ov-tpl none">${ic('warn','xs')}On no list</span>`;
     if (t.role === CONTAINER_ROLE) return `<span class="ov-tpl bag">${ic('bag','xs')}${esc(t.name)}</span>`;
     return `<a class="ov-tpl" href="#/list/${esc(t.id)}">${esc(t.name)}</a>`;
   }).join('');
@@ -9724,7 +9702,10 @@ async function renderOverview() {
 
   const lists = await db.getLists();
   ALL_LISTS = lists;                       // so isUnfiled() in the filter chips is accurate
-  const rows = catalogRows(lists);
+  // (v177) The catalogue is passed in as well, so things on NO list appear here
+  // too — this screen says "every item on one line", and since the Loose bin was
+  // retired a thing without a template is an ordinary thing, not an orphan.
+  const rows = catalogRows(lists, await db.getCatalogItems());
   const dupeGroups = duplicateGroups(rows);
   const dupIds = duplicateIds(rows);
   const realTemplates = lists.filter((l) => !l.role).length;
@@ -9745,8 +9726,8 @@ async function renderOverview() {
     const groupHtml = dupeGroups.map((g) => {
       const items = g.rows.map((r) => {
         const where = r.templates.length
-          ? r.templates.map((t) => t.role === 'loose' ? 'No template' : t.name).filter(Boolean).join(', ')
-          : 'No template';
+          ? r.templates.map((t) => t.name).filter(Boolean).join(', ')
+          : 'On no list';
         return `<a class="ov-dupitem" href="${ovEditHref(r)}"><span class="ov-dupname">${esc(r.name)}</span><span class="ov-dupwhere">${esc(where)}</span>${IC.fwd}</a>`;
       }).join('');
       return `<div class="ov-dupgroup">
@@ -9877,7 +9858,7 @@ function exportOverviewXlsx(rows, dupIds) {
   const yn = (v) => (v ? 'yes' : '');
   const dataRows = rows.map((r) => {
     const it = r.item;
-    const tpls = r.templates.map((t) => t.role === 'loose' ? 'No template' : t.name).filter(Boolean).join(', ');
+    const tpls = r.templates.map((t) => t.name).filter(Boolean).join(', ') || 'On no list';
     return [
       it.name || '', it.swedish || '', it.category || '', tpls, Number(it.weight) || 0, it.storage || '',
       it.charging ? (chargeTypeShort(it.chargeType) || 'yes') : '', yn(it.liquid), yn(it.restricted),
@@ -11002,6 +10983,10 @@ function watchForUpdate(reg) {
       // copy and can therefore tell "the account has never heard of this button"
       // from "I simply have not downloaded it yet".
       await adoptGrabLists();
+      // (v177) Dissolve any "Loose items" bin — here rather than behind a flag,
+      // because one can still arrive later from a device that has not updated.
+      const rl = await db.retireLooseBin().catch((err) => { logDiag('retire-loose', err); return null; });
+      if (rl && rl.retired) logDiag('retire-loose', `freed ${rl.freed} thing(s) from ${rl.retired} bin(s)`);
       await renderIfIdle();
     })
     .catch((err) => logDiag('shared-lists', err))

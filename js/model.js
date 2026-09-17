@@ -3520,7 +3520,7 @@ export function applyPresetConfig(ev, config = {}) {
 // catalog item keeps the SAME id wherever it is resolved, deduping by id collapses
 // the copies a single item shows as across its templates into one line, and gathers
 // every template it belongs to (list id, name and role). Rows are name-sorted.
-export function catalogRows(lists) {
+export function catalogRows(lists, catalog = []) {
   const byId = new Map();
   for (const l of asArray(lists)) {
     for (const it of asArray(l.items)) {
@@ -3532,6 +3532,15 @@ export function catalogRows(lists) {
         row.templates.push({ id: l.id, name: l.name || '', role: l.role || '' });
       }
     }
+  }
+  // (v177) Things on NO template at all. Since the "Loose items" bin was retired
+  // they are an ordinary state, not an orphan — and this view claims to show every
+  // item — so the catalogue is folded in, each with an empty `templates`.
+  for (const it of asArray(catalog)) {
+    if (!it || !String(it.name || '').trim()) continue;
+    const key = it.id || `name:${normName(it.name)}`;
+    if (byId.has(key)) continue;
+    byId.set(key, { id: key, name: it.name, item: it, templates: [] });
   }
   const rows = [...byId.values()];
   rows.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));

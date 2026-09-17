@@ -6,8 +6,24 @@ import { expect } from '@playwright/test';
 export async function openApp(page, hash = '#/') {
   await page.route(/dexie\.cloud/, (route) => route.abort());
   await page.goto(`/index.html${hash}`);
+  await settled(page);
+}
+
+// A genuine restart of the app.
+//
+// 🪤 page.goto() to the URL the page is ALREADY on is a same-document HASH change:
+// the document is not reloaded and the app never re-runs, so anything that happens
+// only at start-up (a migration, say) appears never to happen — and `data-ready`
+// is still set from the first load, so waiting for it proves nothing. Reload.
+export async function restartApp(page, hash = '#/') {
+  await page.evaluate((h) => { window.location.hash = h; }, hash);
+  await page.reload();
+  await settled(page);
+}
+
+// Booted, and every start-up repair finished.
+async function settled(page) {
   await expect(page.getByTestId('app-version')).toHaveText(/v\d+/);
-  // Start-up repairs can redraw a screen; the app flags when they are all done.
   await expect(page.locator('html[data-ready="1"]')).toBeAttached({ timeout: 20_000 });
 }
 
