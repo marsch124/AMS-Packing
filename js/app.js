@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v181';
+const APP_VERSION = 'v182';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -844,7 +844,7 @@ async function renderThings() {
   wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">Your things</h1>
     <button class="btn ghost" data-batch data-testid="thing-batch">${IC.list}<span>Several</span></button>
     <button class="btn primary" data-new data-testid="thing-new">${IC.plus}<span>New</span></button></div>`));
-  wrap.appendChild(h('<p class="muted pad">Everything you own, whether or not it is on a list yet. Tap one to change it — a change here reaches every list it is on.</p>'));
+  wrap.appendChild(h('<p class="muted pad compact-fold">Everything you own, whether or not it is on a list yet. Tap one to change it — a change here reaches every list it is on.</p>'));
 
   const homeless = rows.filter((r) => !r.templates.length).length;
   const bar = h(`<div class="things-bar">
@@ -929,7 +929,7 @@ async function renderThing(itemId) {
 async function renderItemsGrid() {
   const wrap = h('<section class="screen screen-grid"></section>');
   wrap.appendChild(h(`<div class="topbar"><a class="iconbtn" href="#/maintenance" aria-label="Back">${IC.back}</a><h1 class="grow">All items · table</h1></div>`));
-  wrap.appendChild(h('<p class="muted pad">Every item on one line. Fields under <b>the item itself</b> change it everywhere; a template box files it in or out. <b>Columns</b> picks and orders the columns — swipe sideways for more.</p>'));
+  wrap.appendChild(h('<p class="muted pad compact-fold">Every item on one line. Fields under <b>the item itself</b> change it everywhere; a template box files it in or out. <b>Columns</b> picks and orders the columns — swipe sideways for more.</p>'));
 
   let lists = await db.getLists();
   let rowsById = new Map();
@@ -3785,12 +3785,15 @@ async function renderEvent(eventId) {
 
   const view = viewFor(ev);
   const segBtn = (val, label) => `<label class="seg${view === val ? ' on' : ''}"><input type="radio" name="tview" value="${val}"${view === val ? ' checked' : ''}>${label}</label>`;
-  const toolbar = h(`<div class="toolbar">
+  const toolbar = h(`<div class="toolbar trip-toolbar">
+    <div class="toolbar-group">
     <span class="toolbar-lbl">Group by</span>
     <div class="segmented small">
       ${segBtn('when', 'When')}${segBtn('container', 'Where')}${segBtn('category', 'Category')}${tripHasGroup(ev, 'GA') ? segBtn('ga', 'GA') : ''}${tripHasGroup(ev, 'WET') ? segBtn('wet', 'WET') : ''}${tripHasSections(ev) ? segBtn('section', 'Section') : ''}${tripHasStorage(ev) ? segBtn('stored', 'Stored') : ''}
     </div>
+    </div>
     <div class="spacer"></div>
+    <div class="toolbar-actions">
     <button class="btn ghost" data-act="add">${IC.plus}<span>Item</span></button>
     <button class="btn ghost" data-act="kit">${ic('toolbox')}<span>Kit</span></button>
     <button class="btn ghost" data-act="regen">${IC.refresh}<span>Regenerate</span></button>
@@ -3798,6 +3801,7 @@ async function renderEvent(eventId) {
     <button class="btn ghost" data-act="review" data-testid="event-review">${IC.check}<span>Trip review</span></button>
     <button class="btn ghost" data-act="share">${IC.share}<span>Share</span></button>
     <button class="btn ghost" data-act="xlsx">${IC.sheet}<span>Excel</span></button>
+    </div>
   </div>`);
   wrap.appendChild(toolbar);
 
@@ -3815,7 +3819,7 @@ async function renderEvent(eventId) {
   const weightedCount = ev.entries.filter((e) => Number(e.weight) > 0).length;
   if (liquidCount || chargeCount || restrictedCount || weightedCount) {
     const fchip = (key, label, n) => `<button class="fchip${flagFilter.has(key) ? ' on' : ''}" data-filter="${key}">${label} <em>${n}</em></button>`;
-    const filterbar = h(`<div class="filterbar">
+    const filterbar = h(`<div class="filterbar trip-filterbar">
       <span class="filterbar-lbl">Sort out</span>
       ${liquidCount ? fchip('liquid', `${ic('drop','sm')}Liquids`, liquidCount) : ''}
       ${chargeCount ? fchip('charge', `${ic('bolt','sm')}Charge`, chargeCount) : ''}
@@ -5573,7 +5577,7 @@ async function renderLists() {
   const lists = await db.getLists();
   const wrap = h('<section class="screen"></section>');
   wrap.appendChild(h(`<div class="topbar"><h1 class="grow">Templates</h1><a class="iconbtn" href="#/search" aria-label="Search">${IC.search}</a><a class="btn ghost" href="#/refine">Refine</a><button class="btn primary" data-new>${IC.plus}<span>New</span></button></div>`));
-  wrap.appendChild(h(`<p class="muted pad">These are your reusable building blocks. An <b>Event</b> combines the ones you pick into a single <b>Packing List</b> to pack from.</p>`));
+  wrap.appendChild(h(`<p class="muted pad compact-fold">These are your reusable building blocks. An <b>Event</b> combines the ones you pick into a single <b>Packing List</b> to pack from.</p>`));
 
   // A visual cover card: a coloured tile with the template's emoji, its name and
   // an item count. Colour + emoji come from the template's cover (with sensible
@@ -5640,7 +5644,7 @@ async function renderList(listId, openItemId) {
     <button class="iconbtn" data-del aria-label="Delete template">${IC.trash}</button>`}
   </div>`));
   if (isContainer) {
-    wrap.appendChild(h(`<p class="muted pad">Your bags, duffels and backpacks as things in their own right — photos, capacity, where each one lives, how to look after it. Every one of them is offered when you choose where an item is packed.</p>`));
+    wrap.appendChild(h(`<p class="muted pad compact-fold">Your bags, duffels and backpacks as things in their own right — photos, capacity, where each one lives, how to look after it. Every one of them is offered when you choose where an item is packed.</p>`));
   }
   wrap.appendChild(h(`<div class="toolbar">
     <div class="spacer"></div>
@@ -6143,7 +6147,7 @@ function itemEditor(list, it, setOpen, draw) {
       </details>
     </section>
 
-    ${noList ? `<p class="layer-note nolist-note">${ic('list','sm')}This thing is on <b>no list yet</b>. Tick one below and you can then set how many, which bag and the conditions for that list.</p>` : ''}
+    ${noList ? `<p class="layer-note nolist-note">${ic('list','sm')}<span>This thing is on <b>no list yet</b>. Tick one below and you can then set how many, which bag and the conditions for that list.</span></p>` : ''}
     ${(isContainer || noList) ? '' : `<section class="layer layer-membership">
       <div class="layer-h"><span class="layer-num">2</span><span class="layer-t">In this list · ${esc(list.name)}</span><span class="layer-sub">Just for this template — changing these here doesn't touch the item in other lists.</span></div>
       <label class="field"><span>Qty</span><input name="qty" value="${esc(it.qty)}" placeholder="optional"></label>
@@ -7342,6 +7346,7 @@ function howtoCard() {
 
         <h3>Density — Compact or Comfortable</h3>
         <p><b>Settings → Appearance → Density.</b> <b>Compact</b> (the everyday setting since v166) tightens cards, rows and headings on every screen so the phone shows about a screen’s worth more; <b>Comfortable</b> puts the air back. The grab lists never change, and Packing Mode’s rows stay a full-thumb target in both.</p>
+        <p>Since v182, Compact also: puts a trip’s <b>Group by</b> switch, its tools and its <b>Sort out</b> filters on <b>one row each that you swipe sideways</b> on the phone (a fade on the right edge means there is more), so the list begins on the first screen — the Mac’s wider window already fits them, so there they stay as they were; folds away the <b>explanation at the top of a screen</b> — it is still here in this guide; keeps a phase’s explanation to <b>one line</b>; and tightens the rows of <b>Your things</b>. Every one of those comes back with Comfortable.</p>
 
         <h3>Colour tells you where you are</h3>
         <p>Each of the six tabs has its <b>own colour</b>, and that colour flows through the whole screen — the page heading, the buttons, the chips and progress bars, the back/edit icons, and the tab itself. In the bottom bar <b>every tab always shows its colour</b>, and the one you're currently on fills in solid and goes bold — so a single glance tells you which part of the app you're in:</p>
@@ -7657,6 +7662,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v182', '2026-09-18 · 13:05 UTC', false, 'Less air, second pass — a trip opens with its items on screen',
+      '<b>You asked for another flyover. I photographed every screen as it looks on your phone, in dark mode, and measured the rows instead of guessing — two of my guesses from the pictures turned out wrong.</b><br><br><b>(1) You open a trip and now see its items.</b> The first item of a trip sat <b>826 pixels down</b> — behind the tab bar, which starts at 781 on a phone like yours, under the Group by switch, seven tool buttons and the Sort out filters, which had stacked into five rows. Each of those is now <b>one row you swipe sideways</b>, with a soft fade on the right to say there is more. The list starts 200 pixels higher: <b>three items now show the moment a trip opens, where before there were none.</b> Nothing was removed; it was only unstacked. <b>That is the phone only</b> — on the Mac the column is twice as wide and those controls already fitted in two rows, so they stay exactly as they were.<br><br><b>(2) Your things: a fifth less scrolling.</b> 427 things at 63 pixels a row, where a template shows the same two lines in 51. Same 16-point names — only the air between the lines went. <b>About 6,000 pixels less to scroll — seven screens’ worth on your phone.</b><br><br><b>(3) The explanations at the top of a screen fold away in Compact</b> — Templates, Your things, All items, Containers, Maintenance mode, Actions and Shopping. They are for the first visit, and How it works keeps every word. Comfortable still shows them.<br><br><b>(4) A phase’s explanation is one line</b> beside its name rather than three, and <b>(5)</b> the item editor loses the subtitle under “The item itself” that repeated what the “everywhere” labels right below it already say.<br><br><b>Two things that were broken, fixed in both densities:</b> the “This thing is on no list yet” note was laid out as <b>three narrow columns of words</b>; and the Container and When pair on every item editor drew <b>20 pixels past the right edge</b> of the phone — since before v181.<br><br><b>The tests now look at the Mac.</b> Until this version every automatic test ran at phone size, so something right on the phone and wrong on the Mac could only be caught by eye — and it was: my first draft unstacked the trip toolbar on the Mac as well, where it saved no height and hid <b>Excel</b> behind a sideways scroll that a mouse barely knows how to do. The tour of every screen now runs a second time at a Mac window’s size and checks that on a wide screen <b>no trip tool is hidden</b>. Putting the first draft back turns it red.<br><br><b>A test that could not see the editor fault now can.</b> The tour of every screen checked that no page scrolls sideways — but the app clips rather than scrolls, so something could vanish off the right while the page stayed the right width. It now checks that nothing is drawn past the edge, and it was proved by putting both faults back and watching it go red.<br><br>As in v166: <b>the grab lists and Packing Mode’s thumb-sized rows are untouched</b>, and <b>Settings → Appearance → Density → Comfortable</b> puts all of the air back.',
+      'You open a trip and see your things, and the longest list scrolls a fifth less — with nothing taken away.'),
     v('v181', '2026-09-17 · 21:00 UTC', false, 'The last two: the forecast, and the rules that decide what a trip packs',
       '<b>The two I had left out now have tests as well, so nothing at all is unwatched.</b><br><br><b>The weather.</b> I had left this alone because a test that calls a weather service over the internet goes red whenever that service has a bad day — which tells you nothing about your app. So this one <b>never touches the internet</b>: the test hands the app a made-up forecast of a cold, wet week and checks what it does with it. The forecast is asked for, four days come back, the rainy ones are shown as rainy, and it is <b>kept on the trip</b> rather than only drawn on screen. Proved by breaking each of those in turn — a forecast that cannot be read, and one that is fetched and then quietly dropped.<br><br><b>What a trip packs.</b> The rules that decide whether a thing comes along — summer or winter, car or plane, indoors or out — now have a test end to end, on top of the ones already covering the rules themselves. One template with five things on it, each tagged differently: a summer trip by car brings the summer things and leaves the winter, the plane-only and the outdoor ones behind; the same template on a winter flight outdoors brings exactly the other half. Then the same check again on a real trip screen, so a break anywhere between the rule and what you see is caught.<br><br>That is <b>twenty-four</b> checks on every publish, alongside the three hundred and ten on the rules underneath.',
       'Nothing in the app is unwatched now — including the forecast, tested without ever depending on the weather service being up.'),
@@ -9723,7 +9731,7 @@ async function renderOverview() {
   const dupIds = duplicateIds(rows);
   const realTemplates = lists.filter((l) => !l.role).length;
 
-  wrap.appendChild(h(`<p class="ov-intro">Every item on one line — templates, flags, weight, where it’s stored. Tap a row to open the item, a template name to jump to it.</p>`));
+  wrap.appendChild(h(`<p class="ov-intro compact-fold">Every item on one line — templates, flags, weight, where it’s stored. Tap a row to open the item, a template name to jump to it.</p>`));
 
   // Headline stats.
   const stat = (n, label) => `<span class="ov-stat"><b>${n}</b> ${label}</span>`;

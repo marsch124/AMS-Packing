@@ -56,6 +56,42 @@ test('every screen opens without an error', async ({ page }) => {
     // The phone must never scroll sideways (the v165 bug).
     const wide = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1);
     expect(wide, `${route} does not scroll sideways`).toBe(false);
+    // 🪤 ...but that check is BLIND to content drawn past the edge, because <main>
+    // clips rather than scrolls: the page stays phone-width while a count or a field
+    // quietly disappears off the right. (v182 found two: a trip's 14/41 count, and
+    // the item editor's When field, 20px over since before v181.) Anything inside a
+    // deliberate sideways-swipe row is allowed to extend; nothing else is.
+    const past = await page.evaluate(() => {
+      const W = window.innerWidth;
+      const inSwipeRow = (el) => {
+        for (let p = el.parentElement; p && p.tagName !== 'MAIN'; p = p.parentElement) {
+          const o = getComputedStyle(p).overflowX;
+          if (o === 'auto' || o === 'scroll') return true;
+        }
+        return false;
+      };
+      return [...document.querySelectorAll('.screen *')]
+        .filter((el) => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0 && b.right > W + 1 && !inSwipeRow(el); })
+        .slice(0, 3)
+        .map((el) => `${el.tagName.toLowerCase()}.${String(el.className.baseVal ?? el.className).split(' ')[0]}`);
+    });
+    expect(past, `${route} draws nothing past the right edge`).toEqual([]);
+    // On a wide screen nothing needs a sideways swipe to be reached: the swipe rows
+    // are a PHONE answer to a phone problem. (v182 first unstacked the trip toolbar
+    // everywhere, and on the Mac that hid Excel behind a sideways scroll while
+    // saving no height at all.)
+    const onWideScreen = await page.evaluate(() => window.innerWidth >= 700);
+    if (onWideScreen) {
+      const hiddenTools = await page.evaluate(() => {
+        const tb = document.querySelector('.trip-toolbar');
+        if (!tb) return [];
+        const edge = tb.getBoundingClientRect().right;
+        return [...tb.querySelectorAll('.btn, .seg')]
+          .filter((b) => b.getBoundingClientRect().right > edge + 1)
+          .map((b) => (b.textContent || '').trim());
+      });
+      expect(hiddenTools, `${route}: on a wide screen every trip tool is in view`).toEqual([]);
+    }
     expect(errors, `${route} raised no error`).toEqual([]);
   }
 });

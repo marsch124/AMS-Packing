@@ -23,7 +23,15 @@ export default defineConfig({
     serviceWorkers: 'block',
   },
   // The phone is where he lives; test at its size.
-  projects: [{ name: 'iphone-chromium', use: { ...devices['iPhone 13'], browserName: 'chromium' } }],
+  projects: [
+    { name: 'iphone-chromium', use: { ...devices['iPhone 13'], browserName: 'chromium' } },
+    // He works on this app on the Mac as much as on the phone, and until v182 no test
+    // ever looked at it — so a change that was right on the phone and wrong on the
+    // Mac (v182's first trip toolbar) could only be caught by eye. The tour of every
+    // screen runs again at a Mac window's size: the app's 720px column, no touch.
+    { name: 'mac-chromium', testMatch: /routes\.spec\.js/,
+      use: { browserName: 'chromium', viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 } },
+  ],
   webServer: {
     command: 'python3 -m http.server 4173 --bind 127.0.0.1',
     url: 'http://127.0.0.1:4173/index.html',

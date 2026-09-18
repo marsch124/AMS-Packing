@@ -6963,3 +6963,108 @@ a.entry.thing-row .e-sub {
 }
 /* The list you came in through: marked, but no longer locked. */
 .tmpl-check.cur { border-color: color-mix(in srgb, var(--brand) 45%, var(--line)); }
+
+
+/* ============================================================
+   (v182) COMPACT, second pass — found by photographing every screen in dark
+   mode and measuring the rows rather than eyeballing them. Everything here is
+   Compact only: Comfortable is exactly as it was. The grab lists and Packing
+   Mode's 59px thumb-sized rows are deliberately left alone, as in v166.
+   ============================================================ */
+
+/* The two wrappers on the trip toolbar are invisible to the layout unless
+   Compact asks for them, so Comfortable wraps exactly as before. */
+.toolbar-group, .toolbar-actions { display: contents; }
+
+/* The trip screen ON A PHONE. Its first item sat at y=826 — behind the tab bar —
+   because the Group-by switch, the seven tools and the Sort out filters wrapped
+   into five rows. There they each become a single row you swipe sideways;
+   nothing is removed, only unstacked.
+   🪤 PHONE ONLY. On the Mac the column is 720px wide and the same controls already
+   fit in two rows — so unstacking gained nothing there and hid Excel behind a
+   sideways scroll, which a mouse barely knows how to do. Wider screens keep
+   wrapping exactly as before. */
+@media (max-width: 600px) {
+  html.compact .trip-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    flex-wrap: nowrap;
+    gap: 6px;
+    margin: 6px 0 4px;
+  }
+  html.compact .trip-toolbar > .spacer { display: none; }
+  html.compact .trip-toolbar .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  html.compact .trip-toolbar .toolbar-lbl { flex: none; }
+  html.compact .trip-toolbar .toolbar-group .segmented,
+  html.compact .trip-toolbar .toolbar-actions,
+  html.compact .trip-filterbar {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    min-width: 0;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    /* a soft edge on the right says "there is more this way" */
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent);
+    padding-right: 22px;
+  }
+  html.compact .trip-toolbar .toolbar-group .segmented::-webkit-scrollbar,
+  html.compact .trip-toolbar .toolbar-actions::-webkit-scrollbar,
+  html.compact .trip-filterbar::-webkit-scrollbar { display: none; }
+  html.compact .trip-toolbar .seg,
+  html.compact .trip-toolbar .toolbar-actions > .btn,
+  html.compact .trip-filterbar > * { flex: none; }
+  html.compact .trip-toolbar .toolbar-actions > .btn { padding: 6px 10px; min-height: 34px; }
+  html.compact .trip-filterbar { margin: 0 0 6px; }
+}
+
+/* A phase's explanation ("Things you don't use at home — pack early") took
+   three lines beside its name. One line; the rest is in How it works. */
+html.compact .group-h .ph-hint {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 🪤 …and the group holding that header is a GRID item, which by default will not
+   shrink below its content. With the hint on one line, that made a group 505px wide
+   on a 390px phone and pushed the 14/41 count off the edge — invisibly, because
+   <main> clips rather than scrolls, so the page never looked too wide. */
+html.compact .group { min-width: 0; }
+
+/* Your things: 426 rows at 63px each, where the same two lines sit in 51px on a
+   template. Same 16px name — only the air between the lines goes. */
+html.compact .things-list { gap: 2px; }
+html.compact a.entry.thing-row .entry-main { padding: 3px 4px; gap: 0; }
+html.compact a.entry.thing-row .e-name { line-height: 1.25; }
+html.compact a.entry.thing-row .e-sub { line-height: 1.3; }
+
+/* The explanation at the top of a screen is for the first visit. In Compact it
+   folds away (the guide keeps it); Comfortable still shows it. */
+html.compact .compact-fold,
+html.compact .screen-intro { display: none; }
+
+/* The item editor's layer subtitle only restates what the "everywhere" labels
+   right beneath it already say. */
+html.compact .layer-h .layer-sub { display: none; }
+
+/* A fix for BOTH densities, and older than this pass: the two-column field rows
+   (Container | When on every item editor) drew 20px past the right edge of the
+   phone, because a grid column sized `1fr` will not shrink below its longest
+   option ("📦 ≥1 week ahead"). Columns that may shrink, and selects that fill
+   them, keep both fields on screen — the option text ellipsises inside its box. */
+.row2 { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+.row2 > .field { min-width: 0; }
+.row2 > .field select { min-width: 0; width: 100%; }
+
+/* A fix for BOTH densities: this note is a flex box, and its text used to be
+   three loose pieces (plain text, <b>, plain text) — so it was laid out as three
+   narrow columns. The text is one span now; this keeps it one line of flow. */
+.nolist-note > span { flex: 1 1 auto; min-width: 0; }
