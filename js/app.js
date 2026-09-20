@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v182';
+const APP_VERSION = 'v183';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -2741,7 +2741,6 @@ async function renderHome() {
     return `<a class="grab-btn grab-c-${d.tone}" href="#/grab/${gid}" aria-label="${esc(d.title)}"><span class="grab-icon">${d.icon}</span><span>${esc(d.label)}</span></a>`;
   }).join('')}</div>`));
 
-  wrap.appendChild(h('<p class="muted pad home-intro">Base and transport kit come in by themselves — tick any extra activities, then <b>Create Event</b>.</p>'));
 
   // The builder card — a fresh event, generated on submit.
   const card = h('<div class="card builder"></div>');
@@ -3462,7 +3461,16 @@ function eventForm(ev, lists, isEdit) {
     <span class="preset-lbl">${ic('bolt','sm')}Start from a preset</span>
     <div class="preset-chips">${presets.map((p) => `<button type="button" class="preset-chip" data-preset="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div>
   </div>` : '';
+  // One line of instruction, INSIDE the frame it is about rather than floating
+  // above it where it read as a caption for the grab buttons (his point, v183).
+  // Home only: the Event settings screen has no Create Event to press. What used
+  // to be said here — that the base and transport kit come in by themselves — is
+  // already said at "Activities to pack for", where it applies.
+  const builderLede = !isEdit
+    ? '<p class="builder-lede">Name your trip, add the dates, then press <b>Create Event</b>.</p>'
+    : '';
   form.innerHTML = `
+    ${builderLede}
     ${presetBar}
     <!-- Name first (v126): what the trip IS comes before how it is built. The
          List-type radio used to open the form, which asked you to classify a trip
@@ -7662,6 +7670,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v183', '2026-09-20 · 17:52 UTC', false, 'The line above the trip form moves inside it',
+      '<b>Your eye, and you were right.</b> The sentence under the six workout buttons sat <em>outside</em> the frame it belonged to, so it read as a caption for those buttons rather than as the instruction for the form below it.<br><br>It is now the first line <b>inside</b> the frame, and it says what you actually do: <b>“Name your trip, add the dates, then press Create Event.”</b><br><br>The sentence it replaces — that the base and transport kit come in by themselves — has not been lost. It was already written where it applies, on <b>Activities to pack for</b>: “Your common base and transport kit are already in — tick only the extra activities you’ll do.” The line above the form was repeating it.<br><br>One small gain besides: with the line inside the card, the form begins about 40 pixels higher, which brings <b>Activities to pack for</b> onto the first screen on the phone.',
+      'The instruction sits with the thing it instructs, and says the two things you actually do.'),
     v('v182', '2026-09-18 · 13:05 UTC', false, 'Less air, second pass — a trip opens with its items on screen',
       '<b>You asked for another flyover. I photographed every screen as it looks on your phone, in dark mode, and measured the rows instead of guessing — two of my guesses from the pictures turned out wrong.</b><br><br><b>(1) You open a trip and now see its items.</b> The first item of a trip sat <b>826 pixels down</b> — behind the tab bar, which starts at 781 on a phone like yours, under the Group by switch, seven tool buttons and the Sort out filters, which had stacked into five rows. Each of those is now <b>one row you swipe sideways</b>, with a soft fade on the right to say there is more. The list starts 200 pixels higher: <b>three items now show the moment a trip opens, where before there were none.</b> Nothing was removed; it was only unstacked. <b>That is the phone only</b> — on the Mac the column is twice as wide and those controls already fitted in two rows, so they stay exactly as they were.<br><br><b>(2) Your things: a fifth less scrolling.</b> 427 things at 63 pixels a row, where a template shows the same two lines in 51. Same 16-point names — only the air between the lines went. <b>About 6,000 pixels less to scroll — seven screens’ worth on your phone.</b><br><br><b>(3) The explanations at the top of a screen fold away in Compact</b> — Templates, Your things, All items, Containers, Maintenance mode, Actions and Shopping. They are for the first visit, and How it works keeps every word. Comfortable still shows them.<br><br><b>(4) A phase’s explanation is one line</b> beside its name rather than three, and <b>(5)</b> the item editor loses the subtitle under “The item itself” that repeated what the “everywhere” labels right below it already say.<br><br><b>Two things that were broken, fixed in both densities:</b> the “This thing is on no list yet” note was laid out as <b>three narrow columns of words</b>; and the Container and When pair on every item editor drew <b>20 pixels past the right edge</b> of the phone — since before v181.<br><br><b>The tests now look at the Mac.</b> Until this version every automatic test ran at phone size, so something right on the phone and wrong on the Mac could only be caught by eye — and it was: my first draft unstacked the trip toolbar on the Mac as well, where it saved no height and hid <b>Excel</b> behind a sideways scroll that a mouse barely knows how to do. The tour of every screen now runs a second time at a Mac window’s size and checks that on a wide screen <b>no trip tool is hidden</b>. Putting the first draft back turns it red.<br><br><b>A test that could not see the editor fault now can.</b> The tour of every screen checked that no page scrolls sideways — but the app clips rather than scrolls, so something could vanish off the right while the page stayed the right width. It now checks that nothing is drawn past the edge, and it was proved by putting both faults back and watching it go red.<br><br>As in v166: <b>the grab lists and Packing Mode’s thumb-sized rows are untouched</b>, and <b>Settings → Appearance → Density → Comfortable</b> puts all of the air back.',
       'You open a trip and see your things, and the longest list scrolls a fifth less — with nothing taken away.'),

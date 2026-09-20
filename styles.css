@@ -6870,7 +6870,6 @@ html.compact .sec-h { padding: 5px 4px 3px; margin-top: 2px; }
 html.compact .nudge { padding: 10px 12px; margin-bottom: 10px; }
 html.compact .card.reminders .nudge { padding: 8px 12px 8px 10px; }
 html.compact .grab-row { margin-bottom: 12px; }
-html.compact .home-intro { margin-bottom: 8px; }
 /* Packing Mode rows: 16px of padding each side of the name was the air */
 html.compact .pack-item { padding: 10px 14px; }
 html.compact .pack-list { gap: 6px; }
@@ -7068,3 +7067,14 @@ html.compact .layer-h .layer-sub { display: none; }
    three loose pieces (plain text, <b>, plain text) — so it was laid out as three
    narrow columns. The text is one span now; this keeps it one line of flow. */
 .nolist-note > span { flex: 1 1 auto; min-width: 0; }
+
+/* (v183) The builder card's one line of instruction. It used to sit OUTSIDE the
+   card, directly under the six grab buttons, where it read as a caption for them
+   rather than for the form it was about. */
+.builder-lede {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: .92rem;
+  line-height: 1.4;
+}
+.builder-lede b { color: var(--ink); }
