@@ -300,7 +300,60 @@ test('tripNudge: null without a date; zero due when all packed', () => {
 
 test('progress: counts checked entries', () => {
   const entries = [ newItem({ checked: true }), newItem({ checked: false }), newItem({ checked: true }) ];
-  assert.deepEqual(progress(entries), { done: 2, total: 3, pct: 67 });
+  assert.deepEqual(progress(entries), { done: 2, total: 3, aside: 0, pct: 67 });
+});
+
+// "Not this time": still on the list, not being packed. It has to leave the
+// counts, or a trip where you deliberately leave something behind can never
+// reach 100% and the ring reports a job that is finished as unfinished.
+test('progress: something set aside leaves the count, and is reported', () => {
+  const entries = [
+    newItem({ name: 'A', checked: true }),
+    newItem({ name: 'B', checked: false }),
+    newItem({ name: 'C', skipped: true }),
+    newItem({ name: 'D', skipped: true }),
+  ];
+  assert.deepEqual(progress(entries), { done: 1, total: 2, aside: 2, pct: 50 });
+});
+
+test('progress: packing everything else reaches 100% with things set aside', () => {
+  const entries = [ newItem({ checked: true }), newItem({ checked: true }), newItem({ skipped: true }) ];
+  const p = progress(entries);
+  assert.equal(p.pct, 100);
+  assert.equal(p.aside, 1);
+});
+
+test('packSteps: set-aside entries are not part of the walk', () => {
+  const entries = [
+    newItem({ name: 'A', phase: 'week', checked: true }),
+    newItem({ name: 'B', phase: 'week' }),
+    newItem({ name: 'C', phase: 'week', skipped: true }),
+  ];
+  const step = packSteps(entries).find((s) => s.phase.id === 'week');
+  assert.equal(step.total, 2);
+  assert.equal(step.done, 1);
+  assert.equal(step.remaining, 1);
+  assert.ok(!step.entries.some((e) => e.name === 'C'));
+});
+
+test('packSteps: a phase with nothing left to pack drops out of the walk', () => {
+  const entries = [
+    newItem({ name: 'A', phase: 'week' }),
+    newItem({ name: 'B', phase: 'day', skipped: true }),
+  ];
+  const ids = packSteps(entries).map((s) => s.phase.id);
+  assert.ok(ids.includes('week'));
+  assert.ok(!ids.includes('day'), 'a phase holding only set-aside things is not a step');
+});
+
+test('bagLoads: what you leave behind is not weighed into the bag', () => {
+  const entries = [
+    newItem({ name: 'A', container: 'Duffel bag', weight: 1000 }),
+    newItem({ name: 'B', container: 'Duffel bag', weight: 500, skipped: true }),
+  ];
+  const duffel = bagLoads(entries).find((b) => b.container === 'Duffel bag');
+  assert.equal(duffel.grams, 1000);
+  assert.equal(duffel.items, 1);
 });
 
 test('totalListRows: flat rows carry phase, container, item', () => {

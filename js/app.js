@@ -11,7 +11,7 @@ import {
   DEFAULT_ITEM_CONDITIONS, CONDITION_TONES, coerceCondition, newCondition, setItemConditions,
   itemCondition, conditionTone, conditionReplaces, careSections, MAINTENANCE_UPCOMING_DAYS,
   buildTotalEntries, regenerateEntries, entriesByPhase, groupByContainer, groupByCategory, groupByPacker, groupBy, groupItemsBySection, newSection,
-  progress, packSteps, totalListRows, applyReview, pruneSuggestions,
+  progress, packSteps, totalListRows, applyReview, pruneSuggestions, packable,
   effectiveQty, qtyNights, LAUNDRY_CAP_NIGHTS, bagLoads, containerLimits, packingFlags, daysUntil, countdownLabel, tripNudge, tripsAwaitingReview, tripEndDate, REVIEW_WINDOW_DAYS, expiringOnTrip, nightsBetween, endFromNights,
   buildTripBundle, encodeTripLink, fromBase64Url,
   encodeGrabShare, decodeGrabShare,
@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v183';
+const APP_VERSION = 'v184';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4266,7 +4266,7 @@ function renderTotalBody(body, ev) {
         ${groupIcon(g.label) ? `<span class="grp-ic" aria-hidden="true">${groupIcon(g.label)}</span>` : ''}
         <span class="ph">${esc(g.label)}</span>
         ${g.hint ? `<span class="ph-hint">${esc(g.hint)}</span>` : ''}
-        <span class="group-count">${done}/${g.entries.length}</span>
+        ${groupCountHtml(g.entries)}
       </div>
       <div class="group-body"></div>
     </div>`);
@@ -4327,6 +4327,29 @@ function packFeedback(rowEl) {
   setTimeout(() => rowEl.classList.remove('just-packed'), 360);
 }
 // Update the readiness ring in place after a tick (no full re-render). Returns the
+// A group's count: what is left to pack, and — separately — what you have put
+// aside. Set-aside things never join the tally, or the tally could not be
+// finished; they are named beside it so they are not forgotten either.
+function groupCountHtml(entries) {
+  const list = packable(entries);
+  const done = list.filter((e) => e.checked).length;
+  const aside = entries.length - list.length;
+  return `<span class="group-count" data-testid="group-count">${done}/${list.length}${
+    aside ? `<span class="group-aside"> · ${aside} set aside</span>` : ''}</span>`;
+}
+
+// After a ⊘ the counts beside every group heading are stale — rewrite them where
+// they stand, rather than redrawing the list under his thumb.
+function updateGroupCounts(ev) {
+  document.querySelectorAll('.total .group').forEach((sec) => {
+    const rows = [...sec.querySelectorAll('.entry')];
+    const ids = new Set(rows.map((r) => r.dataset.entryId).filter(Boolean));
+    const entries = (ev.entries || []).filter((e) => ids.has(e.id));
+    const cnt = sec.querySelector('.group-count');
+    if (cnt && entries.length) cnt.outerHTML = groupCountHtml(entries);
+  });
+}
+
 // fresh progress, and briefly celebrates the moment everything is packed.
 function updateReadinessProgress(ev, wasComplete) {
   const p = progress(ev.entries);
@@ -4386,16 +4409,41 @@ function entryRow(ev, entry, body, showWeight = false) {
   // In "Heaviest first" view, show each item's weight (— when none recorded).
   const g = showWeight ? entryGrams(entry, qn) : 0;
   const weightPill = showWeight ? `<span class="e-weight${g > 0 ? '' : ' none'}">${g > 0 ? esc(formatGrams(g)) : '—'}</span>` : '';
-  const row = h(`<div class="entry${entry.checked ? ' done' : ''}${isRem ? ' reminder' : ''}">
+  const row = h(`<div class="entry${entry.checked ? ' done' : ''}${isRem ? ' reminder' : ''}${entry.skipped ? ' skipped' : ''}" data-entry-id="${esc(entry.id)}">
     <label class="ck"><input type="checkbox"${entry.checked ? ' checked' : ''}><span class="box"></span></label>
     <button class="entry-main" type="button">
       <span class="e-name">${isRem ? '' : `<span class="e-cat" style="background:${categoryColor(entry.category)}" title="${esc(entry.category || '')}"></span>`}${esc(entry.name)}${qtyLabel} ${badges}</span>
-      <span class="e-sub">${subBits.join(' · ')}</span>
+      <span class="e-sub">${entry.skipped ? '<span class="skip-note">not this time</span> · ' : ''}${subBits.join(' · ')}</span>
       ${subItems}
     </button>
     ${weightPill}
+    <button class="iconbtn sm skip-btn" type="button" data-skip data-testid="entry-skip"
+      aria-label="${entry.skipped ? `Take ${esc(entry.name || 'it')} after all` : `Leave ${esc(entry.name || 'it')} behind this time`}"
+      aria-pressed="${entry.skipped ? 'true' : 'false'}">${entry.skipped ? IC.refresh : IC.ban}</button>
     <button class="iconbtn sm" type="button" data-edit aria-label="Edit">${IC.edit}</button>
   </div>`);
+
+  if (entry.skipped) row.classList.add('skipped');
+  // One tap, no question asked: it is as easy to undo as to do, and the row says
+  // plainly what it now is. (His call, 2026-09-20.)
+  row.querySelector('[data-skip]').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const wasComplete = (() => { const p = progress(ev.entries); return p.total > 0 && p.done >= p.total; })();
+    entry.skipped = !entry.skipped;
+    row.classList.toggle('skipped', !!entry.skipped);
+    const btn = row.querySelector('[data-skip]');
+    btn.innerHTML = entry.skipped ? IC.refresh : IC.ban;
+    btn.setAttribute('aria-pressed', entry.skipped ? 'true' : 'false');
+    btn.setAttribute('aria-label', entry.skipped
+      ? `Take ${entry.name || 'it'} after all` : `Leave ${entry.name || 'it'} behind this time`);
+    const sub = row.querySelector('.e-sub');
+    const note = sub.querySelector('.skip-note');
+    if (entry.skipped && !note) sub.insertAdjacentHTML('afterbegin', '<span class="skip-note">not this time</span> · ');
+    if (!entry.skipped && note) { if (note.nextSibling) note.nextSibling.remove(); note.remove(); }
+    await saveGuard(db.saveEvent(ev));
+    updateReadinessProgress(ev, wasComplete);
+    updateGroupCounts(ev);
+  });
 
   row.querySelector('input').addEventListener('change', async (e) => {
     const wasComplete = (() => { const p = progress(ev.entries); return p.total > 0 && p.done >= p.total; })();
@@ -7578,6 +7626,11 @@ function howtoCard() {
         <p><b>Which day it counts from (v165).</b> Before a trip, the countdown counts down to the day you leave. Once you are away, the trip card says <b>Away now</b> and the trip's own tile says which day of the trip it is. After you are home, both count from the day you <em>got back</em> — the same number Home uses when it asks how the trip went.</p>
         <p>Home keeps <b>one</b> pack-now slot, and it belongs to a trip you still have to pack for. Before v161 a trip that had already <em>happened</em> could take it: a finished trip still holding a few unticked items counted as “sooner” than any trip in the future, so it sat at the top for good reading <b>“Norway 40 days ago — 12 items to pack now”</b>. Finished trips now have their own card — the review one — and leave that slot alone.</p>
 
+        <h3>Leaving something behind — “not this time”</h3>
+        <p>Some trips you look at a thing on the list and decide <b>not this time</b> — without wanting it gone from the list, because next trip you probably will take it. Every row on a trip has a <b>⊘</b> beside its pen. One tap and the thing goes quiet: greyed, struck through, and marked <b>not this time</b>. One tap on the <b>↻</b> takes it along after all. Nothing is deleted, and the template is untouched — the next trip starts with everything back.</p>
+        <p><b>It leaves the counting.</b> A heading that read <b>2/41</b> reads <b>2/38 · 3 set aside</b>: what is left to pack, and — separately, so it is not forgotten — what you have put down. That matters, because if the things you deliberately left behind stayed in the tally, a trip could never reach 100% and the ring would report a finished job as unfinished. <b>Packing Mode</b> walks only what you are packing, and a phase with nothing left to pack drops out of the walk. Weights follow the same rule: what stays at home is not weighed into the bag.</p>
+        <p>This is the same gesture the <b>grab lists</b> have always had — tick what is in hand, ⊘ what you are leaving — so it is one idea in two places rather than two ideas.</p>
+
         <h3>Packing Mode</h3>
  <p>A focused, full-screen flow that walks you through one phase at a time with big tap-to-pack rows, live counters, and an “All packed” finish. It opens at the first phase that still has unpacked items and shares tick state with the Packing List. Within a phase, things are gathered <b>by bag</b>, under a heading naming that bag — so the rows beneath it don't repeat it, and their small grey line is left for what the heading hasn't already told you: whose it is, the cupboard to fetch it from, and any note.</p>
  <p><b>Fetching, not just stowing — <b>Group by place</b>.</b> Packing is really two jobs: walking round the house <b>collecting</b> things, and standing at a bag <b>putting them in</b>. Grouping by bag serves the second. Tap <b>Group by place</b> — beside <b>Group by packer</b> — and the same phase re-gathers by <b>where each thing lives</b> (the item's <b>Where it's stored</b>), so your headings become <b>Bathroom cabinet</b>, <b>Bedroom wardrobe</b>, <b>Basement / cellar</b>. Everything that lives in one place is together whatever bag it's headed for, so you visit each cupboard <b>once</b>. The rows then name <b>the bag</b> instead of the place, since the heading has just given you the place — the same “never repeat what the screen already said” rule, pointed the other way. <b>A tick still means packed</b>: this only rearranges the rows, it doesn't add a separate “fetched” step. It's offered only when the trip's things actually have places recorded, it's <b>remembered on this device</b>, and it combines with <b>Group by packer</b> so each cupboard can still split into your things and hers.</p>
@@ -7670,6 +7723,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v184', '2026-09-20 · 18:25 UTC', false, '“Not this time” — leave something behind without taking it off the list',
+      '<b>Your words, packing for a real trip: “there are things that I don’t want to bring this time, but I still want them to be on the list.”</b><br><br>Every row on a trip now has a <b>⊘</b> next to its pen. One tap and the thing goes quiet — greyed, <b>struck through with a heavy line</b>, and marked <b>not this time</b>. One tap on the <b>↻</b> takes it along after all. Nothing is deleted and the template is untouched, so the next trip starts with everything back.<br><br><b>It leaves the counting, which is the part that matters.</b> A heading that read <b>2/41</b> now reads <b>2/38 · 3 set aside</b>: what is left to pack, and separately what you have put down, so it is not forgotten. Had the things you deliberately left behind stayed in the tally, a trip could never reach 100% and the ring would have reported a finished job as unfinished. <b>Packing Mode</b> walks only what you are packing — a phase with nothing left in it drops out of the walk — and what stays at home is not weighed into the bag.<br><br>This is the same gesture your <b>grab lists</b> have always had: tick what is in hand, ⊘ what you are leaving. One idea in two places rather than two ideas.<br><br><b>Six new tests came with it</b> — five on the counting, one on the whole gesture end to end — and each was proved by breaking the thing it watches: leaving the set-aside things in the tally, not writing the decision down, and letting Packing Mode walk them anyway.',
+      'You can say “not this time” without deleting anything — and the trip can still be finished.'),
     v('v183', '2026-09-20 · 17:52 UTC', false, 'The line above the trip form moves inside it',
       '<b>Your eye, and you were right.</b> The sentence under the six workout buttons sat <em>outside</em> the frame it belonged to, so it read as a caption for those buttons rather than as the instruction for the form below it.<br><br>It is now the first line <b>inside</b> the frame, and it says what you actually do: <b>“Name your trip, add the dates, then press Create Event.”</b><br><br>The sentence it replaces — that the base and transport kit come in by themselves — has not been lost. It was already written where it applies, on <b>Activities to pack for</b>: “Your common base and transport kit are already in — tick only the extra activities you’ll do.” The line above the form was repeating it.<br><br>One small gain besides: with the line inside the card, the form begins about 40 pixels higher, which brings <b>Activities to pack for</b> onto the first screen on the phone.',
       'The instruction sits with the thing it instructs, and says the two things you actually do.'),

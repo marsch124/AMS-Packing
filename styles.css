@@ -7078,3 +7078,39 @@ html.compact .layer-h .layer-sub { display: none; }
   line-height: 1.4;
 }
 .builder-lede b { color: var(--ink); }
+
+/* ============================================================
+   (v184) "Not this time" — something left behind for THIS trip.
+   The grab lists have had this gesture for a while: tick on the left for what
+   is in hand, ⊘ on the right for what you are leaving. A trip now works the
+   same way. It stays on the list, quiet and struck through, and one tap brings
+   it back — so nothing is ever deleted to get it out of the way.
+   ============================================================ */
+.skip-btn { opacity: .5; }
+.skip-btn:hover, .skip-btn:focus-visible { opacity: 1; }
+.entry.skipped .skip-btn { opacity: 1; color: var(--warn-txt, var(--warn)); }
+
+/* Quiet, but still legible — this is a decision you can see, not a disabled row. */
+.entry.skipped .entry-main,
+.entry.skipped .ck,
+.entry.skipped .e-weight { opacity: .45; }
+
+/* A thick line through it (his call): a thin one reads as a rendering artefact
+   at arm's length, a heavy one reads as a decision. */
+.entry.skipped .e-name {
+  text-decoration: line-through;
+  text-decoration-thickness: 3px;
+  text-decoration-color: color-mix(in srgb, var(--warn) 75%, transparent);
+}
+
+.skip-note {
+  color: var(--warn-txt, var(--warn));
+  font-weight: 700;
+}
+
+/* The count beside a group heading: "2/38 · 3 set aside". */
+.group-aside {
+  color: var(--warn-txt, var(--warn));
+  font-weight: 600;
+}
+html.compact .group-aside { font-size: .92em; }

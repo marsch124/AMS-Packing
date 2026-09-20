@@ -1754,11 +1754,24 @@ export function groupBy(mode, entries) {
 
 // --- Progress / stats ---
 
+// Something SET ASIDE for this trip: still on the list, still visible, but not
+// being packed this time. It is a decision, not an omission — so it leaves every
+// count of "what is left", or a trip could never reach 100% and the ring would
+// be lying. The flag lives on the trip's entry, never on the template: the next
+// trip starts with everything back.
+export const isSetAside = (e) => Boolean(e && e.skipped);
+
+// The entries actually being packed.
+export function packable(entries) {
+  return asArray(entries).filter((e) => !isSetAside(e));
+}
+
 export function progress(entries) {
-  const list = asArray(entries);
+  const list = packable(entries);
   const total = list.length;
   const done = list.filter((e) => e.checked).length;
-  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+  const aside = asArray(entries).length - total;
+  return { done, total, aside, pct: total ? Math.round((done / total) * 100) : 0 };
 }
 
 // Post-trip review learning. Each reviewed entry carries a boolean `used`; fold that
@@ -1878,7 +1891,7 @@ export function containerLimits(lists = []) {
 // app passes containerLimits(lists) so each real bag's own limit is honoured.
 export function bagLoads(entries, nights = 0, limits = CONTAINER_LIMITS_KG) {
   const map = new Map();
-  for (const e of asArray(entries)) {
+  for (const e of packable(entries)) {
     if (e.itemType === 'reminder') continue;
     const c = e.container || 'Other';
     if (!map.has(c)) map.set(c, { container: c, grams: 0, items: 0 });
@@ -2096,8 +2109,10 @@ export function tripsAwaitingReview(events, todayISO, windowDays = REVIEW_WINDOW
 
 // Packing Mode steps: one per non-empty timeline phase, with packed/remaining counts.
 // The UI walks these one at a time.
+// Packing Mode walks what you are packing — anything set aside is not part of
+// the walk, and a phase left with nothing to pack drops out of it entirely.
 export function packSteps(entries) {
-  return entriesByPhase(entries).map((g) => {
+  return entriesByPhase(packable(entries)).map((g) => {
     const total = g.entries.length;
     const done = g.entries.filter((e) => e.checked).length;
     return { phase: g.phase, entries: g.entries, total, done, remaining: total - done };
