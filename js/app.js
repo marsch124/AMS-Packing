@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v184';
+const APP_VERSION = 'v185';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -461,14 +461,69 @@ function currentBackupState(events, lists, actions) {
   });
 }
 
-// Save a dated backup FILE, in one tap, from wherever the user is. This is the
-// whole point of the reminder: Safari can't be handed a folder to write into, but
-// it can put a file straight in Downloads with no dialog, which is just as good a
-// safety net as long as it actually happens. Returns the filename, or '' on failure.
+// A phone or a tablet — where the share sheet, and its "Save to Files", lives.
+// canShare() alone cannot tell: a Mac web app answers yes to it as well, but the
+// Mac's share menu has no "choose a folder". iPadOS calls itself a Mac, so a
+// touch screen is the tell. (Same test as AMS Main Hub's.)
+function isHandheld() {
+  if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) return true;
+  return /Mac/i.test(navigator.platform || '') && (navigator.maxTouchPoints || 0) > 1;
+}
+
+// The backup is built BEFORE the tap on a phone. Safari only lets the share sheet
+// open straight after a tap, and building two megabytes of backup first can use up
+// that moment — the sheet then refuses to open at all. So the screens that offer
+// the button prepare the file as they draw, and the tap only has to hand it over.
+// (AMS Instructions does the same on his phone.)
+let preparedBackup = null;               // { json, at }
+const PREPARED_BACKUP_MAX_AGE = 2 * 60 * 1000;
+async function prepareBackup() {
+  if (!isHandheld()) return;
+  try { preparedBackup = { json: await db.exportJSON({ prefs: collectPrefs() }), at: Date.now() }; }
+  catch { preparedBackup = null; }
+}
+
+// Save a dated backup FILE, in one tap. Returns the filename, or '' when nothing
+// was saved.
+//
+// 🚨 v185. On the iPhone this used to be a plain download link — and a download
+// link does NOTHING inside an app opened from the Home Screen. The function then
+// recorded "backed up" regardless and silenced the backup reminder, over a file
+// that never existed. It now opens the share sheet, where "Save to Files" lets
+// you choose the folder, and it records a backup only once the sheet reports the
+// file was actually saved. Cancelling saves nothing and records nothing.
+//
+// On the Mac a web page cannot open a Save window — Safari puts downloads where
+// its own settings say (Downloads, unless "Ask for each download" is chosen).
 async function saveBackupFile({ quiet = false } = {}) {
   try {
-    const json = await db.exportJSON({ prefs: collectPrefs() });
     const filename = `ams-packing-list-backup-${todayISO()}.json`;
+    if (isHandheld() && typeof File === 'function' && navigator.canShare && navigator.share) {
+      const fresh = preparedBackup && (Date.now() - preparedBackup.at) < PREPARED_BACKUP_MAX_AGE;
+      const json = fresh ? preparedBackup.json : await db.exportJSON({ prefs: collectPrefs() });
+      const file = new File([json], filename, { type: 'application/json' });
+      if (navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: 'AMS Packing backup' });
+        } catch (err) {
+          const why = err && err.name;
+          // The tap's moment was used up building the file: keep it, and the next
+          // tap opens the sheet at once.
+          if (why === 'NotAllowedError') {
+            preparedBackup = { json, at: Date.now() };
+            if (!quiet) showToast('Nearly — tap “Save backup” once more to choose where it goes.', 6000);
+          } else if (!quiet) {
+            showToast(why === 'AbortError' ? 'Backup cancelled — nothing saved.' : 'Could not save the backup — nothing saved.', 5000);
+          }
+          return '';
+        }
+        markBackedUp();  // only now: the share sheet has confirmed the file was saved
+        preparedBackup = null;
+        if (!quiet) showToast(`Backup saved — ${filename}`, 5000);
+        return filename;
+      }
+    }
+    const json = await db.exportJSON({ prefs: collectPrefs() });
     downloadBlob(new Blob([json], { type: 'application/json' }), filename);
     markBackedUp();  // note when we last backed up, to keep the reminder honest
     if (!quiet) showToast(`Backup saved — look in your Downloads folder for ${filename}`, 5000);
@@ -2716,6 +2771,7 @@ async function renderHome() {
         <button class="nudge-x" type="button" aria-label="${esc(laterLabel)}" title="${esc(laterLabel)}">${ic('close','sm')}</button>
       </span>
     </div>`);
+    prepareBackup();
     nudge.querySelector('.nudge-save').addEventListener('click', async (e) => {
       const btn = e.currentTarget;
       btn.disabled = true;
@@ -7697,6 +7753,8 @@ function howtoCard() {
         <p>It runs in the order you actually need it. <b>Your packing setup</b> comes first — <b>Kits</b>, <b>Packers</b>, <b>Owners</b>, <b>When</b>, <b>Storage places</b>, <b>Item conditions</b>, <b>Trip presets</b> and <b>Shared trips &amp; grab lists</b> — because that is what you come here to change. Then <b>Appearance</b>. Then <b>Your data</b>: <b>Sync your devices</b>, <b>Backup &amp; restore</b> and the <b>Automatic backups</b> — as important as anything in the app, but things you set up once and rarely touch, which is why they sit low rather than first. Finally <b>Help &amp; about</b>, holding this guide, the version history, the diagnostics log and the About note. The <b>database overview</b> stays pinned at the very top.</p>
 
         <h3>Your data &amp; privacy</h3>
+        <p><b>Choosing where a backup goes (v185).</b> On the <b>iPhone</b>, <b>Save backup file</b> opens the share sheet: choose <b>Save to Files</b> and pick the folder — iCloud Drive, On My iPhone, anywhere. The app only records a backup once the share sheet says the file was actually saved; cancel it and nothing is saved <em>and nothing is recorded</em>, so the backup reminder stays honest. On the <b>Mac</b> a web page cannot open a Save window — Safari puts the file where its own settings say, normally <b>Downloads</b>. (Safari → Settings → General → <b>File download location → Ask for each download</b> makes Safari ask every time.)</p>
+        <p><b>A restore from a file puts back everything the file holds (v185).</b> Including your own <b>When</b> timeline — renamed and added phases — and the things that sit on <b>no list</b>. Before v185 a file restore dropped both: they were written into the file, then thrown away on the way back in.</p>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
  <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Save backup file</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
         <p><b>The backup reminder, and why it nags.</b> Other browsers let an app write a backup file into a folder on your Mac by itself, silently, for ever. <b>Safari does not</b> — and Safari is where your packing list lives. So the app does the next best thing: instead of saving quietly behind your back, it <b>asks, and gets more insistent until you do it</b>. On the Home screen you’ll see an amber <b>Back up your data</b> card once you have unsaved changes and your last file is more than <b>${BACKUP_DUE_DAYS} days</b> old; past <b>${BACKUP_URGENT_DAYS} days</b> it turns <b>red</b> and says so plainly. Its <b>Save backup now</b> button does the whole job on the spot — no trip to Settings — and drops a dated file straight into your <b>Downloads</b> folder. The <b>×</b> hides it for a week while it’s amber, but only until <b>tomorrow</b> once it’s red, so a badly out-of-date backup can’t be waved away indefinitely.</p>
@@ -7723,6 +7781,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v185', '2026-09-21 · 06:25 UTC', false, 'Backups: choose where they go on the iPhone — and a restore now puts back everything',
+      '<b>You asked to choose where a backup is saved, and asked me to check this morning’s backup. Checking it properly — by putting it back into a throwaway copy of the app, not just counting what was in it — found two real faults.</b><br><br><b>(1) On the iPhone, “Save backup file” saved nothing.</b> It was a plain download link, and a download link does nothing inside an app opened from the Home Screen — yet the app recorded “backed up” anyway and quietened the backup reminder. It now opens the <b>share sheet</b>: choose <b>Save to Files</b> and pick any folder. A backup is recorded only once the sheet confirms the file was saved; cancelling saves nothing and records nothing.<br><br><b>(2) A restore from a file dropped your own “When” timeline and your loose things.</b> Your backup carries your six phases — including your renamed ones and <b>Prep/load the RV</b> — and the file restore threw them away and put back the factory seven. Things on no list went the same way. Both are now put back, and on your real file the timeline comes back exactly.<br><br>On the <b>Mac</b>, a web page cannot open a Save window, so Safari still decides — normally <b>Downloads</b>. The new app, starting today, gets a proper Save window on both devices.<br><br><b>Two new tests</b>, each proved by putting the old behaviour back: a file restore must return a renamed phase, an added phase and a loose thing; and the iPhone backup must go through the share sheet and record nothing when cancelled.',
+      'Your iPhone backups really happen now, into the folder you choose — and a file restore gives back all of it.'),
     v('v184', '2026-09-20 · 18:25 UTC', false, '“Not this time” — leave something behind without taking it off the list',
       '<b>Your words, packing for a real trip: “there are things that I don’t want to bring this time, but I still want them to be on the list.”</b><br><br>Every row on a trip now has a <b>⊘</b> next to its pen. One tap and the thing goes quiet — greyed, <b>struck through with a heavy line</b>, and marked <b>not this time</b>. One tap on the <b>↻</b> takes it along after all. Nothing is deleted and the template is untouched, so the next trip starts with everything back.<br><br><b>It leaves the counting, which is the part that matters.</b> A heading that read <b>2/41</b> now reads <b>2/38 · 3 set aside</b>: what is left to pack, and separately what you have put down, so it is not forgotten. Had the things you deliberately left behind stayed in the tally, a trip could never reach 100% and the ring would have reported a finished job as unfinished. <b>Packing Mode</b> walks only what you are packing — a phase with nothing left in it drops out of the walk — and what stays at home is not weighed into the bag.<br><br>This is the same gesture your <b>grab lists</b> have always had: tick what is in hand, ⊘ what you are leaving. One idea in two places rather than two ideas.<br><br><b>Six new tests came with it</b> — five on the counting, one on the whole gesture end to end — and each was proved by breaking the thing it watches: leaving the set-aside things in the tally, not writing the decision down, and letting Packing Mode walk them anyway.',
       'You can say “not this time” without deleting anything — and the trip can still be finished.'),
@@ -9033,7 +9094,7 @@ async function renderSettings() {
     <p class="data-status">${backupStatus}</p>
     <p class="muted small">Safari can’t be given a folder to save into automatically, so the app asks instead — the reminder on Home gets more insistent the longer your file is out of date, and saves it in one tap. The file lands in your <b>Downloads</b> folder; keep a copy in iCloud Drive.</p>
     <div class="btnrow">
-      <button class="btn" data-x="export">${ic('save','sm')}<span>Save backup file</span></button>
+      <button class="btn" data-x="export" data-testid="backup-save">${ic('save','sm')}<span>Save backup file</span></button>
       <button class="btn" data-x="import">Import backup</button>
       <button class="btn" data-x="xlsxall">Export all events (Excel)</button>
       <button class="btn ghost" data-x="tidyphotos">Tidy up photos</button>
@@ -9620,6 +9681,7 @@ async function renderSettings() {
   </div>`);
 
   const file = card.querySelector('input[type=file]');
+  prepareBackup();
   card.addEventListener('click', async (e) => {
     const x = e.target.closest('[data-x]')?.dataset.x; if (!x) return;
     if (x === 'export') {

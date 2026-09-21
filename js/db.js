@@ -1298,7 +1298,17 @@ export function inspectBackup(text) {
     counts: backupCounts({ lists, events, actions }),
     exportedAt: typeof data.exportedAt === 'string' ? data.exportedAt : '',
     photos,
-    data: { lists, events, actions, kits, prefs, photos: photoRecs },
+    // 🚨 v185: `phases` and `things` were written into every backup file (v118 and
+    // v178) but never handed on from here — so a restore from a FILE put back the
+    // factory "When" timeline in place of his own, and silently dropped every thing
+    // that sits on no template. Found by restoring his real backup into a scratch
+    // copy of the app rather than counting it: the counts were all right. Passed
+    // through as they came; applyBackup coerces both.
+    data: {
+      lists, events, actions, kits, prefs, photos: photoRecs,
+      phases: Array.isArray(data.phases) ? data.phases : [],
+      things: Array.isArray(data.things) ? data.things : [],
+    },
   };
 }
 
