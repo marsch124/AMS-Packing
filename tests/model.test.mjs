@@ -626,6 +626,66 @@ test('parseTripBundle: rejects non-trip payloads', () => {
   assert.throws(() => parseTripBundle(JSON.stringify({ kind: 'trip' })));
 });
 
+// A synced trip is a synced ROW, and the sync addon writes the signed-in
+// account's address into `owner` and `realmId` on it. Until v186 the bundle was
+// the whole row, so every shared trip — link, QR or file — carried the address.
+function syncStampedTrip() {
+  const ev = sampleTripEvent();
+  ev.owner = 'someone@example.com';
+  ev.realmId = 'someone@example.com';
+  ev.entries[0].owner = 'someone@example.com';
+  ev.entries[0].realmId = 'someone@example.com';
+  ev.entries[1].ownedBy = 'Anna';
+  ev.entries[2].ownedBy = 'someone@example.com';
+  return ev;
+}
+
+test('buildTripBundle: a shared trip never carries the sync address', () => {
+  const ev = syncStampedTrip();
+  const b = buildTripBundle(ev);
+  assert.ok(!JSON.stringify(b).includes('@'), 'no address anywhere in the bundle');
+  assert.equal('owner' in b.event, false);
+  assert.equal('realmId' in b.event, false);
+  assert.equal(b.event.entries[1].ownedBy, 'Anna', 'a real name still travels');
+  const link = encodeTripLink({ ...ev, entries: ev.entries.slice(0, 20) });
+  assert.ok(link, 'a short trip fits in a link');
+  assert.ok(!unpackShare(link.slice('#/t/'.length)).includes('@'), 'nor in the link');
+  // and sharing must not have changed the trip it was made from
+  assert.equal(ev.owner, 'someone@example.com');
+  assert.equal(ev.entries[0].owner, 'someone@example.com');
+});
+
+test('parseTripBundle: an OLD bundle carrying the sender’s address cannot plant it', () => {
+  const ev = sampleTripEvent();
+  // exactly what a pre-v186 app wrote: the whole row, reserved fields and all
+  const old = { app: 'ams-packing-list', kind: 'trip', version: 1, exportedAt: '2026-09-01T00:00:00.000Z',
+    event: { ...ev, owner: 'someone@example.com', realmId: 'someone@example.com',
+      entries: ev.entries.map((e, i) => ({ ...e, owner: 'someone@example.com', realmId: 'someone@example.com', ownedBy: i === 0 ? 'someone@example.com' : 'Anna' })) } };
+  const got = parseTripBundle(JSON.stringify(old));
+  assert.ok(!JSON.stringify(got).includes('@'), 'nothing of the address arrives');
+  assert.equal('owner' in got, false, 'or the receiver’s own sync would treat the trip as someone else’s');
+  assert.equal('realmId' in got, false);
+  assert.ok(got.entries.every((e) => !('owner' in e) && !('realmId' in e)));
+  assert.equal(got.entries[0].ownedBy, '');
+  assert.equal(got.entries[1].ownedBy, 'Anna');
+});
+
+test('buildTripBundle/parseTripBundle: the small things under an item arrive as words', () => {
+  const ev = sampleTripEvent();
+  ev.entries[0].sub = ['Spare laces', 'Insoles'];
+  const b = buildTripBundle(ev);
+  assert.deepEqual(b.event.entries[0].sub, ['Spare laces', 'Insoles']);
+  assert.deepEqual(parseTripBundle(JSON.stringify(b)).entries[0].sub, ['Spare laces', 'Insoles']);
+});
+
+test('parseTripBundle: an OLD bundle whose sub-items were taken apart letter by letter is put back together', () => {
+  const ev = sampleTripEvent();
+  const b = buildTripBundle(ev);
+  // what slimEntry made of ["ab", "Cap"] before v186
+  b.event.entries[0].sub = [{ 0: 'a', 1: 'b' }, { 0: 'C', 1: 'a', 2: 'p' }];
+  assert.deepEqual(parseTripBundle(JSON.stringify(b)).entries[0].sub, ['ab', 'Cap']);
+});
+
 test('base64url: round-trips unicode and stays URL-safe', () => {
   const s = 'Vandersteg järn — åäö & spår/plus+slash';
   const enc = toBase64Url(s);
@@ -3190,6 +3250,62 @@ test('listFromShare: a partial overrides identity, for replacing a template in p
   const fresh = listFromShare(shared, { id: 'keep-me', createdAt: '2020-01-01T00:00:00.000Z' });
   assert.equal(fresh.id, 'keep-me');
   assert.equal(fresh.createdAt, '2020-01-01T00:00:00.000Z');
+});
+
+// --- A share code never carries an e-mail address (v186) -------------------
+// `owner` belongs to the sync addon, which stamps the signed-in account's ADDRESS
+// on every synced row. Until v186 the template share read that field, so a code
+// handed to a stranger carried the sender's sign-in address on every item.
+
+function ownedList(items) {
+  return newList({ name: 'Camping', items });
+}
+
+test('encodeListShare: whose-it-is comes from ownedBy, and the sync address stays home', () => {
+  const tent = { ...newItem({ name: 'Tent', ownedBy: 'Anna' }), owner: 'someone@example.com' };
+  const code = encodeListShare(ownedList([tent]));
+  const text = unpackShare(code);
+  assert.ok(!text.includes('@'), 'no address anywhere in the shared text');
+  assert.ok(!text.includes('example.com'));
+  assert.equal(decodeListShare(code).items[0].ownedBy, 'Anna');
+});
+
+test('encodeListShare: an item with only a sync-stamped address shares with no owner at all', () => {
+  const stove = { ...newItem({ name: 'Stove' }), owner: 'someone@example.com' };
+  const code = encodeListShare(ownedList([stove]));
+  const text = unpackShare(code);
+  assert.ok(!text.includes('@'), 'no address anywhere in the shared text');
+  assert.equal('u' in JSON.parse(text).x[0], false, 'the owner key is not written at all');
+  assert.equal(decodeListShare(code).items[0].ownedBy, '');
+});
+
+test('encodeListShare: an address that reached ownedBy is refused too — whole, cut short, or inside other words', () => {
+  const long = `${'a'.repeat(38)}@example.com`;   // cut at 40 characters it no longer LOOKS like an address
+  for (const bad of ['someone@example.com', '  someone@example.com ', long, 'Anna <someone@example.com>']) {
+    const it = newItem({ name: 'Lamp', ownedBy: bad });
+    const text = unpackShare(encodeListShare(ownedList([it])));
+    assert.ok(!text.includes('@'), `refused: ${bad}`);
+    assert.ok(!text.includes('aaaaaaaa'), `nothing of it left behind: ${bad}`);
+  }
+});
+
+test('decodeListShare: an OLD code carrying an address in `u` cannot plant it', () => {
+  // exactly what a pre-v186 app wrote
+  const old = packShare(JSON.stringify({ k: 'tpl', v: 1, n: 'Camping', x: [{ n: 'Tent', u: 'someone@example.com' }, { n: 'Mat', u: 'Anna' }] }));
+  const shared = decodeListShare(old);
+  assert.equal(shared.items[0].ownedBy, '');
+  assert.equal(shared.items[1].ownedBy, 'Anna');
+  assert.ok(shared.items.every((it) => !('owner' in it)), 'the reserved field is never written');
+  const rebuilt = listFromShare(shared);
+  assert.ok(!JSON.stringify(rebuilt).includes('@'), 'nothing of the address survives into the saved template');
+  assert.ok(rebuilt.items.every((it) => !('owner' in it) && !('realmId' in it)));
+});
+
+test('encodeListShare → listFromShare: a real owner name survives the round trip', () => {
+  const original = ownedList([newItem({ name: 'Tent', ownedBy: 'Anna' }), newItem({ name: 'Stove' })]);
+  const rebuilt = listFromShare(decodeListShare(encodeListShare(original)));
+  assert.equal(rebuilt.items[0].ownedBy, 'Anna');
+  assert.equal(rebuilt.items[1].ownedBy, '');
 });
 
 // --- Squeezing a share code (LZW) ------------------------------------------

@@ -458,6 +458,25 @@ export const MAX_PHOTOS = 5;
 // the old values across.
 export const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v ?? '').trim());
 
+// "Whose it is", fit to LEAVE this device in a share code: a name somebody typed,
+// never an address. Wider than looksLikeEmail() on purpose — that one asks "is this
+// whole value an address?", which is the right question for display; at the door
+// the question is "is there an address anywhere in here?". And it is asked BEFORE
+// the value is cut to length: an address cut off at 40 characters no longer looks
+// like one, and would walk straight out.
+const ADDRESS_INSIDE = /[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+/;
+export function shareSafeOwner(v, max = 40) {
+  const s = String(v ?? '').replace(/\s+/g, ' ').trim();
+  return (!s || ADDRESS_INSIDE.test(s)) ? '' : s.slice(0, max);
+}
+
+// The two properties the sync addon keeps for itself on every synced row — both
+// hold the signed-in account's ADDRESS. Nothing that leaves the device (a shared
+// trip, a shared template) may carry them, and nothing that ARRIVES may bring
+// them in: a row claiming to belong to the sender's account is one the receiver's
+// own sync would refuse to carry to their other device.
+export const SYNC_RESERVED_KEYS = Object.freeze(['owner', 'realmId']);
+
 // Turn a sign-in address into the name a person would actually use:
 // "martin.schabbauer@icloud.com" → "Martin". Takes the part before the @, then
 // its first word (splitting on . _ + -), and capitalises it. Falls back to the
@@ -2128,8 +2147,27 @@ export const TRIP_KIND = 'trip';
 // Entry fields the receiver never needs: sender-only bookkeeping (ids, source
 // links, usage stats, packed/used state). coerceItem restores every other
 // default on import, so dropping defaulted fields is lossless.
-const TRIP_DROP_KEYS = new Set(['id', 'sourceListId', 'sourceItemId', 'stats', 'checked', 'used', 'custom']);
+//
+// 🚨 v186: and the two properties the sync addon keeps for itself. A synced trip is
+// a synced ROW, and the addon writes the signed-in account's e-mail address into
+// `owner` and `realmId` on it — so until v186 every shared trip (link, QR or file)
+// carried the sender's address, twice.
+const TRIP_DROP_KEYS = new Set(['id', 'sourceListId', 'sourceItemId', 'stats', 'checked', 'used', 'custom', ...SYNC_RESERVED_KEYS]);
 const isDefaulty = (v) => v === '' || v === false || v === 0 || v == null || (Array.isArray(v) && v.length === 0);
+
+// A sub-item is a NAME — a string. Until v186 slimEntry ran each one through
+// itself, and a string taken apart key by key is {"0":"a","1":"b"}, which the
+// receiving trip then showed as "[object Object]". This reads both shapes: a
+// string as it stands, and one of those objects put back together, so a link
+// sent before the fix still opens properly.
+function subName(s) {
+  if (typeof s === 'string') return s;
+  if (!s || typeof s !== 'object') return '';
+  if (typeof s.name === 'string') return s.name;
+  let out = '';
+  for (let i = 0; typeof s[i] === 'string'; i++) out += s[i];
+  return out;
+}
 
 // Shrink an entry to just its non-default, receiver-relevant fields. This keeps
 // shared links small enough to travel as a URL (a full entry is ~4x larger).
@@ -2137,7 +2175,8 @@ function slimEntry(e) {
   const o = {};
   for (const [k, v] of Object.entries(e)) {
     if (TRIP_DROP_KEYS.has(k)) continue;
-    if (k === 'sub') { if (Array.isArray(v) && v.length) o.sub = v.map(slimEntry); continue; }
+    if (k === 'sub') { const names = asArray(v).map(subName).filter(Boolean); if (names.length) o.sub = names; continue; }
+    if (k === 'ownedBy') { const who = shareSafeOwner(v); if (who) o.ownedBy = who; continue; }   // a name, never an address
     if (k === 'itemType' && v === 'item') continue;      // restored by coerceItem
     if (isDefaulty(v)) continue;                          // restored by coerceItem
     o[k] = v;
@@ -2148,18 +2187,35 @@ function slimEntry(e) {
 export function buildTripBundle(event, whenISO = nowISO()) {
   if (!event) throw new Error('No trip to share.');
   const slim = { ...event, entries: (event.entries || []).map(slimEntry) };
+  for (const k of SYNC_RESERVED_KEYS) delete slim[k];   // the account's address — see TRIP_DROP_KEYS
   return { app: 'ams-packing-list', kind: TRIP_KIND, version: 1, exportedAt: whenISO, event: slim };
 }
 
-// Give every entry (and nested sub-item) a fresh unique id — slimmed bundles
-// carry none, and the UI keys expand/remove/review on entry.id.
+// Give every entry a fresh unique id — slimmed bundles carry none, and the UI
+// keys expand/remove/review on entry.id. (Sub-items are plain names; they have
+// no id to give.)
 function reidEntries(entries) {
   for (const e of asArray(entries)) {
     e.id = id();
     e.checked = false;
     delete e.used;
-    if (Array.isArray(e.sub) && e.sub.length) reidEntries(e.sub);
   }
+}
+
+// An entry as it may come IN. The bundle is somebody else's text — possibly made
+// by an app from before v186 — so the door is guarded on this side as well: the
+// sync addon's two properties are dropped (they hold the SENDER's address, and a
+// row claiming to be theirs is one the receiver's own sync would never carry
+// across), "whose it is" is kept only when it is a name, and sub-items that an
+// old app took apart are put back together.
+function incomingEntry(e) {
+  if (!e || typeof e !== 'object') return e;
+  const o = { ...e };
+  const who = typeof o.ownedBy === 'string' ? o.ownedBy : o.owner;   // `owner` was the app's own field before v117
+  for (const k of SYNC_RESERVED_KEYS) delete o[k];
+  o.ownedBy = shareSafeOwner(who);
+  if ('sub' in o) o.sub = asArray(o.sub).map(subName).filter(Boolean);
+  return o;
 }
 
 // Parse a trip bundle (from a file or a link) and return a fresh, importable
@@ -2170,7 +2226,9 @@ export function parseTripBundle(data) {
   if (!obj || typeof obj !== 'object' || obj.kind !== TRIP_KIND || !obj.event) {
     throw new Error('This does not look like a shared AMS trip.');
   }
-  const ev = coerceEvent(obj.event);
+  const incoming = { ...obj.event, entries: asArray(obj.event.entries).map(incomingEntry) };
+  for (const k of SYNC_RESERVED_KEYS) delete incoming[k];
+  const ev = coerceEvent(incoming);
   ev.id = id();
   ev.status = 'active';
   ev.reviewedAt = '';
@@ -2451,7 +2509,10 @@ export function encodeListShare(list) {
     put('k', cleanShareText(it.kit, 40));
     put('s', cleanShareText(it.storage, 60));
     put('a', cleanShareText(it.packer, 40));
-    put('u', cleanShareText(it.owner, 40));
+    // 🚨 `ownedBy`, NEVER `owner`. `owner` belongs to the sync addon and holds the
+    // signed-in account's e-mail address; until v186 this line read it, and every
+    // shared template carried the sender's address on every item.
+    put('u', shareSafeOwner(it.ownedBy));
     if (it.itemType === 'reminder') o.t = 1;
     if (Number.isFinite(it.weight) && it.weight > 0) o.g = Math.round(it.weight);
     for (const [key, short] of [['seasons', 'se'], ['contexts', 'cx'], ['transports', 'tr'], ['catering', 'ca'], ['weather', 'we'], ['sub', 'sb']]) {
@@ -2500,7 +2561,7 @@ export function decodeListShare(text) {
       kit: cleanShareText(o.k, 40),
       storage: cleanShareText(o.s, 60),
       packer: cleanShareText(o.a, 40),
-      owner: cleanShareText(o.u, 40),
+      ownedBy: shareSafeOwner(o.u),   // a code made before v186 may hold an address here — it stops at the door
       itemType: o.t === 1 ? 'reminder' : 'item',
       weight: Number.isFinite(o.g) && o.g > 0 ? Math.round(o.g) : 0,
       seasons: cleanShareList(o.se), contexts: cleanShareList(o.cx),
