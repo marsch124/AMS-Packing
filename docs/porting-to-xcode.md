@@ -23,7 +23,9 @@ So:
    AMS Workout Sync iOS was built exactly this way and came out at **0
    differences on his real plans**. It is the only way to know a port is
    faithful rather than merely plausible.
-3. **Then the data import** (§2), then the screens.
+3. **A store that syncs between Mac and iPhone** (§5) — before the import, so the
+   import writes straight into something both devices share.
+4. **Then the data import** (§2), then the screens.
 
 Doing it the other way round — screens first — means discovering months later
 that a trip packs slightly differently, with no way to tell which version is
@@ -119,12 +121,36 @@ a while is cheap; discovering a gap with no way back is not.
 
 ---
 
-## 5. What to leave behind on day one
+## 5. Sync between the Mac and the iPhone — a day-one requirement
 
-- **Dexie Cloud sync.** It cost six releases to get right and the iPhone is the
-  only place grab lists are ever edited. A native app that simply holds the data
-  on the phone, with a backup file, is closer to how the app is actually used.
-  Add sync later, deliberately, or not at all.
+🚨 **Corrected 2026-09-21.** The first version of this document said to leave
+sync behind on day one. That was wrong. Martin, before any code was written:
+*"This is a Mac app and iOS app that syncs. That sync function is very
+important."* He packs on both, and the app is only useful if both show the same
+trip.
+
+- **The natural route for a native iPhone + Mac app is Apple's own iCloud sync
+  (CloudKit)**: both devices are signed in to his Apple ID already, there is no
+  separate account or server to run, and it costs nothing. To be confirmed in
+  the first session — but whatever is chosen, **the store that holds his data
+  must sync from the first commit that stores anything**. Retrofitting sync onto
+  a store designed without it is how the web app's six sync releases happened.
+- **The two apps will not sync with each other.** The web app syncs through
+  Dexie Cloud; the native app will not be in that loop. So the switch has to be
+  a clean cut: take a verified backup from the web app, import it into the
+  native app once, and from then on the native app is where changes are made.
+  The web app stays live as a fallback, but its data freezes at the switch.
+  Editing both in the meantime would split the catalogue in two.
+- **Which device imports matters.** Import on one device only (the Mac is
+  easiest — the backup file is already there) and let iCloud carry it to the
+  other. Importing on both would duplicate everything.
+- The web app's hard-won sync lessons still apply: never name a field `owner`
+  (Dexie stamped the e-mail into it — see the sync notes); a device must be
+  able to tell "I have nothing yet" from "everything was deleted"; and a
+  restore must never quietly overwrite a newer copy on the other device.
+
+## 5b. What can wait until the core works
+
 - **The weather forecast** — a network feature, easy to add once the rest works.
 - **Excel export** — useful, but nothing depends on it.
 
