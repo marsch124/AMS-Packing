@@ -215,8 +215,14 @@ test('a restore from a file keeps the packer, "not in use", the kit and the revi
   await page.evaluate(() => { window.location.hash = '#/things'; });
   await expect(page.locator('#app[data-route="#/things"]')).toBeAttached();
   await page.getByTestId('thing-search').fill(n.lamp);
-  await expect(page.getByTestId('thing-row')).toHaveCount(1);
-  await page.getByTestId('thing-row').click();
+  // 🪤 Find the row by ITS name, never as "the one row left after the search": on
+  // the CI runner the screen was redrawn under the test right after the search
+  // (a render still in flight from the import), the filtered row was detached and
+  // a bare `thing-row` click then met all 428 rows. Filtered by text it resolves
+  // to exactly one element however many rows are on screen.
+  const lampRow = page.getByTestId('thing-row').filter({ hasText: n.lamp });
+  await expect(lampRow).toHaveCount(1);
+  await lampRow.click();
   await expect(page).toHaveURL(/#\/thing\//);
   await expect(page.getByTestId('item-packer'), 'Packed by came back').toHaveValue('Anna');
   await expect(page.getByTestId('item-retired'), 'Not in use came back').toBeChecked();
