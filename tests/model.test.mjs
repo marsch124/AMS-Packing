@@ -2643,6 +2643,91 @@ test('buildCatalog: the owner survives being rebuilt from a backup', () => {
   assert.equal(jacket.ownedBy, 'Anna');
 });
 
+// ---- v188: a rebuild carries EVERY field a thing owns ------------------------
+// A Replace-restore (file, automatic copy) runs the lists in the backup through
+// buildCatalog(). It used to carry a hand-written subset of the item's fields, and
+// the subset had fallen behind: packer, consumable, retired (+ reason), keep and
+// the trip-review stats were all written into the file and all reset on the way
+// back in; the membership lost its kit; and every thing was given a fresh id,
+// which cut the kits, to-dos and old trips pointing at it. Invented names only.
+
+// One non-default value per intrinsic field. A field added to INTRINSIC_FIELDS
+// without a sample here FAILS the first test on purpose: decide how it merges.
+const FULL_THING = {
+  name: 'Headlamp', swedish: 'Pannlampa', category: 'Sport gear',
+  charging: true, chargeType: 'usb-c', liquid: true, restricted: true, perNight: true,
+  consumable: true, shortList: true, weight: 90, storage: 'Garage shelf', packer: 'Anna',
+  sub: ['Spare strap', 'Diffuser'], photos: ['pid-7'], thumb: 'data:image/jpeg;base64,/9j/4AAQ',
+  maintenance: { notes: 'dry the contacts', link: '', intervalDays: 30, lastDone: '2026-06-01', log: [] },
+  stats: { packed: 4, used: 3, unused: 1, skipped: 2, lastReviewed: '2026-08-01T00:00:00.000Z' },
+  color: 'Black', size: 'One size', manufacturer: 'Lumenco', model: 'Nightfinder 3', ownedBy: 'Bo',
+  acquired: '2025-05-01', price: 49, currency: 'SEK', purchaseLink: 'https://example.com/lamp',
+  expiry: '2028-01-01', condition: 'worn', retired: true, retiredReason: 'sold', keep: true,
+  serial: 'SN-0042', qtyOwned: 2, warranty: '2027-05-01', capacityL: 12, maxKg: 3,
+};
+
+test('buildCatalog: every intrinsic field survives a rebuild (the restore path), and so does the id', () => {
+  for (const f of INTRINSIC_FIELDS) assert.ok(Object.hasOwn(FULL_THING, f), `no sample for "${f}" — decide how a rebuild merges it`);
+  const it = newItem(FULL_THING);
+  const list = newList({ name: 'Camp', items: [it] });
+  const { items, memberships, templates } = buildCatalog([list]);
+  const cat = items.find((i) => i.name === 'Headlamp');
+  for (const f of INTRINSIC_FIELDS) assert.deepEqual(cat[f], it[f], `the catalogue item lost "${f}"`);
+  assert.equal(cat.id, it.id, 'a thing keeps its identity through a rebuild');
+  const back = resolveTemplate(templates[0], items, memberships).items[0];
+  for (const f of INTRINSIC_FIELDS) assert.deepEqual(back[f], it[f], `the resolved item lost "${f}"`);
+});
+
+test('buildCatalog: one thing on two templates keeps its kit per template, its packer, and the richest review history — not a sum', () => {
+  const shared = newItem({ name: 'Power bank', packer: 'Anna', consumable: true, stats: { packed: 4, used: 4, unused: 0, skipped: 0 } });
+  // As a copy-based file could hold it: the second copy is stale — no packer, an
+  // older count — and sits in a kit the first template does not use.
+  const stale = newItem({ id: shared.id, name: 'Power bank', kit: 'Charging kit', stats: { packed: 1, used: 1, unused: 0, skipped: 0 } });
+  const a = newList({ name: 'Camp', items: [shared] });
+  const b = newList({ name: 'Travel', items: [stale] });
+  const { items, memberships, templates } = buildCatalog([a, b]);
+  assert.equal(items.length, 1, 'one thing, two templates');
+  const cat = items[0];
+  assert.equal(cat.id, shared.id);
+  assert.equal(cat.packer, 'Anna');
+  assert.equal(cat.consumable, true);
+  assert.equal(cat.stats.packed, 4, 'the copy with the most history speaks — 4, not 4 + 1');
+  assert.equal(cat.stats.used, 4);
+  const inCamp = resolveTemplate(templates[0], items, memberships).items[0];
+  const inTravel = resolveTemplate(templates[1], items, memberships).items[0];
+  assert.equal(inCamp.kit, '', 'no kit on the Camp template');
+  assert.equal(inTravel.kit, 'Charging kit', 'the kit is a per-template answer, and it survives');
+  assert.equal(memberships.find((m) => m.templateId === b.id).kit, 'Charging kit');
+  assert.equal(inTravel.packer, 'Anna', 'the packer is the thing\'s own, so it is there on both');
+});
+
+test('"Keep" on Refine is written to the catalogue item, so the suggestion stays away', () => {
+  const cat = newItem({ name: 'Tow rope', stats: { packed: 3, used: 0, unused: 3, skipped: 0 } });
+  const list = newList({ name: 'RV', items: [] });
+  const resolved = () => resolveMembership(cat, newMembership({ itemId: cat.id, templateId: list.id }));
+  list.items = [resolved()];
+  assert.equal(pruneSuggestions([list]).length, 1, 'packed three times, never used: a suggestion');
+  // What the Keep button does: flip `keep` on the resolved row and save the list.
+  const row = resolved();
+  row.keep = true;
+  applyIntrinsic(cat, row);
+  assert.equal(cat.keep, true, 'keep reaches the shared item');
+  list.items = [resolved()];
+  assert.equal(pruneSuggestions([list]).length, 0, 'and Refine stops suggesting the drop, even after a reload');
+});
+
+test('buildCatalog: two names claiming one id stay two records, and a copy with no id is given one', () => {
+  const a = newItem({ id: 'same-id', name: 'Gloves' });
+  const b = newItem({ id: 'same-id', name: 'Hat' });
+  const legacy = coerceItem({ name: 'Scarf' });          // a v1 copy: no id at all
+  const { items } = buildCatalog([newList({ name: 'Winter', items: [a, b, legacy] })]);
+  assert.equal(items.length, 3);
+  assert.equal(items[0].id, 'same-id', 'the first keeps it');
+  assert.notEqual(items[1].id, 'same-id', 'the second is given its own');
+  assert.ok(items[2].id, 'no id in the file — one is minted');
+  assert.equal(new Set(items.map((i) => i.id)).size, 3);
+});
+
 
 // ---- The editable, synced "When" timeline (v118) ----------------------------
 

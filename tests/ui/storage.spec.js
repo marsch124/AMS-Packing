@@ -151,3 +151,92 @@ test('the safety copy taken before a restore carries the settings too', async ({
   expect(res.safetyPrefs, 'and it carries the settings, not null').not.toBeNull();
   expect(res.safetyPrefs.grab.items.bike, 'the settings as they were at that moment').toEqual(['Current']);
 });
+
+// --- 14 ------------------------------------------------------------------
+// v188. A Replace-restore rebuilds the catalogue from the lists in the file, and
+// that rebuild used to carry a hand-written subset of a thing's fields: who packs
+// it, "not in use", which kit it is in and everything the trip reviews had taught
+// were all in the file and all dropped on the way back in. Test 11 could not see
+// it — it checked that a thing came back, not what came back with it. This one
+// goes out through the app's own backup writer, back in through the real Import
+// button, and then looks at each field ON SCREEN.
+test('a restore from a file keeps the packer, "not in use", the kit and the review count', async ({ page }) => {
+  test.setTimeout(90_000);
+  await openApp(page);
+  const ts = Date.now();
+  const n = { tpl: `Camp ${ts}`, lamp: `Headlamp ${ts}`, bank: `Power bank ${ts}`, kit: `Charging kit ${ts}` };
+
+  // A template with two things: one with a packer, not in use (sold) and a review
+  // history Refine will show; one packed as part of a kit.
+  const file = await page.evaluate(async (n) => {
+    const db = await import('./js/db.js'); const m = await import('./js/model.js');
+    const tpl = m.newList({ name: n.tpl });
+    tpl.items = [
+      m.newItem({ name: n.lamp, packer: 'Anna', retired: true, retiredReason: 'sold', consumable: true,
+        stats: { packed: 3, used: 0, unused: 3, skipped: 0, lastReviewed: '2026-08-01T00:00:00.000Z' } }),
+      m.newItem({ name: n.bank, kit: n.kit }),
+    ];
+    await db.saveList(tpl);
+    return db.exportJSON({});                                   // what "Save backup file" writes
+  }, n);
+
+  // Lose the template and both things.
+  await page.evaluate(async (n) => {
+    const db = await import('./js/db.js');
+    const tpl = (await db.getLists()).find((l) => l.name === n.tpl);
+    await db.deleteList(tpl.id);
+    for (const r of await db.getItemsWithTemplates()) {
+      if (r.item.name === n.lamp || r.item.name === n.bank) await db.deleteCatalogItem(r.item.id);
+    }
+  }, n);
+  const gone = await page.evaluate(async (n) => {
+    const db = await import('./js/db.js');
+    return (await db.getLists()).some((l) => l.name === n.tpl)
+      || (await db.getItemsWithTemplates()).some((r) => r.item.name === n.lamp);
+  }, n);
+  expect(gone, 'the template and its things really were lost').toBe(false);
+
+  // Put the file back through the real Import button, answering its questions:
+  // "Continue?" yes · "Merge (OK) or Replace (Cancel)?" Replace · "Imported." ok.
+  await page.evaluate(() => { window.location.hash = '#/settings'; });
+  await expect(page.locator('#app[data-route="#/settings"]')).toBeAttached();
+  const fold = page.getByTestId('fold-data');
+  if (!(await fold.evaluate((d) => d.open))) await fold.locator('summary').click();
+  page.on('dialog', (d) => (d.message().startsWith('Import as a MERGE') ? d.dismiss() : d.accept()));
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByTestId('backup-import').click();
+  await (await chooser).setFiles({ name: `ams-packing-list-backup-${ts}.json`, mimeType: 'application/json', buffer: Buffer.from(file) });
+  await expect.poll(async () => page.evaluate(async (n) => {
+    const db = await import('./js/db.js');
+    return (await db.getLists()).some((l) => l.name === n.tpl);
+  }, n), { timeout: 20_000 }).toBe(true);
+
+  // The thing's own answers, in its editor: who packs it, and that it is not in use.
+  await page.evaluate(() => { window.location.hash = '#/things'; });
+  await expect(page.locator('#app[data-route="#/things"]')).toBeAttached();
+  await page.getByTestId('thing-search').fill(n.lamp);
+  await expect(page.getByTestId('thing-row')).toHaveCount(1);
+  await page.getByTestId('thing-row').click();
+  await expect(page).toHaveURL(/#\/thing\//);
+  await expect(page.getByTestId('item-packer'), 'Packed by came back').toHaveValue('Anna');
+  await expect(page.getByTestId('item-retired'), 'Not in use came back').toBeChecked();
+  await expect(page.getByTestId('item-retired-reason').locator('select'), 'with its reason').toHaveValue('sold');
+
+  // What the trips taught it: Refine still knows it was packed three times and never used.
+  await page.evaluate(() => { window.location.hash = '#/refine'; });
+  await expect(page.locator('#app[data-route="#/refine"]')).toBeAttached();
+  await expect(page.getByTestId('refine-row').filter({ hasText: n.lamp }), 'the review count came back').toContainText('packed 3×');
+
+  // And the kit: a trip built from the restored template clusters the power bank under it.
+  const evId = await page.evaluate(async (n) => {
+    const db = await import('./js/db.js'); const m = await import('./js/model.js');
+    const tpl = (await db.getLists()).find((l) => l.name === n.tpl);
+    const ev = m.newEvent({ name: `Trip ${n.tpl}`, startDate: '2026-12-01', activities: [tpl.id] });
+    ev.entries = m.buildTotalEntries(ev, [tpl]);
+    await db.saveEvent(ev);
+    return ev.id;
+  }, n);
+  await page.evaluate((id) => { window.location.hash = `#/event/${id}`; }, evId);
+  await expect(page.locator(`#app[data-route="#/event/${evId}"]`)).toBeAttached();
+  await expect(page.getByTestId('kit-cluster').filter({ hasText: n.kit }), 'the kit came back with the template').toHaveCount(1);
+});

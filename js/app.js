@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v187';
+const APP_VERSION = 'v188';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -4635,8 +4635,8 @@ function personChipHTML(name) {
 // on the roster (e.g. from an imported trip) is kept as its own option so it stays.
 // Used in two places that mean slightly different things by the same answer: on an
 // ITEM it is the standing default, on a TRIP LINE it is who packs it this time.
-function packerSelectHtml(current) {
-  return `<select name="packer">${packerOptsHTML(current)}</select>`;
+function packerSelectHtml(current, testid = '') {
+  return `<select name="packer"${testid ? ` data-testid="${testid}"` : ''}>${packerOptsHTML(current)}</select>`;
 }
 // The options behind that picker, on their own, so the All-items table can offer
 // the very same list from a cell that needs `data-f` rather than a `name`. One
@@ -5653,7 +5653,7 @@ async function renderRefine() {
       const why = s.reason === 'never-packed'
         ? `on the list ${s.times}× · never packed`
         : `packed ${s.times}× · used 0×`;
-      const row = h(`<div class="entry">
+      const row = h(`<div class="entry" data-testid="refine-row">
         <span class="entry-main">
           <span class="e-name">${esc(s.item.name)}</span>
           <span class="e-sub">${esc(s.listName)} · ${esc(why)}</span>
@@ -6231,7 +6231,7 @@ function itemEditor(list, it, setOpen, draw) {
           <div class="row2">
             <label class="field"><span>Owner <em>whose it is</em></span>
               <select name="ownedBy-sel" data-was="${esc(it.ownedBy || '')}">${ownerOptsHTML(it.ownedBy)}</select></label>
-            <label class="field"><span>Packed by <em>whose job it is to pack it</em></span>${packerSelectHtml(it.packer)}</label>
+            <label class="field"><span>Packed by <em>whose job it is to pack it</em></span>${packerSelectHtml(it.packer, 'item-packer')}</label>
           </div>
           <p class="field-note">Two different questions, deliberately side by side: <b>Owner</b> is whose the thing is at home, <b>Packed by</b> is whose job it is to put it in the bag. This is the <b>standing</b> answer — every trip built from now on starts with it, and you can still change it for one trip in the item's trip editor.</p>
           <div class="row2">
@@ -6239,8 +6239,8 @@ function itemEditor(list, it, setOpen, draw) {
             <label class="field"><span>Quantity owned</span><input type="number" name="qtyOwned" min="0" inputmode="numeric" value="${it.qtyOwned || ''}" placeholder="e.g. 3"></label>
           </div>
           <div class="lifecycle${it.retired ? ' is-retired' : ''}">
-            <label class="check${it.retired ? ' on' : ''}"><input type="checkbox" name="retired" ${it.retired ? 'checked' : ''}>${ic('ban','sm')}Not in use <em>kept on record, but never added to a trip</em></label>
-            <label class="field retire-reason-field${it.retired ? '' : ' hidden'}"><span>Reason</span>${selectHtml('retiredReason', [{ value: '', label: '— not set —' }, ...RETIRE_REASONS.map((r) => ({ value: r.id, label: r.label }))], it.retiredReason)}</label>
+            <label class="check${it.retired ? ' on' : ''}"><input type="checkbox" name="retired" data-testid="item-retired" ${it.retired ? 'checked' : ''}>${ic('ban','sm')}Not in use <em>kept on record, but never added to a trip</em></label>
+            <label class="field retire-reason-field${it.retired ? '' : ' hidden'}" data-testid="item-retired-reason"><span>Reason</span>${selectHtml('retiredReason', [{ value: '', label: '— not set —' }, ...RETIRE_REASONS.map((r) => ({ value: r.id, label: r.label }))], it.retiredReason)}</label>
           </div>
           <div class="row2">
             <label class="field"><span>Price <em>per unit</em></span><input type="number" name="price" min="0" step="0.01" inputmode="decimal" value="${it.price || ''}" placeholder="0"></label>
@@ -7756,6 +7756,7 @@ function howtoCard() {
         <h3>Your data &amp; privacy</h3>
         <p><b>Choosing where a backup goes (v185).</b> On the <b>iPhone</b>, <b>Save backup file</b> opens the share sheet: choose <b>Save to Files</b> and pick the folder — iCloud Drive, On My iPhone, anywhere. The app only records a backup once the share sheet says the file was actually saved; cancel it and nothing is saved <em>and nothing is recorded</em>, so the backup reminder stays honest. On the <b>Mac</b> a web page cannot open a Save window — Safari puts the file where its own settings say, normally <b>Downloads</b>. (Safari → Settings → General → <b>File download location → Ask for each download</b> makes Safari ask every time.)</p>
         <p><b>A restore from a file puts back everything the file holds (v185).</b> Including your own <b>When</b> timeline — renamed and added phases — and the things that sit on <b>no list</b>. Before v185 a file restore dropped both: they were written into the file, then thrown away on the way back in.</p>
+        <p><b>A restore keeps every detail of a thing (v188).</b> <b>Packed by</b>, <b>Consumable</b>, <b>Not in use</b> and its reason, the <b>Keep</b> answer from Refine, the counts your trip reviews have built up, and which <b>kit</b> a thing belongs to on a template — and the thing’s own identity, so your kits, to-dos and old trips still point at it afterwards. Before v188 a Replace-restore rebuilt the catalogue from a list of fields that had fallen behind, and quietly reset all of those.</p>
         <p>Everything lives <b>on this device</b> (IndexedDB) and the app works fully offline as an installed PWA. The only thing that ever leaves your device is the weather lookup: when you tap Get forecast, the destination and its coordinates go to Open-Meteo to fetch the forecast — nothing else, and only then.</p>
  <p><b>Keeping it safe.</b> Because the data lives in the browser, protect it three ways: <b>(1) Install the app</b> — iPhone: Share → <b>Add to Home Screen</b>; Mac: File → <b>Add to Dock</b> — installed apps get protected storage that isn’t auto-deleted. <b>(2)</b> The app also asks the browser to mark its storage <b>persistent</b> on launch, and shows in <b>Settings → Your data</b> whether that’s active. <b>(3) Back up regularly</b> — <b>Settings → Save backup file</b> saves a file you own; keep it in Files / iCloud Drive, and use <b>Import backup</b> to restore. The file is <b>complete</b>: every item detail and <b>photo</b>, all templates and trips, and your custom <b>Storage places</b>. A backup file is the real insurance if a browser ever clears its data, and it’s also how you move your data to another device or web address.</p>
         <p><b>The backup reminder, and why it nags.</b> Other browsers let an app write a backup file into a folder on your Mac by itself, silently, for ever. <b>Safari does not</b> — and Safari is where your packing list lives. So the app does the next best thing: instead of saving quietly behind your back, it <b>asks, and gets more insistent until you do it</b>. On the Home screen you’ll see an amber <b>Back up your data</b> card once you have unsaved changes and your last file is more than <b>${BACKUP_DUE_DAYS} days</b> old; past <b>${BACKUP_URGENT_DAYS} days</b> it turns <b>red</b> and says so plainly. Its <b>Save backup now</b> button does the whole job on the spot — no trip to Settings — and drops a dated file straight into your <b>Downloads</b> folder. The <b>×</b> hides it for a week while it’s amber, but only until <b>tomorrow</b> once it’s red, so a badly out-of-date backup can’t be waved away indefinitely.</p>
@@ -7782,6 +7783,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v188', '2026-09-22 · 04:30 UTC', false, 'A restore no longer forgets who packs what, what is not in use, or what your trips taught it',
+      '<b>A silent data-loss fault in every full restore, found by running the app’s rebuild step on its own and looking at what came out of it.</b><br><br><b>What was wrong.</b> When a backup is put back with <b>Replace</b> — from a file, or from one of the automatic copies — the app rebuilds its catalogue from the lists in the backup. That rebuild worked from a hand-written list of the fields to carry across, and the list had fallen behind the item as the item grew. Missing from it: <b>Packed by</b>, <b>Consumable</b>, <b>Not in use</b> and its reason, the <b>Keep</b> answer on Refine, and <b>everything your trip reviews had taught the app</b> — the packed / used / never-packed counts behind Refine. On the template side, which <b>kit</b> a thing is packed as part of. All of it was written into the file; all of it was dropped on the way back in. On your real library that is the review history of 62 things, and every Packed-by and Not-in-use answer, gone on the next Replace.<br><br><b>What is fixed.</b> The rebuild is now driven by the app’s own list of what belongs to a thing — the same list the editor saves with — so a field cannot fall behind again: whatever belongs to a thing is carried, and a field added later is carried by itself. A test now refuses any field the rebuild has no rule for. Where an older, copy-based file holds two copies of one thing that disagree, the review counts come from the copy with the most history (never added together — it is one thing, not two), a flag is on if either copy has it, and a name or a person comes from the copy that has one.<br><br><b>Two things put right in passing.</b> A restore gave every thing a <b>new identity</b>, which quietly cut the threads to it: a kit’s list of members, a to-do tied to a thing and the link from an old trip back to its thing all pointed at the old identity. A thing now keeps its identity through a restore. And the <b>Keep</b> button on Refine had never actually stuck — it held until you left the screen, because the answer was never written to the thing itself. It is now.<br><br><b>Tests:</b> four new checks on the rules, and one through the real screens — back up, wipe, restore from the file through the real Import button, then see the packer, the not-in-use flag, the kit and the review count on screen. Each was watched to fail with the fix taken away.',
+      'Putting a backup back gives you back all of it — including what your trips have taught the app.'),
     v('v187', '2026-09-22 · 04:15 UTC', false, 'Your e-mail address is no longer written into the app’s public code',
       '<b>A privacy tidy-up in the code itself — nothing about how the app works changes.</b><br><br>The app’s code is published openly on GitHub; that is how the app is served to your devices. Your real sign-in e-mail address was written into that code in <b>nine places</b>: as the worked example in four explanatory notes for programmers, in four of the automatic tests, and in the <b>v117</b> entry further down this very list. None of them needed the real address — a made-up one does the same job. Every one now uses <b>anna.lindgren@example.com</b> (which the app turns into “Anna”, just as it turned yours into “Martin”), and the v117 entry simply says “your sign-in e-mail address”.<br><br><b>What this does not undo.</b> The code keeps a record of every earlier version, and the older versions still contain the address. Rewriting that record is deliberately not done: it would break the link between what is published and what was tested. So anyone digging through the <em>history</em> of the code could still find the address; the current code no longer has it.<br><br>Both test suites still pass; only the example addresses in them differ.',
       'The published code no longer names you.'),
@@ -9102,7 +9106,7 @@ async function renderSettings() {
     <p class="muted small">Safari can’t be given a folder to save into automatically, so the app asks instead — the reminder on Home gets more insistent the longer your file is out of date, and saves it in one tap. The file lands in your <b>Downloads</b> folder; keep a copy in iCloud Drive.</p>
     <div class="btnrow">
       <button class="btn" data-x="export" data-testid="backup-save">${ic('save','sm')}<span>Save backup file</span></button>
-      <button class="btn" data-x="import">Import backup</button>
+      <button class="btn" data-x="import" data-testid="backup-import">Import backup</button>
       <button class="btn" data-x="xlsxall">Export all events (Excel)</button>
       <button class="btn ghost" data-x="tidyphotos">Tidy up photos</button>
     </div>

@@ -575,6 +575,11 @@ export function coerceItem(it) {
   it.condition = typeof it.condition === 'string' ? it.condition.trim().slice(0, 40) : '';
   it.retired = !!it.retired;                                        // "Not in use": kept on record but never packed
   it.retiredReason = RETIRE_REASON_IDS.includes(it.retiredReason) ? it.retiredReason : ''; // only meaningful when retired
+  // "Keep it" — the answer given on Refine, so the app stops suggesting a drop.
+  // INTRINSIC since v188: it belongs with the review counts it answers. Until then
+  // it was set on the resolved row and never written to the catalogue item, so
+  // the Keep button held only until the screen was left.
+  it.keep = !!it.keep;
   it.serial = typeof it.serial === 'string' ? it.serial : '';
   it.qtyOwned = Number.isFinite(it.qtyOwned) && it.qtyOwned >= 0 ? Math.floor(it.qtyOwned) : 0; // 0 = unset
   it.warranty = isYMD(it.warranty) ? it.warranty : '';            // warranty-until date
@@ -1415,6 +1420,7 @@ export function newItem(partial = {}) {
     color: '', size: '', manufacturer: '', model: '', ownedBy: '',
     acquired: '', price: 0, currency: '', purchaseLink: '',
     expiry: '', condition: '', retired: false, retiredReason: '', serial: '', qtyOwned: 0, warranty: '',
+    keep: false,     // "keep it" said on Refine — the app stops suggesting a drop (rides with `stats`)
     capacityL: 0,    // packing capacity in litres (used by containers; 0 = unset)
     maxKg: 0,        // max load weight in kg (used by containers; 0 = unset)
     ...partial,
@@ -3103,7 +3109,7 @@ export const INTRINSIC_FIELDS = [
   'perNight', 'consumable', 'shortList', 'weight', 'storage', 'packer', 'sub',
   'photos', 'thumb', 'maintenance', 'stats',
   'color', 'size', 'manufacturer', 'model', 'ownedBy', 'acquired', 'price', 'currency',
-  'purchaseLink', 'expiry', 'condition', 'retired', 'retiredReason', 'serial',
+  'purchaseLink', 'expiry', 'condition', 'retired', 'retiredReason', 'keep', 'serial',
   'qtyOwned', 'warranty', 'capacityL', 'maxKg',
 ];
 
@@ -3401,65 +3407,89 @@ function _mostCommon(values, fallback) {
 }
 const _firstNonEmpty = (values) => values.find((v) => v !== '' && v != null) ?? '';
 
-// Merge the N copies of one name into a single canonical catalog item. Intrinsic
-// fields are auto-resolved: text/category by majority (first wins ties), booleans
-// by "true if any copy has it" (the safe superset), weight by first known value.
-function buildCatalogItem(copies) {
-  // Swedish alias: prefer the most common wording, breaking ties toward the longest.
-  const swedishes = copies.map((c) => (c.swedish || '').trim()).filter(Boolean);
-  let swedish = '';
-  if (swedishes.length) {
-    let bestN = -1;
-    for (const [v, n] of _tally(swedishes)) if (n > bestN || (n === bestN && v.length > swedish.length)) { swedish = v; bestN = n; }
+// --- How the N copies of one thing agree on each of its OWN fields -----------
+//
+// In a backup made since v108 every copy of a thing is the same catalogue item
+// resolved into a different template, so the copies agree and any rule gives the
+// same answer. The rules only bite on the older copy-based files (and on a name
+// typed twice), where copies can genuinely differ:
+//   · a name or category — the most common wording, first-seen on a tie;
+//   · a yes/no flag       — yes if any copy says so (the safe superset);
+//   · a number            — the first copy that knows it (0 = unknown);
+//   · the review counts   — the copy with the MOST history (never a sum: they are
+//                           one thing counted once, not several things);
+//   · anything else       — the first copy that has a value.
+//
+// 🚨 v188: this table is DRIVEN BY INTRINSIC_FIELDS. Until then the rebuild worked
+// from a hand-written list of fields to carry, and that list had fallen behind the
+// item: packer, consumable, retired (+ its reason), keep and the trip-review stats
+// were all in the backup file and all silently reset by every Replace-restore.
+// Now a field that reaches INTRINSIC_FIELDS reaches a rebuilt catalogue by itself,
+// and the model test "every intrinsic field survives a rebuild" refuses to pass
+// for a field it has no sample value for — add the sample, decide the rule.
+const _anyTrue = (values) => values.some((v) => !!v);
+const _firstPositive = (values) => values.map(Number).find((n) => n > 0) || 0;
+const _longestArray = (values) => (values.map(asArray).sort((a, b) => b.length - a.length)[0] || []).slice();
+const _firstArray = (values) => (values.map(asArray).find((a) => a.length) || []).slice();
+const _firstObject = (values) => values.find((m) => m && typeof m === 'object') ?? null;
+// Prefer the most common wording, breaking ties toward the longest (the Swedish alias).
+function _mostCommonLongest(values) {
+  const present = values.map((v) => (typeof v === 'string' ? v : '').trim()).filter(Boolean);
+  let best = ''; let bestN = -1;
+  for (const [v, n] of _tally(present)) if (n > bestN || (n === bestN && v.length > best.length)) { best = v; bestN = n; }
+  return best;
+}
+function _richestStats(values) {
+  let best = null; let bestN = -1;
+  for (const s of values) {
+    if (!s || typeof s !== 'object') continue;
+    const n = ['packed', 'used', 'unused', 'skipped'].reduce((t, k) => t + (Number(s[k]) || 0), 0);
+    if (n > bestN) { best = s; bestN = n; }
   }
-  const anyTrue = (f) => copies.some((c) => !!c[f]);
-  const longestSub = copies.map((c) => asArray(c.sub)).sort((a, b) => b.length - a.length)[0] || [];
-  return newItem({
-    name: _mostCommon(copies.map((c) => c.name), copies[0].name),
-    swedish,
-    category: _mostCommon(copies.map((c) => c.category), CATEGORY_DEFAULT),
-    container: _mostCommon(copies.map((c) => c.container), 'Carry-on / hand luggage'),   // the DEFAULT
-    phase: _mostCommon(copies.map((c) => c.phase).filter(Boolean), defaultPhaseId()), // the DEFAULT (any id, known here or not)
+  return best ? { ...best } : undefined;
+}
+const INTRINSIC_MERGE = {
+  name: (values, copies) => _mostCommon(values, copies[0].name),
+  swedish: _mostCommonLongest,
+  category: (values) => _mostCommon(values, CATEGORY_DEFAULT),
+  charging: _anyTrue, liquid: _anyTrue, restricted: _anyTrue, perNight: _anyTrue,
+  consumable: _anyTrue, shortList: _anyTrue, retired: _anyTrue, keep: _anyTrue,
+  weight: _firstPositive, price: _firstPositive, qtyOwned: _firstPositive,
+  capacityL: _firstPositive, maxKg: _firstPositive,
+  sub: _longestArray,
+  photos: _firstArray,
+  maintenance: _firstObject,
+  stats: _richestStats,
+};
+// Everything not named above (chargeType, storage, packer, thumb, colour, size,
+// manufacturer, model, ownedBy, the dates, currency, links, condition,
+// retiredReason, serial, warranty…) takes the first copy that has a value.
+
+// Merge the N copies of one name into a single canonical catalog item.
+function buildCatalogItem(copies) {
+  const seed = {
+    // The item's own DEFAULTS for the three fields a membership may override.
+    container: _mostCommon(copies.map((c) => c.container), 'Carry-on / hand luggage'),
+    phase: _mostCommon(copies.map((c) => c.phase).filter(Boolean), defaultPhaseId()), // any id, known here or not
     itemType: _mostCommon(copies.map((c) => c.itemType), 'item'),
-    charging: anyTrue('charging'),
-    chargeType: _firstNonEmpty(copies.map((c) => c.chargeType)),
-    liquid: anyTrue('liquid'),
-    restricted: anyTrue('restricted'),
-    perNight: anyTrue('perNight'),
-    shortList: anyTrue('shortList'),
-    weight: (copies.map((c) => Number(c.weight)).find((w) => w > 0)) || 0,
-    storage: _firstNonEmpty(copies.map((c) => c.storage)),
-    sub: longestSub.slice(),
-    // Photos and the care record are INTRINSIC — they describe the physical object,
-    // so they must survive being rebuilt from a backup. They were missing here,
-    // which meant a replace-import (and every snapshot restore, which uses the same
-    // path) silently dropped every picture and every maintenance schedule. Same
-    // "first copy that has one wins" rule as the metadata above.
-    photos: (copies.map((c) => asArray(c.photos)).find((a) => a.length) || []).slice(),
-    thumb: _firstNonEmpty(copies.map((c) => c.thumb)),
-    maintenance: copies.map((c) => c.maintenance).find((m) => m && typeof m === 'object') || null,
-    // Descriptive / ownership metadata: first known value wins (intrinsic to the item).
-    color: _firstNonEmpty(copies.map((c) => c.color)),
-    size: _firstNonEmpty(copies.map((c) => c.size)),
-    manufacturer: _firstNonEmpty(copies.map((c) => c.manufacturer)),
-    model: _firstNonEmpty(copies.map((c) => c.model)),
-    ownedBy: _firstNonEmpty(copies.map((c) => c.ownedBy)),
-    acquired: _firstNonEmpty(copies.map((c) => c.acquired)),
-    price: (copies.map((c) => Number(c.price)).find((p) => p > 0)) || 0,
-    currency: _firstNonEmpty(copies.map((c) => c.currency)),
-    purchaseLink: _firstNonEmpty(copies.map((c) => c.purchaseLink)),
-    expiry: _firstNonEmpty(copies.map((c) => c.expiry)),
-    condition: _firstNonEmpty(copies.map((c) => c.condition)),
-    serial: _firstNonEmpty(copies.map((c) => c.serial)),
-    qtyOwned: (copies.map((c) => Number(c.qtyOwned)).find((q) => q > 0)) || 0,
-    warranty: _firstNonEmpty(copies.map((c) => c.warranty)),
-    capacityL: (copies.map((c) => Number(c.capacityL)).find((v) => v > 0)) || 0,
-    maxKg: (copies.map((c) => Number(c.maxKg)).find((v) => v > 0)) || 0,
     // Conditions (incl. weather), note and qty are contextual → they live on the
     // membership, so the catalog item keeps them empty.
     seasons: [], contexts: [], transports: [], catering: [], weather: [],
     note: '', qty: '',
-  });
+  };
+  for (const f of INTRINSIC_FIELDS) {
+    const rule = INTRINSIC_MERGE[f] || _firstNonEmpty;
+    const v = rule(copies.map((c) => c[f]), copies);
+    if (v !== undefined) seed[f] = v;
+  }
+  // The identity the copies share. A backup made since v108 writes the SAME id on
+  // every copy of a thing, and the kits, to-dos and old trips in that same backup
+  // point at it — so minting a fresh id here (as this did until v188) cut every one
+  // of those threads on restore. Only a copy-based file with no ids mints one now;
+  // buildCatalog still guards against two names claiming one id.
+  const sharedId = _mostCommon(copies.map((c) => (typeof c.id === 'string' ? c.id : '')), '');
+  if (sharedId) seed.id = sharedId;
+  return newItem(seed);
 }
 
 // The membership for one original copy: its conditions, plus overrides only where
@@ -3487,6 +3517,7 @@ function membershipFromCopy(catItem, templateId, copy, tplDefault = '') {
     weather: asArray(copy.weather).slice(),
     container: containerOverrideFor(copy.container, tplDefault, catItem.container),
     section: copy.section || '',
+    kit: copy.kit || '',   // per-template kit name — dropped here until v188, so a restore emptied every kit
     phase: copy.phase !== catItem.phase ? copy.phase : '',
     itemType: copy.itemType !== catItem.itemType ? copy.itemType : '',
     qty: copy.qty || '',
@@ -3510,8 +3541,11 @@ export function buildCatalog(lists) {
   }
   const items = [];
   const byName = new Map(); // normName -> catalog item
+  const taken = new Set();  // ids already given out — two names must never share one
   for (const [k, copies] of groups) {
     const cat = buildCatalogItem(copies);
+    if (taken.has(cat.id)) cat.id = id();
+    taken.add(cat.id);
     items.push(cat);
     byName.set(k, cat);
   }
