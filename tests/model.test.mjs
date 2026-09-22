@@ -16,7 +16,7 @@ import {
   coerceItem, normalizeMaintenance, hasCare, maintenanceStatus, maintenanceList, maintenanceSummary,
   maintenanceByDate, logMaintenance, addDays, daysBetween, MAINTENANCE_SOON_DAYS, MAX_PHOTOS,
   coerceMembership, newMembership, resolveMembership, resolveTemplate, resolveTemplateItems, buildCatalog,
-  applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
+  applyIntrinsic, applyRowIntrinsic, catalogItemFromResolved, membershipFromResolved,
   normalizeSections, newSection, sectionName, groupItemsBySection, groupBySection,
   containerNames, containerLimits, groupByStorage,
   catalogRows, dupeKey, duplicateGroups, duplicateIds,
@@ -3584,6 +3584,81 @@ test('applyReview: a trip with no ticks at all still counts, as it always did', 
   for (const it of list.items) {
     assert.deepEqual([it.stats.packed, it.stats.used, it.stats.skipped], [1, 1, 0]);
   }
+});
+
+// --- v189: a thing that sits on ONE template twice ---------------------------
+//
+// Two memberships of one thing on one template (a different "When" each) resolve
+// to two rows carrying the same thing. db.saveList pushes every row onto the ONE
+// shared item; this does exactly what its loop does, so the model can be judged
+// the way the save really uses it.
+function saveRowsLikeSaveList(catalog, rows) {
+  const byId = new Map(catalog.map((c) => [c.id, c]));
+  const stored = new Map();
+  for (const row of rows) {
+    const cat = byId.get(row.id);
+    if (!stored.has(cat.id)) stored.set(cat.id, structuredClone(cat));
+    applyRowIntrinsic(cat, row, stored.get(cat.id));
+  }
+}
+function twiceOnOneTemplate(fields = {}) {
+  const tee = newItem({ name: 'Tee bag', phase: 'week', ...fields });
+  const tpl = newList({ name: 'Golf' });
+  const mems = [
+    newMembership({ templateId: tpl.id, itemId: tee.id, order: 0 }),
+    newMembership({ templateId: tpl.id, itemId: tee.id, order: 1, phase: 'morning' }),
+  ];
+  return { tee, resolve: () => resolveTemplate(tpl, [tee], mems) };
+}
+
+test('saving a template: a thing on it twice keeps what every trip review taught it', () => {
+  const { tee, resolve } = twiceOnOneTemplate();
+  const review = (when) => {
+    const list = resolve();
+    assert.equal(list.items.length, 2, 'two rows, one thing');
+    const ev = newEvent({ mode: 'quick', activities: [list.id] });
+    ev.entries = buildTotalEntries(ev, [list]);
+    ev.entries.forEach((e) => { e.checked = true; e.used = false; });   // packed, never used
+    applyReview(ev, [list], when);
+    saveRowsLikeSaveList([tee], list.items);
+  };
+  review('2026-09-01T10:00:00.000Z');
+  assert.deepEqual([tee.stats.packed, tee.stats.used, tee.stats.unused], [1, 0, 1],
+    'before v189 the untouched second copy wrote 0/0/0 back over the review');
+  assert.equal(tee.stats.lastReviewed, '2026-09-01T10:00:00.000Z');
+  review('2026-09-08T10:00:00.000Z');
+  assert.deepEqual([tee.stats.packed, tee.stats.unused], [2, 2]);
+  assert.equal(pruneSuggestions([resolve()])[0].times, 2, 'so Refine can finally see it');
+});
+
+test('saving a template: an untouched copy never undoes an edit made through the other', () => {
+  const { tee, resolve } = twiceOnOneTemplate({
+    storage: 'Garage', weight: 120, photos: ['photo:tee-1'], sub: ['Tees', 'Ball marker'],
+    stats: { packed: 3, used: 1, unused: 2, skipped: 0, lastReviewed: '2026-08-01T00:00:00.000Z' },
+  });
+  const rows = resolve().items;
+  rows[0].name = 'Tee bag (large)';       // renamed through the FIRST copy
+  rows[0].keep = true;                    // Refine's "Keep"
+  rows[0]._defPhase = 'daybefore';        // the thing's own "When"
+  rows[1].storage = '';                   // cleared through the SECOND copy — '' still clears
+  saveRowsLikeSaveList([tee], rows);
+  assert.equal(tee.name, 'Tee bag (large)');
+  assert.equal(tee.keep, true);
+  assert.equal(tee.phase, 'daybefore');
+  assert.equal(tee.storage, '');
+  // …and nothing either copy left alone moved.
+  assert.equal(tee.weight, 120);
+  assert.deepEqual(tee.photos, ['photo:tee-1']);
+  assert.deepEqual(tee.sub, ['Tees', 'Ball marker']);
+  assert.equal(tee.stats.packed, 3);
+
+  // With ONE copy it is applyIntrinsic to the letter.
+  const one = newItem({ name: 'Glove', storage: 'Hall' });
+  const a = structuredClone(one), b = structuredClone(one);
+  const edited = { ...resolveMembership(one, newMembership({ itemId: one.id })), storage: '', weight: 80 };
+  applyIntrinsic(a, edited);
+  applyRowIntrinsic(b, edited, structuredClone(one));
+  assert.deepEqual(b, a);
 });
 
 test('pruneSuggestions: one quiet trip is not evidence — the default is two', () => {

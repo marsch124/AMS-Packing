@@ -43,7 +43,7 @@ import { QR } from './qr.js';
 const app = document.getElementById('app');
 // Single source of truth for the shown release. Bump alongside the service-worker
 // cache tag and the newest version-history entry.
-const APP_VERSION = 'v188';
+const APP_VERSION = 'v189';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const h = (html) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild; };
@@ -5510,7 +5510,7 @@ async function renderReview(eventId) {
 
   const counter = h('<div class="rev-counter"></div>');
   wrap.appendChild(counter);
-  const find = h(`<div class="rev-find"><input type="search" placeholder="Find an item…" autocomplete="off" aria-label="Find an item"></div>`);
+  const find = h(`<div class="rev-find"><input type="search" data-testid="review-find" placeholder="Find an item…" autocomplete="off" aria-label="Find an item"></div>`);
   wrap.appendChild(find);
   const body = h('<div class="rev-list"></div>');
   wrap.appendChild(body);
@@ -5521,7 +5521,7 @@ async function renderReview(eventId) {
   };
 
   const rowFor = (e) => {
-    const row = h(`<button class="rev-item${used.get(e.id) ? '' : ' unused'}" type="button" data-id="${e.id}" data-name="${esc((e.name || '').toLowerCase())}">
+    const row = h(`<button class="rev-item${used.get(e.id) ? '' : ' unused'}" type="button" data-testid="review-item" data-id="${e.id}" data-name="${esc((e.name || '').toLowerCase())}">
       <span class="rev-name">${esc(e.name)}</span>
       <span class="rev-tag">${used.get(e.id) ? 'Used' : 'Didn’t use'}</span>
     </button>`);
@@ -5642,7 +5642,15 @@ async function renderRefine() {
   wrap.appendChild(body);
 
   const draw = () => {
-    const cur = pruneSuggestions(lists);
+    // (v189) A thing that sits on one template twice (a different "When" each time)
+    // is two rows there but one thing with one history — name it once per template.
+    const seen = new Set();
+    const cur = pruneSuggestions(lists).filter((s) => {
+      const k = `${s.listId}|${s.item.id}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
     body.innerHTML = '';
     if (!cur.length) { body.appendChild(h('<div class="empty"><p class="empty-s">All done — nothing left to review.</p></div>')); return; }
     for (const s of cur) {
@@ -5658,7 +5666,7 @@ async function renderRefine() {
           <span class="e-name">${esc(s.item.name)}</span>
           <span class="e-sub">${esc(s.listName)} · ${esc(why)}</span>
         </span>
-        <button class="btn ghost" data-keep>Keep</button>
+        <button class="btn ghost" data-keep data-testid="refine-keep">Keep</button>
         <button class="btn danger ghost" data-drop>${IC.trash}<span>Drop</span></button>
       </div>`);
       row.querySelector('[data-drop]').addEventListener('click', async () => {
@@ -5672,8 +5680,8 @@ async function renderRefine() {
       });
       row.querySelector('[data-keep]').addEventListener('click', async () => {
         const list = lists.find((l) => l.id === s.listId);
-        const it = list && list.items.find((x) => x.id === s.item.id);
-        if (it) { it.keep = true; if (await saveGuard(db.saveList(list))) draw(); }
+        const copies = list ? list.items.filter((x) => x.id === s.item.id) : [];   // every copy of the one thing
+        if (copies.length) { copies.forEach((x) => { x.keep = true; }); if (await saveGuard(db.saveList(list))) draw(); }
       });
       body.appendChild(row);
     }
@@ -7727,6 +7735,7 @@ function howtoCard() {
         <p><b>Anything you wished you'd had (v162).</b> The review opens with a box for the thing you needed and did not have. Type it, tap <b>Add</b>, and pick which list it belongs on — it offers <b>the templates this trip was built from</b>, plus <b>Loose items</b>. Saving the review files them, so the next trip using that template brings them along.</p>
         <p><b>Finding your way down a long review (v162).</b> Things you never ticked into the bag come first, in their own open block. Everything else folds by category, each fold showing its own count, and a search box finds any row and opens the fold holding it.</p>
         <p><b>Refine waits for two trips (v162).</b> One quiet trip is not evidence, and the gear you fail to use is often the gear you carry hoping not to need it. Refine now needs two, says which signal it is acting on, and asks before it drops anything — and Drop only removes the item from <em>that template</em>; the item itself and every other list it is on are untouched.</p>
+        <p><b>A thing on one template twice (v189).</b> A template can hold the same thing more than once — with a different <b>When</b> each time. It is still <b>one thing with one history</b>: every review counts towards it, Refine names it once for that template, and <b>Keep</b> or an edit made through either place sticks. Before v189 the second place quietly wrote its old answers back over the first, so such a thing learnt nothing from any review.</p>
         <p><b>Since v161 the app asks you.</b> The day after a trip ends, <b>Home</b> shows a green <b>“How was …?”</b> card with a <b>Review it</b> button. That is the whole reason this section exists: the counting only happens if the review happens, and until v161 the only way in was a button you had to remember. The card never appears during a trip, nor on the day you travel home, and it <b>expires after a month</b> — beyond that the answers are guesswork, and a wrong “used” teaches the app the wrong thing. The <b>✕</b> waves one trip away on this device without marking it reviewed, so the <b>Trip review</b> button still works whenever you get round to it.</p>
 
         <h3>Sharing a trip</h3>
@@ -7783,6 +7792,9 @@ function versionHistoryCard() {
     <p class="vh-benefit"><b>Main benefit:</b> ${benefit}</p>
   </div>`;
   const items = [
+    v('v189', '2026-09-22 · 15:49 UTC', false, 'A thing that sits on one template twice now learns from your trip reviews',
+      '<b>A silent learning loss, found while building the same review into the new native app, and proven here in the real app before it was fixed.</b><br><br><b>What was wrong.</b> A template can hold one thing in two places — the same thing with a different <b>When</b> each time. Your own library has <b>12</b> such things, on 4 templates. Every place carries the thing’s own details. When a review was saved, the new counts went onto the <b>first</b> place, and then saving the template walked every place in turn — so the <b>second</b>, untouched place wrote its old counts back over the new ones. Packed, used, didn’t-use, never-packed and the review date: all lost, on every review. Those things could therefore <b>never reach Refine</b>, and the same fault quietly undid Refine’s <b>Keep</b> and any edit made through the first place — a rename, a care entry, a new photo.<br><br><b>What is fixed.</b> Saving a template now writes to a thing only what one of its places actually <b>changed</b>. A place that still holds what was stored is not an edit, so it can no longer overwrite one. With a thing in one place this is exactly the old behaviour. Refine now lists such a thing <b>once</b> for its template, and Keep marks every place.<br><br><b>Tests:</b> two new checks on the rule, and one through the real screens — a template holding one thing twice, two trips packed and reviewed as “didn’t use”, then Refine showing it once as packed twice, and Keep still holding after a restart. Each was watched to fail with its part of the fix taken away.',
+      'Every trip review now counts for every thing on your lists — including the ones that appear twice.'),
     v('v188', '2026-09-22 · 04:31 UTC', false, 'A restore no longer forgets who packs what, what is not in use, or what your trips taught it',
       '<b>A silent data-loss fault in every full restore, found by running the app’s rebuild step on its own and looking at what came out of it.</b><br><br><b>What was wrong.</b> When a backup is put back with <b>Replace</b> — from a file, or from one of the automatic copies — the app rebuilds its catalogue from the lists in the backup. That rebuild worked from a hand-written list of the fields to carry across, and the list had fallen behind the item as the item grew. Missing from it: <b>Packed by</b>, <b>Consumable</b>, <b>Not in use</b> and its reason, the <b>Keep</b> answer on Refine, and <b>everything your trip reviews had taught the app</b> — the packed / used / never-packed counts behind Refine. On the template side, which <b>kit</b> a thing is packed as part of. All of it was written into the file; all of it was dropped on the way back in. On your real library that is the review history of 62 things, and every Packed-by and Not-in-use answer, gone on the next Replace.<br><br><b>What is fixed.</b> The rebuild is now driven by the app’s own list of what belongs to a thing — the same list the editor saves with — so a field cannot fall behind again: whatever belongs to a thing is carried, and a field added later is carried by itself. A test now refuses any field the rebuild has no rule for. Where an older, copy-based file holds two copies of one thing that disagree, the review counts come from the copy with the most history (never added together — it is one thing, not two), a flag is on if either copy has it, and a name or a person comes from the copy that has one.<br><br><b>Two things put right in passing.</b> A restore gave every thing a <b>new identity</b>, which quietly cut the threads to it: a kit’s list of members, a to-do tied to a thing and the link from an old trip back to its thing all pointed at the old identity. A thing now keeps its identity through a restore. And the <b>Keep</b> button on Refine had never actually stuck — it held until you left the screen, because the answer was never written to the thing itself. It is now.<br><br><b>Tests:</b> four new checks on the rules, and one through the real screens — back up, wipe, restore from the file through the real Import button, then see the packer, the not-in-use flag, the kit and the review count on screen. Each was watched to fail with the fix taken away.',
       'Putting a backup back gives you back all of it — including what your trips have taught the app.'),

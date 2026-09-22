@@ -3138,6 +3138,33 @@ export function applyIntrinsic(cat, it) {
   return coerceItem(cat);
 }
 
+// Push onto the shared item only what ONE ROW of a template actually CHANGED (v189).
+//
+// 🚨 A thing can sit on one template more than once — a different "When" each
+// time — and every copy carries the thing's own fields. saveList walks the rows and
+// pushes each one onto the ONE shared item, so the LAST copy won: an untouched twin
+// wrote its old values back over whatever the other copy had just been given. That
+// is how a trip review taught such a thing nothing (applyReview counts onto the
+// first copy), how Refine's "Keep" never stuck, and how an edit made through the
+// first copy was quietly undone.
+//
+// `before` is the item as it was stored when the save began. A field a row still
+// holds at that stored value is not an edit and is stepped over; a field it changed
+// is applied exactly as applyIntrinsic always did ('' still clears on purpose).
+// With one copy this is the old behaviour to the letter.
+export function applyRowIntrinsic(cat, row, before) {
+  if (!before) return applyIntrinsic(cat, row);
+  const same = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
+  const edit = {};
+  for (const f of INTRINSIC_FIELDS) {
+    if (row[f] !== undefined && !same(row[f], before[f])) edit[f] = row[f];
+  }
+  for (const [field, channel] of Object.entries(DEFAULT_FIELDS)) {
+    if (row[channel] !== undefined && !same(row[channel], before[field])) edit[channel] = row[channel];
+  }
+  return applyIntrinsic(cat, edit);
+}
+
 // The contextual (per-template) half of an item — everything that is allowed to
 // differ between two lists that share the same physical object.
 // NOTE `section` is deliberately NOT here. A section is `{id, name}` belonging to

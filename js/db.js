@@ -16,7 +16,7 @@
 import {
   coerceList, coerceEvent, coerceItem, coerceMembership, coerceAction, coerceKit, normName,
   CONTAINER_ROLE,
-  resolveMembership, buildCatalog, applyIntrinsic, catalogItemFromResolved, membershipFromResolved,
+  resolveMembership, buildCatalog, applyIntrinsic, applyRowIntrinsic, catalogItemFromResolved, membershipFromResolved,
   buildTripBundle, parseTripBundle, sortEventsForList, backupCounts, backupShrinks,
   id as newId, isPhotoRef, inlinePhotos, looksLikeEmail, ownerNameFromEmail,
   DEFAULT_PHASES, PHASES, coercePhase, setPhases,
@@ -450,6 +450,7 @@ export async function saveList(list) {
   const putItems = new Map();   // id -> catalog item (deduped)
   const putMems = [];
   const presentMemIds = new Set();
+  const stored = new Map();     // id -> the item as it was before this save touched it
   let order = 0;
 
   for (const it of (list.items || [])) {
@@ -459,9 +460,12 @@ export async function saveList(list) {
     if (it._itemId && itemsById.has(it._itemId)) cat = itemsById.get(it._itemId);
     else if (itemByName.has(normName(it.name))) cat = itemByName.get(normName(it.name));
     if (cat) {
-      // Safe even for a link: `applyIntrinsic` steps over every field the caller
-      // left undefined, so a contextual-only object cannot blank the shared item.
-      applyIntrinsic(cat, it);                 // propagate edits to the shared thing
+      // Safe even for a link: every field the caller left undefined is stepped over,
+      // so a contextual-only object cannot blank the shared item. And (v189) only
+      // what THIS row changed is applied — a thing on this template twice must not
+      // have its second, untouched copy write old values over the first one's edit.
+      if (!stored.has(cat.id)) stored.set(cat.id, structuredClone(cat));
+      applyRowIntrinsic(cat, it, stored.get(cat.id));   // propagate edits to the shared thing
     } else if (it._link) {
       // A link whose target has vanished (deleted on another device mid-sync).
       // Never invent an item from a link — it would have no photos, no care record
