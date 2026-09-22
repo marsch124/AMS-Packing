@@ -478,7 +478,7 @@ export function shareSafeOwner(v, max = 40) {
 export const SYNC_RESERVED_KEYS = Object.freeze(['owner', 'realmId']);
 
 // Turn a sign-in address into the name a person would actually use:
-// "martin.schabbauer@icloud.com" → "Martin". Takes the part before the @, then
+// "anna.lindgren@example.com" → "Anna". Takes the part before the @, then
 // its first word (splitting on . _ + -), and capitalises it. Falls back to the
 // whole local part when that first word is too short to be a name ("m.s@…").
 export function ownerNameFromEmail(addr) {

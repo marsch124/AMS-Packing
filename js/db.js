@@ -1131,8 +1131,8 @@ export async function ensureSeeded() {
 //
 // What this does, once per device:
 //   • an address the sync stamped there becomes the person's NAME
-//     ("martin.schabbauer@icloud.com" → "Martin"), which is what he actually
-//     means by it;
+//     ("anna.lindgren@example.com" → "Anna"), which is what was actually
+//     meant by it;
 //   • a real name he typed ("Anna", "Shared") is carried across untouched;
 //   • `owner` itself is LEFT ALONE — it belongs to the sync addon now, which
 //     will keep re-stamping it. Nothing in the app reads it any more.

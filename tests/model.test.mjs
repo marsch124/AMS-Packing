@@ -2592,7 +2592,7 @@ test('careSections: rows keep the order they arrived in (the urgency sort still 
 // ---- "Whose it is" moved off the reserved `owner` property (v117) -----------
 
 test('looksLikeEmail: tells a sign-in address from a person’s name', () => {
-  assert.equal(looksLikeEmail('martin.schabbauer@icloud.com'), true);
+  assert.equal(looksLikeEmail('anna.lindgren@example.com'), true);
   assert.equal(looksLikeEmail('  a@b.co  '), true);
   assert.equal(looksLikeEmail('Martin'), false);
   assert.equal(looksLikeEmail('Anna & Martin'), false);
@@ -2603,11 +2603,11 @@ test('looksLikeEmail: tells a sign-in address from a person’s name', () => {
 });
 
 test('ownerNameFromEmail: an address becomes the name a person would use', () => {
-  assert.equal(ownerNameFromEmail('martin.schabbauer@icloud.com'), 'Martin');
+  assert.equal(ownerNameFromEmail('anna.lindgren@example.com'), 'Anna');
   assert.equal(ownerNameFromEmail('anna@example.com'), 'Anna');
   assert.equal(ownerNameFromEmail('anna_b+tag@example.com'), 'Anna');
-  // Too short to be a name on its own — keep the whole local part rather than "M".
-  assert.equal(ownerNameFromEmail('m.schabbauer@icloud.com'), 'M.schabbauer');
+  // Too short to be a name on its own — keep the whole local part rather than "A".
+  assert.equal(ownerNameFromEmail('a.lindgren@example.com'), 'A.lindgren');
   assert.equal(ownerNameFromEmail(''), '');
 });
 
@@ -2615,8 +2615,8 @@ test('coerceItem: adopts a legacy owner name, but never the address sync stamped
   // A real name typed before v117 is carried across.
   assert.equal(coerceItem({ name: 'Tent', owner: 'Anna' }).ownedBy, 'Anna');
   // The sync addon's own stamp is not a name and must not become one here — the
-  // one-time migration in db.js is what turns it into "Martin".
-  assert.equal(coerceItem({ name: 'Tent', owner: 'martin.schabbauer@icloud.com' }).ownedBy, '');
+  // one-time migration in db.js is what turns it into a name ("Anna").
+  assert.equal(coerceItem({ name: 'Tent', owner: 'anna.lindgren@example.com' }).ownedBy, '');
   // Once ownedBy exists it wins, including when deliberately empty.
   assert.equal(coerceItem({ name: 'Tent', owner: 'Anna', ownedBy: 'Martin' }).ownedBy, 'Martin');
   assert.equal(coerceItem({ name: 'Tent', owner: 'Anna', ownedBy: '' }).ownedBy, '');

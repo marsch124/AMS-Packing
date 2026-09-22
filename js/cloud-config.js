@@ -10,7 +10,7 @@
 // user). The secret is `dexie-cloud.key`, which stays out of this repo via .gitignore
 // and must never be committed.
 export const CLOUD = {
-  // Created with `npx dexie-cloud create` (owner: martin.schabbauer@icloud.com).
+  // Created with `npx dexie-cloud create`, owned by the account that signs in under Settings → Sync.
   databaseUrl: 'https://z36oh3jht.dexie.cloud',
 };
 
